@@ -1,0 +1,6 @@
+typer>=0.10.0
+pydantic>=2.9,<3
+keyring>=24.0.0
+requests>=2.31,<3
+jsonschema>=4.0,<5
+pytest>=8.0

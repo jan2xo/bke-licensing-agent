@@ -1,0 +1,31 @@
+[project]
+name = "bke-licensing-agent"
+version = "0.1.0"
+description = "A reusable licensing and application management agent for BKE Digital Solutions."
+readme = "README.md"
+authors = [
+  { name = "BKE Digital Solutions" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+  "typer>=0.10.0",
+  "pydantic>=2.9,<3",
+  "keyring>=24.0.0",
+  "requests>=2.31,<3",
+  "jsonschema>=4.0,<5"
+]
+optional-dependencies = { test = ["pytest>=8.0"] }
+
+[project.scripts]
+bke-licensing-agent = "bke_licensing_agent.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
