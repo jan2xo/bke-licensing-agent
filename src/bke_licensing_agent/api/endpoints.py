@@ -1,0 +1,5 @@
+HEALTH = "/health"
+PRODUCT = "/products/{product_id}"
+LICENSE_STATUS = "/licenses/{license_id}"
+DEVICES = "/devices"
+LICENSE_VERIFY = "/licenses/verify"

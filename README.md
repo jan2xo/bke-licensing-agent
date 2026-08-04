@@ -11,6 +11,12 @@ This repository contains the foundation for discovering BKE applications through
 - `tests/`: unit and integration test skeletons
 - `docs/`: architecture, status, and implementation documentation
 
+Phase 3 adds a typed HTTPS client foundation under
+`src/bke_licensing_agent/api/`. Configure an `https://` base URL through
+`ApiConfig`; HTTP is accepted only for explicitly enabled local/test use.
+Authentication, entitlement enforcement, and production endpoint availability
+remain out of scope for this phase.
+
 ## Getting started
 
 ```bash

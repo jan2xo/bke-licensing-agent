@@ -19,3 +19,13 @@
 - Verification: `pytest -q` -> 9 passed.
 - No licensing authority, credentials, update installer, or signature issuer
   was added; those remain server-backed follow-up work.
+
+## Phase 3 — Licensing platform client
+
+- Added typed API configuration, endpoint definitions, request/response models,
+  and an injectable requests-based transport.
+- Added HTTPS enforcement, connect/read timeouts, request IDs, bounded retries
+  for idempotent requests, and explicit safe error mappings.
+- Kept non-idempotent device and verification requests free of automatic retry.
+- Added deterministic unit coverage for configuration, responses, status errors,
+  retries, serialization, and redaction.

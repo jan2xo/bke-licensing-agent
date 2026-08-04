@@ -15,8 +15,17 @@ This project is the foundation for the BKE Licensing Agent.
 ## Next steps
 
 - Add structured diagnostics and duplicate-product policy
-- Add API client and authentication support
 - Add secure local token storage, audit logging, and signed offline leases
+
+## Phase 3 handoff
+
+The typed API client foundation is implemented in `src/bke_licensing_agent/api/`.
+It supports health, product, license-status, device-registration, and
+license-verification contract methods. It does not authenticate users or grant
+launch permission. The endpoint contract is documented in `docs/api-contract.md`.
+
+Verification: `pytest -q` should include the Phase 3 API tests and all prior
+manifest, discovery, and storage tests.
 
 ## Verification
 

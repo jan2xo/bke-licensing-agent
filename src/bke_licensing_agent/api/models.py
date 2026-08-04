@@ -1,0 +1,51 @@
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ApiModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class HealthResponse(ApiModel):
+    status: Literal["ok", "degraded"]
+    service: str
+    version: str
+
+
+class ProductResponse(ApiModel):
+    product_id: str
+    display_name: str
+    active: bool
+    latest_version: str | None = None
+
+
+class LicenseStatusResponse(ApiModel):
+    status: Literal["active", "expired", "suspended", "revoked", "unavailable"]
+    license_id: str
+    product_id: str
+    device_id: str | None = None
+    policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeviceRegistrationRequest(ApiModel):
+    device_name: str = Field(min_length=1)
+    device_fingerprint: str = Field(min_length=1)
+
+
+class DeviceRegistrationResponse(ApiModel):
+    device_id: str
+    status: Literal["authorized", "pending", "denied"]
+
+
+class LicenseVerificationRequest(ApiModel):
+    product_id: str = Field(min_length=1)
+    device_id: str = Field(min_length=1)
+    installed_version: str = Field(min_length=1)
+
+
+class LicenseVerificationResponse(ApiModel):
+    valid: bool
+    status: Literal["active", "expired", "suspended", "revoked", "unavailable"]
+    license_id: str | None = None
+    policy: dict[str, Any] = Field(default_factory=dict)
