@@ -1,0 +1,10 @@
+{
+  "productId": "airstack",
+  "displayName": "AIRSTACK",
+  "entryPoint": "AIRSTACK.exe",
+  "icon": "icon.ico",
+  "version": "2.1.4",
+  "updateChannel": "stable",
+  "minimumAgentVersion": "1.0.0",
+  "apiVersion": 1
+}
