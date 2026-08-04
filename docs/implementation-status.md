@@ -43,3 +43,18 @@
 - [x] Add deterministic transport tests
 - [ ] Implement real authentication and token storage
 - [ ] Implement production integration against the BKE platform
+
+## Phase 4 — Authentication and Secure Session Management
+
+- [x] Add typed authentication models
+- [x] Add login, refresh, logout, and validation client methods
+- [x] Add session manager with refresh serialization
+- [x] Add OS keyring secure-storage abstraction
+- [x] Validate selected keyring backend and reject unsafe providers
+- [x] Reject missing, expired, revoked, and corrupted sessions
+- [x] Deduplicate and generation-protect concurrent refresh
+- [x] Delete credentials on revocation
+- [x] Implement refresh-threshold behavior
+- [x] Add authentication diagnostics without sensitive values
+- [ ] Add real platform authentication integration
+- [ ] Add independent security audit

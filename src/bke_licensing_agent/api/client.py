@@ -9,7 +9,7 @@ import requests
 from pydantic import BaseModel, ValidationError
 
 from .config import ApiConfig
-from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT
+from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT, LOGIN, REFRESH, LOGOUT, SESSION
 from .errors import (
     ApiError, AuthenticationExpiredError, AuthenticationRequiredError,
     AuthorizationDeniedError, ConflictError, ConnectionTimeoutError,
@@ -22,6 +22,8 @@ from .models import (
     LicenseStatusResponse, LicenseVerificationRequest, LicenseVerificationResponse,
     ProductResponse,
 )
+from ..auth.models import (AuthenticationState, LoginRequest, LoginResponse, LogoutRequest,
+    LogoutResponse, RefreshRequest, RefreshResponse, SessionInfo, ValidationResponse)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -49,11 +51,25 @@ class LicensingPlatformClient:
     def verify_license(self, request: LicenseVerificationRequest) -> LicenseVerificationResponse:
         return self._request("POST", LICENSE_VERIFY, LicenseVerificationResponse, request.model_dump(), idempotent=False)
 
+    def login(self, request: LoginRequest) -> LoginResponse:
+        return self._request("POST", LOGIN, LoginResponse, request.model_dump(), idempotent=False)
+
+    def refresh_session(self, request: RefreshRequest) -> RefreshResponse:
+        return self._request("POST", REFRESH, RefreshResponse, request.model_dump(), idempotent=False)
+
+    def logout(self, request: LogoutRequest, access_token: str | None = None) -> LogoutResponse:
+        return self._request("POST", LOGOUT, LogoutResponse, request.model_dump(), idempotent=False, access_token=access_token)
+
+    def validate_session(self, access_token: str) -> ValidationResponse:
+        return self._request("GET", SESSION, ValidationResponse, idempotent=True, access_token=access_token)
+
     def _request(self, method: str, path: str, model: type[T], payload: dict[str, Any] | None = None,
-                 *, idempotent: bool = True) -> T:
+                 *, idempotent: bool = True, access_token: str | None = None) -> T:
         request_id = str(uuid.uuid4())
         headers = {"Accept": "application/json", "User-Agent": self.config.user_agent,
                    "X-Request-ID": request_id}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
         url = f"{self.config.base_url}{path}"
         attempts = self.config.retry_count if idempotent else 0
         for attempt in range(attempts + 1):

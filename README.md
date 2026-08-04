@@ -17,6 +17,10 @@ Phase 3 adds a typed HTTPS client foundation under
 Authentication, entitlement enforcement, and production endpoint availability
 remain out of scope for this phase.
 
+Phase 4 adds authentication and secure session management through the OS
+keyring. Authentication proves identity only; it does not activate licenses or
+authorize application launch.
+
 ## Getting started
 
 ```bash

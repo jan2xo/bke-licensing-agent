@@ -16,6 +16,9 @@ class ApiConfig(BaseModel):
     client_version: str = "0.1.0"
     environment: str = "production"
     allow_insecure_local: bool = False
+    session_timeout: float = Field(default=3600.0, gt=0)
+    refresh_threshold: float = Field(default=300.0, ge=0)
+    secure_storage_provider: str = "keyring"
 
     @model_validator(mode="after")
     def validate_base_url(self):

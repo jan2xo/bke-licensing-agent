@@ -24,6 +24,16 @@ It supports health, product, license-status, device-registration, and
 license-verification contract methods. It does not authenticate users or grant
 launch permission. The endpoint contract is documented in `docs/api-contract.md`.
 
+Phase 4 authentication is implemented in `src/bke_licensing_agent/auth/`.
+Authentication and session state remain separate from licensing entitlement.
+The secure-storage contract is documented in `docs/secure-storage.md`.
+
+The remediation adds generation-protected refresh, concurrent refresh
+deduplication, revocation deletion, backend validation, and threshold-based
+fresh-session checks. The invariant is: logout, revocation, or session
+replacement permanently invalidates all refresh operations created under an
+earlier session generation.
+
 Verification: `pytest -q` should include the Phase 3 API tests and all prior
 manifest, discovery, and storage tests.
 

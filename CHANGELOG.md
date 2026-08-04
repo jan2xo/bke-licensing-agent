@@ -12,3 +12,9 @@
 - Added typed licensing-platform API client foundation.
 - Added validated API configuration, HTTPS enforcement, timeouts, request IDs,
   bounded idempotent retries, safe error mapping, and API contract tests.
+
+## Unreleased — Phase 4
+
+- Added authentication service and secure session manager.
+- Added typed login, refresh, logout, and validation models and client methods.
+- Added OS keyring credential storage with safe failure and deletion behavior.

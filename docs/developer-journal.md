@@ -29,3 +29,25 @@
 - Kept non-idempotent device and verification requests free of automatic retry.
 - Added deterministic unit coverage for configuration, responses, status errors,
   retries, serialization, and redaction.
+
+## Phase 4 — Authentication and secure sessions
+
+- Added typed login, refresh, logout, session, token, and authentication-state
+  models.
+- Added authentication service and session manager over the Phase 3 API client.
+- Added keyring-backed credential storage with safe failure and corruption
+  handling; no token persistence was added to SQLite.
+- Added serialized refresh coordination and immediate in-memory invalidation on
+  logout or revoked validation.
+- Verification: `pytest -q` -> 32 passed; `python3 -m compileall -q src tests`
+  -> passed.
+
+## Phase 4 remediation
+
+- Added a generation counter and condition-variable refresh state machine.
+- Deduplicated simultaneous refresh calls and rejected stale responses after
+  logout, revocation, or session replacement.
+- Added threshold-based `ensure_fresh_session()` behavior and removed the
+  unused refresh-retry-limit configuration.
+- Added backend validation and direct mocked-keyring tests for secure storage.
+- Verification: `pytest -q` -> 41 passed.

@@ -10,3 +10,5 @@ dist/
 .env.*
 *.sqlite3
 *.db
+.coverage
+htmlcov/
