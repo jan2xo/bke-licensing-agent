@@ -2,10 +2,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from packaging.version import Version, InvalidVersion
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, PrivateAttr, ValidationError, field_validator
 
 
 class Manifest(BaseModel):
+    _validated: bool = PrivateAttr(default=False)
     schemaVersion: Literal[1]
     productId: str
     displayName: str
@@ -58,3 +59,7 @@ class Manifest(BaseModel):
 
     def as_dict(self) -> dict[str, Any]:
         return self.model_dump()
+
+    @property
+    def is_validated(self) -> bool:
+        return self._validated

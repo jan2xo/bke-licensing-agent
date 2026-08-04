@@ -1,12 +1,14 @@
 # Roadmap
 
-## Current milestone: Phase 4, authentication and secure sessions
+## Current milestone: Phase 5, device identity and online activation
 
 - Complete manifest schema, semantic-version, and path-safety validation.
 - Scan configurable locations without executing discovered files.
 - Persist non-sensitive discovery records in SQLite.
 - Provide typed HTTPS platform operations with safe timeouts, retries, and errors.
 - Manage authenticated sessions using OS-backed secure credential storage.
+- Identify installations, register devices, retrieve entitlements, and activate
+  eligible licenses online.
 
 ## Next
 

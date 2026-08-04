@@ -1,0 +1,20 @@
+from ..api.errors import ApiError
+class LicenseError(ApiError): pass
+class NoLicenseAvailableError(LicenseError): pass
+class LicenseExpiredError(LicenseError): pass
+class LicenseSuspendedError(LicenseError): pass
+class LicenseRevokedError(LicenseError): pass
+class DeviceLimitReachedError(LicenseError): pass
+class DeviceRegistrationError(LicenseError): pass
+class ActivationDeniedError(LicenseError): pass
+class ActivationConflictError(LicenseError): pass
+class ActivationVerificationError(LicenseError): pass
+class DeactivationDeniedError(LicenseError): pass
+class UnknownLicenseStateError(LicenseError): pass
+class ProductNotEntitledError(LicenseError): pass
+class UnsupportedProductVersionError(LicenseError): pass
+class InvalidDeviceIdentityError(LicenseError): pass
+class LocalActivationStorageError(LicenseError): pass
+class ActivationPartialFailureError(LicenseError): pass
+class DeactivationPartialFailureError(LicenseError): pass
+class ManifestProvenanceError(LicenseError): pass

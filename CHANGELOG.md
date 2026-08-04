@@ -24,3 +24,10 @@
 - Recorded repository tooling debt after the independent security audit.
 - Deferred repository-wide linting, formatting, static typing, and dependency
   audit to a future engineering-quality milestone.
+
+## Unreleased — Phase 5
+
+- Added persistent installation identity and versioned privacy-conscious device
+  fingerprints.
+- Added typed entitlement, device registration, activation, and verification
+  contracts with non-sensitive SQLite activation metadata.

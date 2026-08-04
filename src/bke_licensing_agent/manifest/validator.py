@@ -13,6 +13,8 @@ def validate_manifest(manifest: dict) -> Manifest:
         raise ValueError(message)
 
     try:
-        return Manifest(**manifest)
+        result = Manifest(**manifest)
+        result._validated = True
+        return result
     except ValidationError as exc:
         raise ValueError(exc) from exc

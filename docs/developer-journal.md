@@ -52,6 +52,23 @@
 - Added backend validation and direct mocked-keyring tests for secure storage.
 - Verification: `pytest -q` -> 41 passed.
 
+## Phase 5 — Device identity and activation
+
+- Added secure persistent installation identity and a versioned SHA-256 device
+  fingerprint over normalized platform signals.
+- Added typed licensing models, API contracts, activation service, and a
+  non-sensitive SQLite activation-cache migration.
+- Added fail-closed license-state mapping and preserved authenticated-session
+  requirements.
+
+## Phase 5 completion work
+
+- Completed activation and deactivation orchestration under one shared lock.
+- Added structured non-sensitive audit-event persistence for device,
+  entitlement, activation, verification, and deactivation events.
+- Added API contract, activation-cache, audit persistence, and orchestration
+  tests. Verification: `pytest -q` -> 50 passed.
+
 ## Phase 4 independent audit follow-up
 
 - The Phase 4 implementation passed the Independent Audit.
@@ -64,3 +81,5 @@
   launcher workflows.
 - These items do not block Phase 4 approval but must be completed before
   production readiness.
+Phase 5 remediation added operation generations for session, installation identity, and product/device ordering. Event-controlled tests prove stale activation and deactivation responses cannot restore or remove newer state.
+Final Phase 5 verification completed against the current repository state. The authoritative result is 79 passed and 79 collected, with 85% coverage. All operation-generation, migration, persistence-boundary, malformed-response, cache-integrity, deactivation, and concurrent SQLite findings have mapped tests.

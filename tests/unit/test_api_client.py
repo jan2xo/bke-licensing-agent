@@ -11,6 +11,7 @@ from bke_licensing_agent.api.errors import (
     ServerUnavailableError,
 )
 from bke_licensing_agent.api.models import DeviceRegistrationRequest, LicenseVerificationRequest
+from bke_licensing_agent.licensing.models import ActivationRequest, ActivationVerificationRequest, DeactivationRequest
 
 
 class FakeResponse:
@@ -124,3 +125,17 @@ def test_sensitive_values_are_not_in_errors():
         client(session, retry_count=0).health()
     assert "secret" not in str(caught.value)
     assert "key" not in str(caught.value)
+
+
+def test_phase5_api_contract_methods_are_typed_and_non_idempotent_writes_are_not_retried():
+    session = FakeSession([FakeResponse(data={"licenses": [{"license_id": "l", "product_id": "p", "status": "active"}]})])
+    assert client(session).list_licenses("token")[0].license_id == "l"
+    session = FakeSession([FakeResponse(data={"license_id": "l", "product_id": "p", "status": "active"})])
+    assert client(session).entitlement("p", "token").product_id == "p"
+    session = FakeSession([FakeResponse(data={"activation_id": "a", "license_id": "l", "product_id": "p", "device_id": "d", "status": "active"})])
+    result = client(session).activate(ActivationRequest(product_id="p", license_id="l", device_id="d", installed_version="1.0.0"), "token")
+    assert result.activation_id == "a" and session.calls[0][2]["headers"]["Authorization"] == "Bearer token"
+    session = FakeSession([FakeResponse(data={"valid": True, "status": "active", "activation_id": "a"})])
+    assert client(session).verify_activation(ActivationVerificationRequest(activation_id="a", product_id="p", device_id="d"), "token").valid
+    session = FakeSession([FakeResponse(data={"success": True})])
+    assert client(session).deactivate(DeactivationRequest(activation_id="a", device_id="d"), "token").success

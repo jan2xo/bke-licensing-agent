@@ -48,6 +48,15 @@ class SessionManager:
             raise MissingSessionError("No authenticated session is available")
         return str(stored["access_token"])
 
+    @property
+    def generation(self) -> int:
+        with self._condition:
+            return self._generation
+
+    def is_generation_current(self, generation: int) -> bool:
+        with self._condition:
+            return self._generation == generation and self._session is not None
+
     def needs_refresh(self) -> bool:
         stored = self.store.load(self.account)
         if not stored or not stored.get("access_expires_at"):

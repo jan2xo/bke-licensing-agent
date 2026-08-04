@@ -88,3 +88,18 @@
 
 These tooling items remain project backlog and do not block Phase 4 approval.
 They are required before production readiness.
+
+## Phase 5 — Device Identity, Entitlement, and Activation
+
+- [x] Add persistent installation identity
+- [x] Add versioned hashed device fingerprint
+- [x] Add typed entitlement and activation models
+- [x] Add device registration and entitlement API methods
+- [x] Add online activation, verification, and deactivation orchestration
+- [x] Add non-sensitive activation cache migration
+- [x] Add structured activation audit-event persistence
+- [x] Add activation/deactivation concurrency protection
+- [x] Add Phase 5 API, identity, fingerprint, and persistence tests
+- [ ] Add production platform integration and independent audit approval
+Phase 5 closure remediation: operation-generation protection implemented and covered by deterministic race tests.
+Phase 5 final consolidated verification: 79/79 tests passed; all listed Phase 5 remediation findings have direct test coverage. Ready for independent audit. Tooling debt remains separately tracked.

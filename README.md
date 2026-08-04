@@ -21,6 +21,10 @@ Phase 4 adds authentication and secure session management through the OS
 keyring. Authentication proves identity only; it does not activate licenses or
 authorize application launch.
 
+Phase 5 adds online device identity, entitlement lookup, activation, and
+verification. The platform remains authoritative; local activation metadata
+never authorizes launch.
+
 ## Getting started
 
 ```bash

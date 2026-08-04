@@ -9,7 +9,7 @@ import requests
 from pydantic import BaseModel, ValidationError
 
 from .config import ApiConfig
-from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT, LOGIN, REFRESH, LOGOUT, SESSION
+from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT, LOGIN, REFRESH, LOGOUT, SESSION, LICENSES, ENTITLEMENT, DEVICE_STATUS, ACTIVATE, VERIFY_ACTIVATION, DEACTIVATE
 from .errors import (
     ApiError, AuthenticationExpiredError, AuthenticationRequiredError,
     AuthorizationDeniedError, ConflictError, ConnectionTimeoutError,
@@ -24,6 +24,7 @@ from .models import (
 )
 from ..auth.models import (AuthenticationState, LoginRequest, LoginResponse, LogoutRequest,
     LogoutResponse, RefreshRequest, RefreshResponse, SessionInfo, ValidationResponse)
+from ..licensing.models import (ActivationRequest, ActivationResponse, ActivationVerificationRequest, ActivationVerificationResponse, DeactivationRequest, DeactivationResponse, LicenseEntitlement, LicenseListResponse, LicenseSummary, DeviceRegistrationRequest as TypedDeviceRegistrationRequest, DeviceRegistrationResponse as TypedDeviceRegistrationResponse)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -62,6 +63,27 @@ class LicensingPlatformClient:
 
     def validate_session(self, access_token: str) -> ValidationResponse:
         return self._request("GET", SESSION, ValidationResponse, idempotent=True, access_token=access_token)
+
+    def list_licenses(self, access_token: str) -> list[LicenseSummary]:
+        return self._request("GET", LICENSES, LicenseListResponse, access_token=access_token).licenses
+
+    def entitlement(self, product_id: str, access_token: str) -> LicenseEntitlement:
+        return self._request("GET", ENTITLEMENT.format(product_id=product_id), LicenseEntitlement, access_token=access_token)
+
+    def register_typed_device(self, request: TypedDeviceRegistrationRequest, access_token: str) -> TypedDeviceRegistrationResponse:
+        return self._request("POST", DEVICES, TypedDeviceRegistrationResponse, request.model_dump(), idempotent=False, access_token=access_token)
+
+    def device_status(self, device_id: str, access_token: str) -> TypedDeviceRegistrationResponse:
+        return self._request("GET", DEVICE_STATUS.format(device_id=device_id), TypedDeviceRegistrationResponse, access_token=access_token)
+
+    def activate(self, request: ActivationRequest, access_token: str) -> ActivationResponse:
+        return self._request("POST", ACTIVATE, ActivationResponse, request.model_dump(), idempotent=False, access_token=access_token)
+
+    def verify_activation(self, request: ActivationVerificationRequest, access_token: str) -> ActivationVerificationResponse:
+        return self._request("POST", VERIFY_ACTIVATION, ActivationVerificationResponse, request.model_dump(), idempotent=False, access_token=access_token)
+
+    def deactivate(self, request: DeactivationRequest, access_token: str) -> DeactivationResponse:
+        return self._request("POST", DEACTIVATE, DeactivationResponse, request.model_dump(), idempotent=False, access_token=access_token)
 
     def _request(self, method: str, path: str, model: type[T], payload: dict[str, Any] | None = None,
                  *, idempotent: bool = True, access_token: str | None = None) -> T:

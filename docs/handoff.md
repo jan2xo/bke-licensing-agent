@@ -28,6 +28,20 @@ Phase 4 authentication is implemented in `src/bke_licensing_agent/auth/`.
 Authentication and session state remain separate from licensing entitlement.
 The secure-storage contract is documented in `docs/secure-storage.md`.
 
+## Phase 5 handoff
+
+Phase 5 adds device identity, entitlement, online activation, verification, and
+non-sensitive activation metadata. See `docs/device-identity.md`,
+`docs/device-fingerprint.md`, `docs/license-entitlement.md`,
+`docs/activation-lifecycle.md`, and `docs/local-activation-storage.md`.
+
+Production integration and independent Phase 5 audit approval remain required.
+Phase 6 must not begin before that approval.
+
+Activation and deactivation orchestration, structured audit persistence, and
+the remaining local API/persistence tests are now implemented. The Phase 5
+implementation still requires independent audit approval before Phase 6.
+
 The remediation adds generation-protected refresh, concurrent refresh
 deduplication, revocation deletion, backend validation, and threshold-based
 fresh-session checks. The invariant is: logout, revocation, or session
@@ -60,3 +74,7 @@ block Phase 4 approval, but they must be completed before production readiness.
 The current implementation intentionally has no production API credentials,
 license authority, update installer, or offline lease issuer. Those must be
 server-backed and signature-verified before production use.
+Operation-generation protection is implemented for Phase 5 activation/deactivation races. Independent audit should review the generation checks and deterministic concurrency tests; migrations and persistence-failure handling were intentionally left unchanged.
+## Phase 5 Final Handoff
+
+Phase 5 behavioral verification is complete: 79 tests pass. Open findings are covered by deterministic tests, including migration rollback/recovery, persistence failures, malformed responses, deactivation behavior, cache tampering/deletion, and concurrent SQLite writes. Independent audit may begin. Do not begin Phase 6 until approval.
