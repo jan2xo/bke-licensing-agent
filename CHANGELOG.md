@@ -18,3 +18,9 @@
 - Added authentication service and secure session manager.
 - Added typed login, refresh, logout, and validation models and client methods.
 - Added OS keyring credential storage with safe failure and deletion behavior.
+
+## Maintenance
+
+- Recorded repository tooling debt after the independent security audit.
+- Deferred repository-wide linting, formatting, static typing, and dependency
+  audit to a future engineering-quality milestone.

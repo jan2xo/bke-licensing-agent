@@ -51,3 +51,16 @@
   unused refresh-retry-limit configuration.
 - Added backend validation and direct mocked-keyring tests for secure storage.
 - Verification: `pytest -q` -> 41 passed.
+
+## Phase 4 independent audit follow-up
+
+- The Phase 4 implementation passed the Independent Audit.
+- Recorded engineering tooling debt instead of silently resolving it.
+- Outstanding work includes repository-wide Ruff cleanup, formatting
+  normalization and CI verification, existing mypy issues, and a dependency
+  vulnerability audit in a network-enabled environment.
+- Reported coverage remains 81%; future increases must be meaningful and focus
+  on authentication, licensing, activation, offline licensing, updater, and
+  launcher workflows.
+- These items do not block Phase 4 approval but must be completed before
+  production readiness.

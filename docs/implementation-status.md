@@ -57,4 +57,34 @@
 - [x] Implement refresh-threshold behavior
 - [x] Add authentication diagnostics without sensitive values
 - [ ] Add real platform authentication integration
-- [ ] Add independent security audit
+- [x] Pass independent security audit
+
+## Engineering Tooling Debt
+
+### Code Quality
+
+- [ ] Resolve existing repository-wide Ruff findings
+- [ ] Apply repository formatting consistently
+- [ ] Configure formatting verification in CI
+
+### Static Analysis
+
+- [ ] Resolve existing mypy typing errors
+- [ ] Add or improve missing type annotations
+- [ ] Add missing third-party type stubs where appropriate
+
+### Dependency Security
+
+- [ ] Run `pip-audit` or equivalent in a network-enabled environment
+- [ ] Record vulnerabilities and remediation actions
+- [ ] Repeat the audit before production release
+
+### Test Coverage
+
+- Current reported coverage: 81%
+- Future goal: increase meaningful coverage, prioritizing authentication,
+  licensing, activation, offline licensing, updater, and launcher workflows
+- Avoid trivial tests written only to increase the percentage
+
+These tooling items remain project backlog and do not block Phase 4 approval.
+They are required before production readiness.

@@ -37,6 +37,20 @@ earlier session generation.
 Verification: `pytest -q` should include the Phase 3 API tests and all prior
 manifest, discovery, and storage tests.
 
+## Outstanding Engineering Tasks
+
+These are separate engineering-quality work items, not defects in the approved
+Phase 4 implementation:
+
+- Repository-wide lint cleanup.
+- Repository-wide formatting.
+- Static type cleanup.
+- Dependency vulnerability audit.
+
+The Phase 4 implementation has passed the Independent Audit. Ruff findings,
+formatting normalization, existing mypy issues, and the dependency audit do not
+block Phase 4 approval, but they must be completed before production readiness.
+
 ## Verification
 
 `pytest -q` passes (9 tests at the time of this handoff).

@@ -19,3 +19,34 @@
 The platform remains the authority for product existence, entitlement, device
 authorization, releases, and policy. Product-specific rules do not belong in
 this repository.
+
+## Engineering Tooling Debt
+
+### Code Quality
+
+- Resolve existing repository-wide Ruff findings.
+- Apply repository formatting consistently.
+- Configure formatting verification in CI.
+
+### Static Analysis
+
+- Resolve the existing mypy typing errors.
+- Add or improve missing type annotations.
+- Add missing third-party type stubs where appropriate.
+
+### Dependency Security
+
+- Execute a dependency vulnerability audit (`pip-audit` or equivalent) in a
+  network-enabled environment.
+- Record discovered vulnerabilities and remediation actions.
+- Repeat before production release.
+
+### Test Coverage
+
+- Current reported coverage: 81%.
+- Future goal: increase meaningful coverage while prioritizing authentication,
+  licensing, activation, offline licensing, updater, and launcher workflows.
+- Do not increase coverage with trivial tests.
+
+These are separate engineering-quality backlog items and do not block Phase 4
+approval. They must be completed before production readiness.
