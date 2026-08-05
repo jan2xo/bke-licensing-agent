@@ -16,7 +16,7 @@ dependencies = [
     "jsonschema>=4.0,<5"
     , "cryptography>=50,<51"
 ]
-optional-dependencies = { test = ["pytest>=8.0"] }
+optional-dependencies = { test = ["pytest>=8.0", "types-jsonschema>=4.0"] }
 
 [project.scripts]
 bke-licensing-agent = "bke_licensing_agent.__main__:main"

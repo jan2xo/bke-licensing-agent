@@ -130,6 +130,7 @@ class LicensingPlatformClient:
                 if attempt < attempts and idempotent:
                     self.sleep(min(self.config.retry_backoff * (2 ** attempt), 30)); continue
                 raise NetworkUnavailableError("The licensing platform is unavailable") from exc
+        raise UnknownApiError("The licensing platform request did not complete")
 
     def _parse_response(self, response: requests.Response, model: type[T]) -> T:
         status_map = {401: AuthenticationRequiredError, 403: AuthorizationDeniedError,

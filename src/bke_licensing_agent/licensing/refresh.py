@@ -60,7 +60,7 @@ class LeaseRefreshService:
             event.wait()
             return self._results[key]
         try:
-            result = self.reconciliation.reconcile(manifest, device_id, version)
+            reconciliation_result = self.reconciliation.reconcile(manifest, device_id, version)
             mapping = {
                 ReconciliationState.UPDATED: RefreshState.REFRESHED,
                 ReconciliationState.UNCHANGED: RefreshState.UNCHANGED,
@@ -70,7 +70,11 @@ class LeaseRefreshService:
                 ReconciliationState.DELETED: RefreshState.DELETED,
                 ReconciliationState.INVALID: RefreshState.STALE_REJECTED,
             }
-            result = RefreshResult(mapping.get(result.state, RefreshState.FAILED), result.lease_id, result.reason)
+            result = RefreshResult(
+                mapping.get(reconciliation_result.state, RefreshState.FAILED),
+                reconciliation_result.lease_id,
+                reconciliation_result.reason,
+            )
         except LeaseVerificationError as exc:
             result = RefreshResult(RefreshState.FAILED, reason=str(exc))
         except Exception as exc:

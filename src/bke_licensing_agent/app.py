@@ -1,11 +1,10 @@
 from pathlib import Path
-from typing import Any
-
 import typer
 
 from .discovery.scanner import scan as discovery_scan
 from .storage.database import Database
 from .storage.models import DiscoveredProductRecord
+from .manifest.validator import validate_manifest
 
 app = typer.Typer(help="BKE Licensing Agent CLI")
 
@@ -28,10 +27,11 @@ def scan(paths: str | None = typer.Option(None, "--paths", "-p", help="Colon-sep
         typer.echo(f"  path: {product.product_root}")
         typer.echo(f"  entryPoint: {product.entry_point_path}")
 
+        validated = validate_manifest(manifest)
         record = DiscoveredProductRecord.create(
-            product_id=manifest.get("productId"),
-            display_name=manifest.get("displayName"),
-            version=manifest.get("version"),
+            product_id=validated.productId,
+            display_name=validated.displayName,
+            version=validated.version,
             manifest_path=product.manifest_path,
             product_root=product.product_root,
             entry_point_path=product.entry_point_path,

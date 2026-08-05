@@ -23,10 +23,13 @@ class InstallationIdentity:
     def load_or_create(self) -> str:
         value = self.store.load(self.account)
         if value is None:
-            installation_id = secrets.token_urlsafe(32)
-            self.store.save(self.account, {"installation_id": installation_id})
-            return installation_id
-        installation_id = value.get("installation_id")
+            created_id = secrets.token_urlsafe(32)
+            self.store.save(self.account, {"installation_id": created_id})
+            return created_id
+        raw_installation_id = value.get("installation_id")
+        installation_id: str | None = (
+            raw_installation_id if isinstance(raw_installation_id, str) else None
+        )
         if not isinstance(installation_id, str) or len(installation_id) < 32:
             raise CorruptedSecureStorageError("Installation identity is corrupted")
         return installation_id
