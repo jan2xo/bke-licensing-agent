@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta, timezone
+import base64
+import json
 
 import pytest
 
 from bke_licensing_agent.licensing.authorization import AuthorizationService, AuthorizationState
 from bke_licensing_agent.licensing.lease import (
-    LicenseLease, LeaseMalformedError, LeaseRevokedError, LeaseSupersededError,
-    LeaseUnknownKeyError, LeaseVerifier,
+    LicenseLease, LeaseInvalidSignatureError, LeaseMalformedError, LeaseRevokedError,
+    LeaseSupersededError, LeaseUnknownKeyError, LeaseVerifier,
 )
 from bke_licensing_agent.manifest.validator import validate_manifest
 
@@ -56,8 +58,50 @@ def test_malformed_envelope_is_rejected():
 
 
 def test_revoked_and_superseded_leases_are_rejected_after_signature_boundary():
-    # These checks are applied to the authenticated payload by the verifier.
-    verifier = LeaseVerifier({})
     assert lease(revoked=True).revoked
     assert lease(superseded_by="new").superseded_by == "new"
     assert LeaseRevokedError and LeaseSupersededError
+
+
+def signed_lease(private_key, **changes):
+    payload = lease(**changes).model_dump_json()
+    signature = private_key.sign(payload.encode())
+    from cryptography.hazmat.primitives import serialization
+    public_key = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    envelope = {"payload": payload, "signature": base64.b64encode(signature).decode(),
+        "key_id": "k", "algorithm": "Ed25519"}
+    return envelope, public_key
+
+
+def test_valid_ed25519_signature_and_pem_key_verification():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    private_key = Ed25519PrivateKey.generate()
+    envelope, public_key = signed_lease(private_key)
+    verified = LeaseVerifier({"k": public_key}).verify(envelope)
+    assert verified.lease_id == "l"
+
+
+@pytest.mark.parametrize("mutation", ["payload", "signature"])
+def test_altered_signed_lease_is_rejected(mutation):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    private_key = Ed25519PrivateKey.generate()
+    envelope, public_key = signed_lease(private_key)
+    if mutation == "payload":
+        data = json.loads(envelope["payload"]); data["device_id"] = "tampered"
+        envelope["payload"] = json.dumps(data, separators=(",", ":"))
+    else:
+        envelope["signature"] = base64.b64encode(b"bad").decode()
+    with pytest.raises(LeaseInvalidSignatureError): LeaseVerifier({"k": public_key}).verify(envelope)
+
+
+@pytest.mark.parametrize("changes, error", [
+    ({"revoked": True}, LeaseRevokedError),
+    ({"superseded_by": "new"}, LeaseSupersededError),
+])
+def test_signed_revoked_or_superseded_lease_is_rejected(changes, error):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    private_key = Ed25519PrivateKey.generate()
+    envelope, public_key = signed_lease(private_key, **changes)
+    with pytest.raises(error): LeaseVerifier({"k": public_key}).verify(envelope)

@@ -111,6 +111,6 @@ Phase 5 final consolidated verification: 79/79 tests passed; all listed Phase 5 
 - [x] Add Ed25519 verification boundary
 - [x] Add deterministic offline authorization decisions
 - [x] Add lease and authorization tests
-- [ ] Complete cryptographic integration tests after dependency installation
+- [x] Complete cryptographic integration tests after dependency installation
 - [ ] Complete platform lease retrieval integration
 - [x] Upgrade cryptography dependency to the security-fixed `>=50,<51` policy
