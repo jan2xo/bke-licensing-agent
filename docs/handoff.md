@@ -1,5 +1,8 @@
 # Handoff
 
+Phase 6.4 refresh policy and generation-based replay ordering are implemented.
+Final launch authorization remains the next Phase 6 blocker.
+
 This project is the foundation for the BKE Licensing Agent.
 
 ## Current state

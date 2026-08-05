@@ -167,4 +167,5 @@ class LeaseReconciliationService:
             installation_id=lease.installation_id, device_id=lease.device_id,
             generation=lease.generation, status="verified", issuer=lease.issuer,
             issued_at=lease.issued_at, expires_at=lease.expires_at,
-            key_id=lease.key_id, verified_at=now)
+            key_id=lease.key_id, verified_at=now,
+            server_revision=lease.server_revision)

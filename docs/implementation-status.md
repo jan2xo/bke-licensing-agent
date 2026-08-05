@@ -106,6 +106,8 @@ Phase 5 final consolidated verification: 79/79 tests passed; all listed Phase 5 
 
 ## Phase 6 — Offline Lease and Launch Authorization
 
+- [x] Add Phase 6.4 lease refresh policy and replay ordering
+
 - [x] Add Phase 6.3 online lease reconciliation
 
 - [x] Add signed lease models and schema validation

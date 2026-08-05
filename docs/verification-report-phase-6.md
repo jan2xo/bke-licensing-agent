@@ -1,5 +1,8 @@
 # Phase 6 Verification Report
 
+Phase 6.4 covers no-refresh-required behavior, refresh of missing/expiring
+leases, and older-generation rejection. Full suite: 113 passed.
+
 Phase 6.3 tests cover first/update/unchanged, revoked, superseded, expired,
 deleted, mismatched identity/version, downgrade rejection, concurrent
 deduplication, logout, and identity-reset races.

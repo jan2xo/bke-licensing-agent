@@ -15,6 +15,7 @@ from bke_licensing_agent.licensing.lease_storage import LeaseMetadataRepository
 from bke_licensing_agent.licensing.reconciliation import (
     LeaseReconciliationService, ReconciliationState,
 )
+from bke_licensing_agent.licensing.refresh import LeaseRefreshService, RefreshState
 from bke_licensing_agent.api.errors import ResourceNotFoundError
 from bke_licensing_agent.storage.database import Database
 from bke_licensing_agent.manifest.validator import validate_manifest
@@ -146,10 +147,10 @@ def test_lease_metadata_save_load_replace_delete_and_idempotence(tmp_path):
 
 def test_lease_metadata_migration_is_current_and_idempotent(tmp_path):
     with Database(tmp_path / "agent.db") as db:
-        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 4
         assert db.connection.execute("SELECT name FROM sqlite_master WHERE name='lease_metadata'").fetchone()
     with Database(tmp_path / "agent.db") as db:
-        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 4
 
 
 def test_lease_metadata_does_not_store_sensitive_fields(tmp_path):
@@ -327,4 +328,52 @@ def test_identity_reset_during_reconciliation_rejects_result(tmp_path):
     release.set(); thread.join(timeout=2)
     assert errors and isinstance(errors[0], MissingSessionError)
     assert repository.load("l") is None
+    db.close()
+
+
+def test_refresh_no_refresh_required_and_refreshes_expiring_lease(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    envelope, PUBLIC_KEY = signed_lease(private_key, expires_at=NOW + timedelta(hours=2))
+    service, db, _ = reconciliation_service(tmp_path, envelope)
+    refresh = LeaseRefreshService(service, threshold=timedelta(hours=1))
+    assert refresh.refresh(product(), "d").state is RefreshState.REFRESHED
+    assert refresh.refresh(product(), "d").state is RefreshState.NO_REFRESH_REQUIRED
+    db.close()
+
+
+def test_refresh_rejects_older_generation(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    newer, PUBLIC_KEY = signed_lease(private_key, generation=2, lease_id="new", expires_at=NOW + timedelta(minutes=1))
+    service, db, _ = reconciliation_service(tmp_path, newer)
+    refresh = LeaseRefreshService(service, threshold=timedelta(hours=1))
+    assert refresh.refresh(product(), "d").state is RefreshState.REFRESHED
+    older, _ = signed_lease(private_key, generation=1, lease_id="old", expires_at=NOW + timedelta(minutes=1))
+    service.client.retrieve_lease = lambda product_id, token: type("Envelope", (), {"model_dump": lambda self: older})()
+    assert refresh.refresh(product(), "d").state is RefreshState.STALE_REJECTED
+    db.close()
+
+
+def test_concurrent_refresh_deduplicates(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    envelope, PUBLIC_KEY = signed_lease(private_key, expires_at=NOW + timedelta(hours=2))
+    service, db, _ = reconciliation_service(tmp_path, envelope)
+    started, release = threading.Event(), threading.Event()
+    calls = []
+    def retrieve(product_id, token):
+        calls.append(1); started.set(); release.wait(timeout=2)
+        return type("Envelope", (), {"model_dump": lambda self: envelope})()
+    service.client.retrieve_lease = retrieve
+    refresh = LeaseRefreshService(service, threshold=timedelta(hours=1))
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(refresh.refresh(product(), "d"))) for _ in range(2)]
+    for thread in threads: thread.start()
+    assert started.wait(timeout=2); release.set()
+    for thread in threads: thread.join(timeout=2)
+    assert len(calls) == 1 and results[0] == results[1]
     db.close()

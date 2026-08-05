@@ -22,19 +22,21 @@ class LeaseMetadataRepository:
                 self.database.connection.execute(
                     """INSERT INTO lease_metadata
                     (lease_id, product_id, installation_id, device_id, generation,
-                     status, issuer, issued_at, expires_at, key_id, last_verified_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, issuer, issued_at, expires_at, key_id, last_verified_at,
+                     server_revision)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(lease_id) DO UPDATE SET product_id=excluded.product_id,
                     installation_id=excluded.installation_id, device_id=excluded.device_id,
                     generation=excluded.generation, status=excluded.status,
                     issuer=excluded.issuer, issued_at=excluded.issued_at,
                     expires_at=excluded.expires_at, key_id=excluded.key_id,
-                    last_verified_at=excluded.last_verified_at""",
+                    last_verified_at=excluded.last_verified_at,
+                    server_revision=excluded.server_revision""",
                     (metadata.lease_id, metadata.product_id, metadata.installation_id,
                      metadata.device_id, metadata.generation, metadata.status,
                      metadata.issuer, metadata.issued_at.isoformat(),
                      metadata.expires_at.isoformat(), metadata.key_id,
-                     metadata.verified_at.isoformat()),
+                     metadata.verified_at.isoformat(), metadata.server_revision),
                 )
         except Exception as exc:
             raise LeaseMetadataPersistenceError("Could not save lease metadata") from exc

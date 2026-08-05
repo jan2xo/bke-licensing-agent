@@ -1,5 +1,7 @@
 # Changelog
 
+- Added threshold-based lease refresh and generation/revision replay rejection.
+
 ## 0.1.0
 
 - Added versioned manifest schema and Pydantic model validation.

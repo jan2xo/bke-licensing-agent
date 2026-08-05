@@ -1,5 +1,8 @@
 # Phase 6 Self-Audit
 
+Refresh does not persist signed payloads or keys and delegates authenticity and
+authority checks to the existing verifier and reconciliation service.
+
 Reconciliation never treats SQLite metadata as authoritative and checks the
 session, installation generation, signature, identity, version, and lease
 generation before persistence.

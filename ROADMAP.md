@@ -1,5 +1,8 @@
 # Roadmap
 
+Phase 6.4 refresh and replay ordering are implemented; final launch
+authorization remains the next scoped increment.
+
 ## Current milestone: Phase 6, offline license lease and launch authorization
 
 - Complete manifest schema, semantic-version, and path-safety validation.

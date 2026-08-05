@@ -1,5 +1,8 @@
 # Developer Journal
 
+Phase 6.4 added threshold refresh decisions, persisted server revisions, and
+single-flight refresh with older-generation rejection.
+
 Phase 6.3 completed platform-authoritative online lease reconciliation with
 typed results and deterministic stale-operation tests.
 

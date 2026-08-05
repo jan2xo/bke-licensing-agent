@@ -1,5 +1,8 @@
 # Phase 6 Implementation Report
 
+Phase 6.4 adds threshold-based refresh decisions, single-flight refresh
+deduplication, persisted server revisions, and stale-generation rejection.
+
 Phase 6.3 reconciliation is implemented with typed platform-authoritative
 results, signature validation, identity/version checks, downgrade protection,
 revocation/supersession deletion, and generation-protected deduplication.

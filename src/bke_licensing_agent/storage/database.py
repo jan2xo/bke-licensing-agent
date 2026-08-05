@@ -6,7 +6,7 @@ from collections.abc import Callable
 from ..config import get_database_path
 from .models import DiscoveredProductRecord
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS lease_metadata (
     last_verified_at TEXT NOT NULL
 )
 """,),
+    4: ("ALTER TABLE lease_metadata ADD COLUMN server_revision INTEGER NOT NULL DEFAULT 0",),
 }
 
 

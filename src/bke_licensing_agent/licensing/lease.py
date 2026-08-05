@@ -34,6 +34,7 @@ class LicenseLease(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lease_id: str
     generation: int = Field(ge=0)
+    server_revision: int = Field(default=0, ge=0)
     product_id: str
     installation_id: str
     device_id: str
@@ -63,6 +64,7 @@ class LeaseMetadata(BaseModel):
     installation_id: str
     device_id: str
     generation: int
+    server_revision: int = 0
     status: str
     issued_at: datetime
     expires_at: datetime
