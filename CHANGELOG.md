@@ -54,3 +54,4 @@ SQLite audit transaction evidence.
 Final Phase 6 proof matrix completed for stale authorization and replay lifecycle.
 Phase 7 adds a product-agnostic execution boundary with path and SHA-256
 integrity checks, generation rechecks, and shell-free process launch.
+Phase 8 adds deterministic startup recovery for untrusted lease and process state.

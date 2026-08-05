@@ -69,3 +69,4 @@ Phase 6 final closure evidence is complete; Phase 7 remains gated on audit.
 Phase 6 final proof matrix is complete; Phase 7 remains independently gated.
 Phase 7 secure product execution implementation started; independent audit and
 the complete deterministic acceptance matrix remain required before Phase 8.
+Phase 8 recovery service implemented as a fail-closed validation boundary.

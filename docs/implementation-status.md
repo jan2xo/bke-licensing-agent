@@ -129,3 +129,5 @@ replacement ordering is persisted by generation and server revision.
 Final Phase 6 proof matrix is complete with 145 passing tests and no functional
 Phase 6 blocker identified.
 Phase 7 execution boundary implemented; full acceptance verification pending.
+Phase 8 recovery foundation implemented; full operational acceptance remains
+pending audit.

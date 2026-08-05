@@ -115,3 +115,5 @@ The final proof matrix added separate deterministic lifecycle tests for refresh,
 reconciliation, replay, revocation, supersedence, and stale replacement.
 Phase 7 execution work added canonical manifest entry-point resolution, trusted
 artifact hashing, final stale-state checks, and shell-free subprocess launch.
+Phase 8 recovery validates local lease metadata and delegates process recovery
+without granting authorization or recreating trust material.

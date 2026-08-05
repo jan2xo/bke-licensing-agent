@@ -18,3 +18,5 @@ Validated Manifest -> verified signed Lease -> AuthorizationService -> typed
 AuthorizationDecision. The authorization layer does not launch applications.
 Phase 7 adds an execution boundary after authorization; it cannot authorize by
 itself and never treats local persistence as a trust anchor.
+Phase 8 recovery is downstream of trust boundaries and can only validate or
+report local state; it cannot authorize execution.
