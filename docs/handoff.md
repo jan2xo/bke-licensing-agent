@@ -78,3 +78,14 @@ Operation-generation protection is implemented for Phase 5 activation/deactivati
 ## Phase 5 Final Handoff
 
 Phase 5 behavioral verification is complete: 79 tests pass. Open findings are covered by deterministic tests, including migration rollback/recovery, persistence failures, malformed responses, deactivation behavior, cache tampering/deletion, and concurrent SQLite writes. Independent audit may begin. Do not begin Phase 6 until approval.
+
+## Phase 6 Handoff
+
+The initial offline lease and authorization boundary is implemented in
+`src/bke_licensing_agent/licensing/lease.py` and
+`src/bke_licensing_agent/licensing/authorization.py`. It uses Ed25519 through
+the established `cryptography` library, rejects unknown keys, and binds
+authorization to validated product, installation, device, and version data.
+The local environment could not download `cryptography` because PyPI DNS was
+unavailable; cryptographic integration tests remain blocked until the
+dependency is installed.

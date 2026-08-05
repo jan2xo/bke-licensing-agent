@@ -31,3 +31,11 @@
   fingerprints.
 - Added typed entitlement, device registration, activation, and verification
   contracts with non-sensitive SQLite activation metadata.
+## Phase 6
+
+- Added signed offline lease and launch-authorization boundaries.
+- Added trusted-key and deterministic clock validation.
+## Security remediation
+
+- Upgraded the Phase 6 cryptography policy from vulnerable 45.0.7-era releases
+  to `cryptography>=50,<51`, which covers all fixes reported by pip-audit.

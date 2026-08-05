@@ -1,6 +1,6 @@
 # Roadmap
 
-## Current milestone: Phase 5, device identity and online activation
+## Current milestone: Phase 6, offline license lease and launch authorization
 
 - Complete manifest schema, semantic-version, and path-safety validation.
 - Scan configurable locations without executing discovered files.
@@ -17,6 +17,9 @@
 - Add license activation, device identity, and entitlement verification workflows.
 - Add secure token storage and signed offline lease verification.
 - Add launch authorization and update artifact verification.
+
+Phase 6 adds signed offline lease verification and authorization decisions. The
+agent never becomes the licensing authority and does not launch products.
 
 The platform remains the authority for product existence, entitlement, device
 authorization, releases, and policy. Product-specific rules do not belong in

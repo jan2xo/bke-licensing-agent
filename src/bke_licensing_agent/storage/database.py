@@ -45,7 +45,11 @@ class Database:
         self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self._lock = threading.RLock()
         self.connection.row_factory = sqlite3.Row
-        self.initialize(migration_hook=migration_hook)
+        try:
+            self.initialize(migration_hook=migration_hook)
+        except Exception:
+            self.connection.close()
+            raise
 
     def close(self) -> None:
         self.connection.close()

@@ -103,3 +103,14 @@ They are required before production readiness.
 - [ ] Add production platform integration and independent audit approval
 Phase 5 closure remediation: operation-generation protection implemented and covered by deterministic race tests.
 Phase 5 final consolidated verification: 79/79 tests passed; all listed Phase 5 remediation findings have direct test coverage. Ready for independent audit. Tooling debt remains separately tracked.
+
+## Phase 6 — Offline Lease and Launch Authorization
+
+- [x] Add signed lease models and schema validation
+- [x] Add trusted key identifiers and unknown-key rejection
+- [x] Add Ed25519 verification boundary
+- [x] Add deterministic offline authorization decisions
+- [x] Add lease and authorization tests
+- [ ] Complete cryptographic integration tests after dependency installation
+- [ ] Complete platform lease retrieval integration
+- [x] Upgrade cryptography dependency to the security-fixed `>=50,<51` policy

@@ -9,3 +9,7 @@ This document describes the planned architecture for the BKE Licensing Agent.
 - Communicate with the BKE licensing platform over HTTPS
 - Enforce licensing policy without embedded product-specific rules
 - Support controlled offline operation through signed leases
+# Phase 6 addition
+
+Validated Manifest -> verified signed Lease -> AuthorizationService -> typed
+AuthorizationDecision. The authorization layer does not launch applications.

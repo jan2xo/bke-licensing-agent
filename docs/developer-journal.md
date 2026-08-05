@@ -83,3 +83,10 @@
   production readiness.
 Phase 5 remediation added operation generations for session, installation identity, and product/device ordering. Event-controlled tests prove stale activation and deactivation responses cannot restore or remove newer state.
 Final Phase 5 verification completed against the current repository state. The authoritative result is 79 passed and 79 collected, with 85% coverage. All operation-generation, migration, persistence-boundary, malformed-response, cache-integrity, deactivation, and concurrent SQLite findings have mapped tests.
+Phase 6 implementation added the signed lease model, Ed25519 verification
+boundary, trusted key IDs, and offline authorization decisions. Cryptographic
+integration verification is pending dependency installation because network
+DNS was unavailable.
+Phase 6 Security Remediation 001 upgraded cryptography from installed 45.0.7
+to 50.0.0 under the `>=50,<51` policy. Ed25519 compatibility and the full
+regression suite were reverified.
