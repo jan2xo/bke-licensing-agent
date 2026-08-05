@@ -3,7 +3,7 @@
 import hashlib
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Callable
@@ -58,6 +58,10 @@ class AuthorizationDecision:
     expires_at: datetime | None = None
     offline: bool = True
     correlation_id: str | None = None
+    installation_id: str | None = None
+    installation_generation: int | None = None
+    device_id: str | None = None
+    product_version: str | None = None
 
 
 @dataclass
@@ -135,24 +139,36 @@ class LaunchAuthorizationService:
         if not getattr(manifest, "is_validated", False):
             return self._finish(self._denied(product_id, AuthorizationReason.AUTHORIZATION_DENIED))
         if signed_lease is None:
-            return self._finish(self._denied(product_id, AuthorizationReason.MISSING_LEASE))
+            return self._bind(self._finish(self._denied(product_id, AuthorizationReason.MISSING_LEASE)),
+                None, device_id, manifest.version, identity_generation)
         identity = installation.load_or_create()
+        def bind(result, lease=None):
+            return self._bind(result, identity, device_id, manifest.version, identity_generation)
         try:
             lease = self.verifier.verify(signed_lease)
         except LeaseUnknownKeyError:
-            return self._finish(self._denied(product_id, AuthorizationReason.UNKNOWN_SIGNING_KEY))
+            return bind(self._finish(self._denied(product_id, AuthorizationReason.UNKNOWN_SIGNING_KEY)))
         except LeaseInvalidSignatureError:
-            return self._finish(self._denied(product_id, AuthorizationReason.INVALID_SIGNATURE))
+            return bind(self._finish(self._denied(product_id, AuthorizationReason.INVALID_SIGNATURE)))
         except LeaseRevokedError:
-            return self._finish(self._denied(product_id, AuthorizationReason.LEASE_REVOKED))
+            return bind(self._finish(self._denied(product_id, AuthorizationReason.LEASE_REVOKED)))
         except LeaseSupersededError:
-            return self._finish(self._denied(product_id, AuthorizationReason.LEASE_SUPERSEDED))
+            return bind(self._finish(self._denied(product_id, AuthorizationReason.LEASE_SUPERSEDED)))
         except (LeaseMalformedError, LeaseUnsupportedAlgorithmError):
-            return self._finish(self._denied(product_id, AuthorizationReason.MALFORMED_LEASE))
+            return bind(self._finish(self._denied(product_id, AuthorizationReason.MALFORMED_LEASE)))
         if not self._operation_current(installation, operation_generation, identity_generation):
             return self._finish(self._denied(product_id, AuthorizationReason.STALE_OPERATION, lease))
-        return self._authorize_verified(manifest, installation, identity, identity_generation,
+        result = self._authorize_verified(manifest, installation, identity, identity_generation,
             device_id, lease, version, online, operation_generation)
+        return replace(result, installation_id=identity,
+            installation_generation=identity_generation, device_id=device_id,
+            product_version=manifest.version)
+
+    @staticmethod
+    def _bind(result, installation_id, device_id, product_version, installation_generation):
+        return replace(result, installation_id=installation_id,
+            installation_generation=installation_generation, device_id=device_id,
+            product_version=product_version)
 
     def _authorize_verified(self, manifest, installation, identity, identity_generation,
                             device_id, lease: LicenseLease, version, online, session_generation):

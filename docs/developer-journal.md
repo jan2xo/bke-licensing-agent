@@ -113,3 +113,5 @@ Final closure verification added direct audit transaction and replay lifecycle
 tests. Authorization remains diagnostic-decision only and fail-closed.
 The final proof matrix added separate deterministic lifecycle tests for refresh,
 reconciliation, replay, revocation, supersedence, and stale replacement.
+Phase 7 execution work added canonical manifest entry-point resolution, trusted
+artifact hashing, final stale-state checks, and shell-free subprocess launch.

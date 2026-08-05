@@ -647,6 +647,18 @@ def test_allowed_and_denied_authorization_audit_failures_are_explicit(tmp_path):
     db.close()
 
 
+def test_authorization_decision_propagates_execution_binding(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    service, envelope, db = launch_service(tmp_path, Ed25519PrivateKey.generate())
+    identity = AuthorizationIdentity()
+    result = service.authorize(product(), identity, "d", envelope)
+    assert result.installation_id == "i"
+    assert result.installation_generation == 1
+    assert result.device_id == "d"
+    assert result.product_version == "1.0.0"
+    db.close()
+
+
 class _AuditCapture:
     def __init__(self):
         self.events = []

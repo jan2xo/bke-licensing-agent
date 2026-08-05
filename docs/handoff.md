@@ -108,3 +108,5 @@ Final Phase 6 closure reports 130 passing tests. Generation/revision ordering,
 replay reconstruction, and SQLite audit rollback/concurrency are covered.
 Phase 6 final proof is complete: 145 tests pass and stale authorization,
 replay, replacement, and audit transaction behavior are evidenced.
+Phase 7 execution module is implemented but remains incomplete pending its full
+deterministic test matrix and independent audit. Phase 8 must not begin.
