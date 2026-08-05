@@ -20,3 +20,5 @@ Phase 7 adds an execution boundary after authorization; it cannot authorize by
 itself and never treats local persistence as a trust anchor.
 Phase 8 recovery is downstream of trust boundaries and can only validate or
 report local state; it cannot authorize execution.
+Phase 9 adds an update-preparation boundary after platform trust verification;
+it does not install or execute artifacts.

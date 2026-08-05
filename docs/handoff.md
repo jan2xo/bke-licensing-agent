@@ -112,3 +112,5 @@ Phase 7 execution module is implemented but remains incomplete pending its full
 deterministic test matrix and independent audit. Phase 8 must not begin.
 Phase 8 recovery foundation is present in `recovery/service.py`; it remains
 incomplete pending the full interrupted-operation and corruption matrix.
+Phase 9 update preparation is implemented; installer execution and Phase 10 are
+not started.

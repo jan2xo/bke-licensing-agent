@@ -117,3 +117,5 @@ Phase 7 execution work added canonical manifest entry-point resolution, trusted
 artifact hashing, final stale-state checks, and shell-free subprocess launch.
 Phase 8 recovery validates local lease metadata and delegates process recovery
 without granting authorization or recreating trust material.
+Phase 9 added signed update metadata validation, compatibility policy, and
+staged SHA-256 artifact preparation without installation.

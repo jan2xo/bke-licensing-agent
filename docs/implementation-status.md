@@ -131,3 +131,4 @@ Phase 6 blocker identified.
 Phase 7 execution boundary implemented; full acceptance verification pending.
 Phase 8 recovery foundation implemented; full operational acceptance remains
 pending audit.
+Phase 9 update preparation implemented; independent audit remains required.
