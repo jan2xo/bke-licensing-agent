@@ -120,3 +120,5 @@ without granting authorization or recreating trust material.
 Phase 9 added signed update metadata validation, compatibility policy, and
 staged SHA-256 artifact preparation without installation.
 Phase 10 added deterministic production configuration and startup health boundaries.
+Added a business-logic-free Demo Product and manual certification foundation
+using the existing generic manifest and runtime boundaries.

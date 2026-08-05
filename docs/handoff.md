@@ -115,3 +115,5 @@ incomplete pending the full interrupted-operation and corruption matrix.
 Phase 9 update preparation is implemented; installer execution and Phase 10 are
 not started.
 Phase 10 hardening is implemented as a configuration and diagnostics layer; full production deployment review remains required.
+The Demo Product sample and certification procedures are available under
+`samples/bke-demo-product/` and `certification/`; no production integration was added.

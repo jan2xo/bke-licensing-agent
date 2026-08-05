@@ -72,3 +72,5 @@ the complete deterministic acceptance matrix remain required before Phase 8.
 Phase 8 recovery service implemented as a fail-closed validation boundary.
 Phase 9 secure update preparation implemented; installer execution is out of scope.
 Phase 10 production hardening foundation implemented.
+Post-Phase-10 certification foundation added: BKE Demo Product and manual
+certification procedures. AIRSTACK and BKE Forge remain out of scope.

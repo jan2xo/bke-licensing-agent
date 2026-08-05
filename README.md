@@ -46,6 +46,8 @@ This repository contains the foundation for discovering BKE applications through
 - `schemas/bke-manifest.schema.json`: manifest validation schema
 - `tests/`: unit and integration test skeletons
 - `docs/`: architecture, status, and implementation documentation
+- `samples/bke-demo-product/`: product-agnostic reference product
+- `certification/`: manual certification procedures
 
 Phase 3 adds a typed HTTPS client foundation under
 `src/bke_licensing_agent/api/`. Configure an `https://` base URL through
