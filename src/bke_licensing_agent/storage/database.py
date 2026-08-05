@@ -6,7 +6,7 @@ from collections.abc import Callable
 from ..config import get_database_path
 from .models import DiscoveredProductRecord
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -33,6 +33,21 @@ CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL,
     product_id TEXT, device_id TEXT, activation_id TEXT,
     result TEXT NOT NULL, created_at TEXT NOT NULL
+)
+""",),
+    3: ("""
+CREATE TABLE IF NOT EXISTS lease_metadata (
+    lease_id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    last_verified_at TEXT NOT NULL
 )
 """,),
 }

@@ -90,3 +90,6 @@ DNS was unavailable.
 Phase 6 Security Remediation 001 upgraded cryptography from installed 45.0.7
 to 50.0.0 under the `>=50,<51` policy. Ed25519 compatibility and the full
 regression suite were reverified.
+
+Phase 6.2 added a dedicated diagnostic-only lease metadata repository and
+schema migration 3. SQLite rows remain untrusted and cannot authorize launch.

@@ -89,3 +89,7 @@ authorization to validated product, installation, device, and version data.
 The local environment could not download `cryptography` because PyPI DNS was
 unavailable; cryptographic integration tests remain blocked until the
 dependency is installed.
+
+Phase 6.2 lease metadata persistence is complete and verified. Remaining Phase
+6 work is online reconciliation, refresh, replay/generation ordering, and
+concurrency; those are intentionally outside this increment.

@@ -21,6 +21,15 @@ class LeaseRevokedError(LeaseVerificationError): pass
 class LeaseSupersededError(LeaseVerificationError): pass
 
 
+class LeaseMetadataError(Exception):
+    """Base class for fail-closed local metadata errors."""
+
+
+class LeaseMetadataCorruptError(LeaseMetadataError): pass
+class LeaseMetadataPersistenceError(LeaseMetadataError): pass
+class LeaseMetadataSchemaError(LeaseMetadataError): pass
+
+
 class LicenseLease(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lease_id: str
@@ -48,8 +57,14 @@ class LeaseEnvelope(BaseModel):
 
 
 class LeaseMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     lease_id: str
+    product_id: str
+    installation_id: str
+    device_id: str
     generation: int
+    status: str
+    issued_at: datetime
     expires_at: datetime
     issuer: str
     key_id: str

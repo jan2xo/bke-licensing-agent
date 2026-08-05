@@ -61,7 +61,10 @@ class AuthorizationService:
         except InvalidVersion:
             return AuthorizationDecision(AuthorizationState.LEASE_VERSION_REJECTED)
         if self.store:
-            self.store.save(LeaseMetadata(lease_id=lease.lease_id, generation=lease.generation,
-                expires_at=lease.expires_at, issuer=lease.issuer, key_id=lease.key_id,
-                verified_at=now))
+            self.store.save(LeaseMetadata(lease_id=lease.lease_id,
+                product_id=lease.product_id, installation_id=lease.installation_id,
+                device_id=lease.device_id, generation=lease.generation,
+                status="verified", issued_at=lease.issued_at,
+                expires_at=lease.expires_at, issuer=lease.issuer,
+                key_id=lease.key_id, verified_at=now))
         return AuthorizationDecision(AuthorizationState.AUTHORIZED)

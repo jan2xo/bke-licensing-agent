@@ -9,3 +9,6 @@ approval until it is installed and integration-tested.
 The dependency is now available and the direct Ed25519 integration tests pass.
 Lease metadata persistence, replay/generation ordering, and concurrent online
 lease reconciliation remain unimplemented and are not claimed complete.
+
+The metadata repository is intentionally diagnostic-only. A valid-looking
+SQLite row cannot establish signature authenticity or authorize launch.

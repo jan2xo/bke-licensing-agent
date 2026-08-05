@@ -114,3 +114,4 @@ Phase 5 final consolidated verification: 79/79 tests passed; all listed Phase 5 
 - [x] Complete cryptographic integration tests after dependency installation
 - [ ] Complete platform lease retrieval integration
 - [x] Upgrade cryptography dependency to the security-fixed `>=50,<51` policy
+- [x] Add Phase 6.2 lease metadata persistence and migration

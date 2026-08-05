@@ -9,6 +9,8 @@ from bke_licensing_agent.licensing.lease import (
     LicenseLease, LeaseInvalidSignatureError, LeaseMalformedError, LeaseRevokedError,
     LeaseSupersededError, LeaseUnknownKeyError, LeaseVerifier,
 )
+from bke_licensing_agent.licensing.lease_storage import LeaseMetadataRepository
+from bke_licensing_agent.storage.database import Database
 from bke_licensing_agent.manifest.validator import validate_manifest
 
 
@@ -105,3 +107,58 @@ def test_signed_revoked_or_superseded_lease_is_rejected(changes, error):
     private_key = Ed25519PrivateKey.generate()
     envelope, public_key = signed_lease(private_key, **changes)
     with pytest.raises(error): LeaseVerifier({"k": public_key}).verify(envelope)
+
+
+def metadata(**changes):
+    values = dict(lease_id="l", product_id="p", installation_id="i", device_id="d",
+        generation=1, status="verified", issuer="bke", issued_at=NOW,
+        expires_at=NOW + timedelta(hours=1), key_id="k", verified_at=NOW)
+    values.update(changes)
+    from bke_licensing_agent.licensing.lease import LeaseMetadata
+    return LeaseMetadata(**values)
+
+
+def test_lease_metadata_save_load_replace_delete_and_idempotence(tmp_path):
+    with Database(tmp_path / "agent.db") as db:
+        repository = LeaseMetadataRepository(db)
+        repository.save(metadata())
+        assert repository.load("l").product_id == "p"
+        repository.save(metadata(status="expired", generation=2))
+        assert repository.load("l").status == "expired"
+        repository.save(metadata(status="expired", generation=2))
+        assert db.connection.execute("SELECT COUNT(*) FROM lease_metadata").fetchone()[0] == 1
+        repository.delete("l")
+        assert repository.load("l") is None
+
+
+def test_lease_metadata_migration_is_current_and_idempotent(tmp_path):
+    with Database(tmp_path / "agent.db") as db:
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert db.connection.execute("SELECT name FROM sqlite_master WHERE name='lease_metadata'").fetchone()
+    with Database(tmp_path / "agent.db") as db:
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+
+
+def test_lease_metadata_does_not_store_sensitive_fields(tmp_path):
+    with Database(tmp_path / "agent.db") as db:
+        LeaseMetadataRepository(db).save(metadata())
+        columns = {row[1] for row in db.connection.execute("PRAGMA table_info(lease_metadata)")}
+        assert not columns & {"signature", "public_key", "access_token", "refresh_token", "payload"}
+
+
+def test_tampered_lease_metadata_fails_closed(tmp_path):
+    from bke_licensing_agent.licensing.lease import LeaseMetadataCorruptError
+    with Database(tmp_path / "agent.db") as db:
+        repository = LeaseMetadataRepository(db)
+        repository.save(metadata())
+        db.connection.execute("UPDATE lease_metadata SET generation='not-an-integer'")
+        db.connection.commit()
+        with pytest.raises(LeaseMetadataCorruptError): repository.load("l")
+
+
+def test_lease_metadata_sqlite_failure_is_typed(tmp_path):
+    from bke_licensing_agent.licensing.lease import LeaseMetadataPersistenceError
+    with Database(tmp_path / "agent.db") as db:
+        repository = LeaseMetadataRepository(db)
+        db.connection.close()
+        with pytest.raises(LeaseMetadataPersistenceError): repository.save(metadata())
