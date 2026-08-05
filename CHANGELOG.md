@@ -33,6 +33,8 @@
   contracts with non-sensitive SQLite activation metadata.
 ## Phase 6
 
+- Added platform-authoritative online lease reconciliation.
+
 - Added signed offline lease and launch-authorization boundaries.
 - Added trusted-key and deterministic clock validation.
 ## Security remediation

@@ -1,5 +1,11 @@
 # Phase 6 Evidence Package
 
+Phase 6.3 evidence includes 32 focused Phase 6 tests and full-suite regression
+verification for platform-authoritative reconciliation and stale-result safety.
+
+Online reconciliation evidence covers verified first download, unchanged
+state, and signed revocation/supersession deletion.
+
 Evidence includes lease model validation, unknown-key rejection, malformed
 envelope rejection, deterministic clock authorization, identity/product/device
 binding, version rejection, and expiration/not-before decisions. Cryptographic

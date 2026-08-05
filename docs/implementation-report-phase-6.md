@@ -1,5 +1,12 @@
 # Phase 6 Implementation Report
 
+Phase 6.3 reconciliation is implemented with typed platform-authoritative
+results, signature validation, identity/version checks, downgrade protection,
+revocation/supersession deletion, and generation-protected deduplication.
+
+Phase 6.3 added platform-authoritative online lease reconciliation for verified
+first download, unchanged/newer metadata, and signed revocation/supersession.
+
 Added signed lease models, Ed25519 verification, trusted key IDs, lease validity
 checks, typed offline authorization decisions, API lease/key retrieval methods,
 and deterministic authorization tests.

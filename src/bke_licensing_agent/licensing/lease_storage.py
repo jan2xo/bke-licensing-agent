@@ -58,6 +58,26 @@ class LeaseMetadataRepository:
         except Exception as exc:
             raise LeaseMetadataCorruptError("Lease metadata is malformed") from exc
 
+    def latest(self, product_id: str, device_id: str) -> LeaseMetadata | None:
+        try:
+            with self.database._lock:
+                row = self.database.connection.execute(
+                    "SELECT * FROM lease_metadata WHERE product_id=? AND device_id=? "
+                    "ORDER BY generation DESC LIMIT 1", (product_id, device_id)
+                ).fetchone()
+            return self._row_to_metadata(row) if row is not None else None
+        except Exception as exc:
+            raise LeaseMetadataCorruptError("Lease metadata is malformed") from exc
+
+    @staticmethod
+    def _row_to_metadata(row) -> LeaseMetadata:
+        data = dict(row)
+        data["issued_at"] = datetime.fromisoformat(data["issued_at"])
+        data["expires_at"] = datetime.fromisoformat(data["expires_at"])
+        data["verified_at"] = datetime.fromisoformat(data["last_verified_at"])
+        data.pop("last_verified_at")
+        return LeaseMetadata.model_validate(data)
+
     def delete(self, lease_id: str) -> None:
         try:
             with self.database._lock, self.database.connection:
@@ -66,6 +86,15 @@ class LeaseMetadataRepository:
                 )
         except Exception as exc:
             raise LeaseMetadataPersistenceError("Could not delete lease metadata") from exc
+
+    def delete_product(self, product_id: str) -> None:
+        try:
+            with self.database._lock, self.database.connection:
+                self.database.connection.execute(
+                    "DELETE FROM lease_metadata WHERE product_id=?", (product_id,)
+                )
+        except Exception as exc:
+            raise LeaseMetadataPersistenceError("Could not delete product lease metadata") from exc
 
     def clear_expired(self, now: datetime | None = None) -> int:
         moment = now or datetime.now(timezone.utc)

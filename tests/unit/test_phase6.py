@@ -1,20 +1,33 @@
 from datetime import datetime, timedelta, timezone
 import base64
 import json
+import threading
 
 import pytest
 
+from bke_licensing_agent.auth.errors import MissingSessionError
 from bke_licensing_agent.licensing.authorization import AuthorizationService, AuthorizationState
 from bke_licensing_agent.licensing.lease import (
     LicenseLease, LeaseInvalidSignatureError, LeaseMalformedError, LeaseRevokedError,
     LeaseSupersededError, LeaseUnknownKeyError, LeaseVerifier,
 )
 from bke_licensing_agent.licensing.lease_storage import LeaseMetadataRepository
+from bke_licensing_agent.licensing.reconciliation import (
+    LeaseReconciliationService, ReconciliationState,
+)
+from bke_licensing_agent.api.errors import ResourceNotFoundError
 from bke_licensing_agent.storage.database import Database
 from bke_licensing_agent.manifest.validator import validate_manifest
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def _capture(target, function, *args):
+    try:
+        function(*args)
+    except Exception as exc:
+        target.append(exc)
 
 
 def product():
@@ -162,3 +175,156 @@ def test_lease_metadata_sqlite_failure_is_typed(tmp_path):
         repository = LeaseMetadataRepository(db)
         db.connection.close()
         with pytest.raises(LeaseMetadataPersistenceError): repository.save(metadata())
+
+
+class ReconcileSessions:
+    generation = 1
+    def current_session(self): return object()
+    def access_token(self): return "token"
+    def is_generation_current(self, generation): return generation == self.generation
+
+
+class ReconcileIdentity:
+    generation = 1
+    def load_or_create(self): return "i"
+
+
+def reconciliation_service(tmp_path, envelope):
+    from bke_licensing_agent.licensing.lease import LeaseEnvelope
+    class Client:
+        def retrieve_lease(self, product_id, token): return LeaseEnvelope.model_validate(envelope)
+    db = Database(tmp_path / "agent.db")
+    repository = LeaseMetadataRepository(db)
+    verifier = LeaseVerifier({"k": PUBLIC_KEY})
+    return LeaseReconciliationService(Client(), ReconcileSessions(), ReconcileIdentity(),
+        verifier, repository, lambda: NOW), db, repository
+
+
+PUBLIC_KEY = ""
+
+
+def test_reconciliation_first_update_and_unchanged(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    envelope, PUBLIC_KEY = signed_lease(private_key)
+    service, db, repository = reconciliation_service(tmp_path, envelope)
+    assert service.reconcile(product(), "d").state is ReconciliationState.UPDATED
+    assert service.reconcile(product(), "d").state is ReconciliationState.UNCHANGED
+    db.close()
+
+
+@pytest.mark.parametrize("changes, state", [
+    ({"revoked": True}, ReconciliationState.REVOKED),
+    ({"superseded_by": "new"}, ReconciliationState.SUPERSEDED),
+])
+def test_reconciliation_revoked_or_superseded_removes_metadata(tmp_path, changes, state):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    valid, PUBLIC_KEY = signed_lease(private_key)
+    service, db, repository = reconciliation_service(tmp_path, valid)
+    service.reconcile(product(), "d")
+    revoked, _ = signed_lease(private_key, **changes)
+    service.client.retrieve_lease = lambda product_id, token: type("Envelope", (), {"model_dump": lambda self: revoked})()
+    assert service.reconcile(product(), "d").state is state
+    assert repository.load("l") is None
+    db.close()
+
+
+def test_reconciliation_expired_and_deleted_results(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    expired, PUBLIC_KEY = signed_lease(private_key, expires_at=NOW - timedelta(hours=1))
+    service, db, repository = reconciliation_service(tmp_path, expired)
+    assert service.reconcile(product(), "d").state is ReconciliationState.EXPIRED
+    service.client.retrieve_lease = lambda product_id, token: (_ for _ in ()).throw(ResourceNotFoundError("missing"))
+    assert service.reconcile(product(), "d").state is ReconciliationState.DELETED
+    db.close()
+
+
+@pytest.mark.parametrize("field", ["product_id", "installation_id", "device_id", "version"])
+def test_reconciliation_identity_or_version_mismatch_is_invalid(tmp_path, field):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    changes = {field: "wrong"}
+    envelope, PUBLIC_KEY = signed_lease(private_key, **changes)
+    service, db, _ = reconciliation_service(tmp_path, envelope)
+    assert service.reconcile(product(), "d", version="1.0.0").state is ReconciliationState.INVALID
+    db.close()
+
+
+def test_reconciliation_does_not_downgrade_newer_metadata(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    newer, PUBLIC_KEY = signed_lease(private_key, lease_id="new", generation=2)
+    service, db, repository = reconciliation_service(tmp_path, newer)
+    assert service.reconcile(product(), "d").state is ReconciliationState.UPDATED
+    older, _ = signed_lease(private_key, lease_id="old", generation=1)
+    service.client.retrieve_lease = lambda product_id, token: type("Envelope", (), {"model_dump": lambda self: older})()
+    assert service.reconcile(product(), "d").state is ReconciliationState.INVALID
+    assert repository.load("new") is not None and repository.load("old") is None
+    db.close()
+
+
+def test_concurrent_reconciliation_deduplicates(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    envelope, PUBLIC_KEY = signed_lease(private_key)
+    service, db, _ = reconciliation_service(tmp_path, envelope)
+    started, release = threading.Event(), threading.Event()
+    calls = []
+    def retrieve(product_id, token):
+        calls.append(1); started.set(); release.wait(timeout=2)
+        return type("Envelope", (), {"model_dump": lambda self: envelope})()
+    service.client.retrieve_lease = retrieve
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(service.reconcile(product(), "d"))) for _ in range(2)]
+    for thread in threads: thread.start()
+    assert started.wait(timeout=2); release.set()
+    for thread in threads: thread.join(timeout=2)
+    assert len(calls) == 1 and len(results) == 2 and results[0] == results[1]
+    db.close()
+
+
+def test_logout_and_identity_reset_during_reconciliation_reject_result(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    envelope, PUBLIC_KEY = signed_lease(private_key)
+    service, db, repository = reconciliation_service(tmp_path, envelope)
+    started, release = threading.Event(), threading.Event()
+    def retrieve(product_id, token):
+        started.set(); release.wait(timeout=2)
+        return type("Envelope", (), {"model_dump": lambda self: envelope})()
+    service.client.retrieve_lease = retrieve
+    errors = []
+    thread = threading.Thread(target=lambda: _capture(errors, service.reconcile, product(), "d"))
+    thread.start(); assert started.wait(timeout=2)
+    service.sessions.generation = 2
+    release.set(); thread.join(timeout=2)
+    assert errors and isinstance(errors[0], MissingSessionError)
+    assert repository.load("l") is None
+    db.close()
+
+
+def test_identity_reset_during_reconciliation_rejects_result(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    global PUBLIC_KEY
+    private_key = Ed25519PrivateKey.generate()
+    envelope, PUBLIC_KEY = signed_lease(private_key)
+    service, db, repository = reconciliation_service(tmp_path, envelope)
+    started, release = threading.Event(), threading.Event()
+    service.client.retrieve_lease = lambda product_id, token: (started.set(), release.wait(timeout=2), type("Envelope", (), {"model_dump": lambda self: envelope})())[2]
+    errors = []
+    thread = threading.Thread(target=lambda: _capture(errors, service.reconcile, product(), "d"))
+    thread.start(); assert started.wait(timeout=2)
+    service.identity.generation = 2
+    release.set(); thread.join(timeout=2)
+    assert errors and isinstance(errors[0], MissingSessionError)
+    assert repository.load("l") is None
+    db.close()

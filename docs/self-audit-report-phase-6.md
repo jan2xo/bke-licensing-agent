@@ -1,5 +1,13 @@
 # Phase 6 Self-Audit
 
+Reconciliation never treats SQLite metadata as authoritative and checks the
+session, installation generation, signature, identity, version, and lease
+generation before persistence.
+
+Online reconciliation is limited to platform-authoritative metadata cache
+reconciliation; refresh, replay policy, and launch authorization remain out of
+scope for this increment.
+
 The implementation fails closed for malformed envelopes, unknown keys,
 unsupported algorithms, mismatched identity, product, device, and version, and
 invalid time windows. The cryptographic dependency is declared but not

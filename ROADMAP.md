@@ -12,6 +12,8 @@
 
 ## Next
 
+- Complete online lease reconciliation verification and later Phase 6 refresh/replay increments.
+
 - Add structured discovery diagnostics and duplicate handling.
 - Add real platform authentication and account/session management.
 - Add license activation, device identity, and entitlement verification workflows.

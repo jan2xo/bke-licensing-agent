@@ -1,5 +1,11 @@
 # Developer Journal
 
+Phase 6.3 completed platform-authoritative online lease reconciliation with
+typed results and deterministic stale-operation tests.
+
+Phase 6.3 added online reconciliation with platform-authoritative replacement
+and signed revocation/supersession invalidation.
+
 ## Initial session
 
 - Created project scaffold

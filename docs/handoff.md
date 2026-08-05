@@ -81,6 +81,9 @@ Phase 5 behavioral verification is complete: 79 tests pass. Open findings are co
 
 ## Phase 6 Handoff
 
+Phase 6.3 online reconciliation is implemented for verified first download,
+unchanged/newer metadata, and signed revocation/supersession deletion.
+
 The initial offline lease and authorization boundary is implemented in
 `src/bke_licensing_agent/licensing/lease.py` and
 `src/bke_licensing_agent/licensing/authorization.py`. It uses Ed25519 through

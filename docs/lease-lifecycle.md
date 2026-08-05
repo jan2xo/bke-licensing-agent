@@ -9,3 +9,7 @@ Phase 6.2 persists metadata through `LeaseMetadataRepository`. It stores lease,
 product, installation, device, generation, status, issuer, timestamp, and key
 identifier metadata only. Signed payloads, signatures, public/private keys,
 tokens, and license secrets are excluded.
+Online reconciliation retrieves a signed lease, verifies it, checks identity
+and generation, compares metadata, and only then replaces diagnostic metadata.
+Revoked or superseded leases remove cached metadata; local rows never override
+the platform.
