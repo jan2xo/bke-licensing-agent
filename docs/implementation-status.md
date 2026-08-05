@@ -145,3 +145,5 @@ Phase 10 production hardening foundation implemented; operational acceptance pen
 - Demo Product Certification: Pending
 - Production Release: Pending
 Demo Product certification foundation added; independent and SOL truth audits remain pending.
+Demo Product integration now consumes the typed authorization boundary and enters
+RUNNING only after authorization.

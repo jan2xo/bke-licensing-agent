@@ -58,3 +58,4 @@ Phase 8 adds deterministic startup recovery for untrusted lease and process stat
 Phase 9 adds signed update metadata and staged artifact verification.
 Phase 10 adds typed production configuration, startup validation, health, and rotating logs.
 Added the BKE Demo Product reference sample and certification documentation.
+Demo Product now requests typed Licensing Agent authorization before running.

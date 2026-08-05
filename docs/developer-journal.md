@@ -122,3 +122,5 @@ staged SHA-256 artifact preparation without installation.
 Phase 10 added deterministic production configuration and startup health boundaries.
 Added a business-logic-free Demo Product and manual certification foundation
 using the existing generic manifest and runtime boundaries.
+The Demo Product replaced placeholder authorization output with a real typed
+authorization request boundary and clean interrupt shutdown.

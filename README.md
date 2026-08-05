@@ -48,6 +48,7 @@ This repository contains the foundation for discovering BKE applications through
 - `docs/`: architecture, status, and implementation documentation
 - `samples/bke-demo-product/`: product-agnostic reference product
 - `certification/`: manual certification procedures
+- The Demo Product now requests authorization through the typed Licensing Agent boundary before entering RUNNING state.
 
 Phase 3 adds a typed HTTPS client foundation under
 `src/bke_licensing_agent/api/`. Configure an `https://` base URL through

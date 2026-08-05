@@ -61,6 +61,7 @@ def test_rotating_logging_has_bounded_configuration(tmp_path):
     logger = configure_logging(path, max_bytes=32, backup_count=2)
     handler = next(item for item in logger.handlers if isinstance(item, RotatingFileHandler))
     assert handler.maxBytes == 32 and handler.backupCount == 2
+    handler.close()
     logger.handlers.clear()
 
 
