@@ -1,5 +1,9 @@
 # Phase 6 Self-Audit
 
+Authorization is decision-only and does not execute processes, resolve paths,
+or modify product files. Only verified signed leases can produce an allowed
+decision.
+
 Refresh does not persist signed payloads or keys and delegates authenticity and
 authority checks to the existing verifier and reconciliation service.
 
@@ -23,3 +27,15 @@ lease reconciliation remain unimplemented and are not claimed complete.
 
 The metadata repository is intentionally diagnostic-only. A valid-looking
 SQLite row cannot establish signature authenticity or authorize launch.
+## Phase 6.5 remediation self-audit
+
+The authorization boundary now deduplicates identical concurrent decisions,
+cleans up in-flight state on all paths, rejects stale identity/session state,
+rejects stale lease generation/revision, and fails closed on malformed input or
+audit persistence errors. Repository-wide Ruff, formatting, and mypy findings
+remain engineering debt.
+Final closure confirms stale lease replacement is rejected using persisted
+generation/revision ordering and audit failures remain explicit fail-closed
+partial results. No launch execution is performed.
+Final proof matrix completed with 145 passing tests. Stale authorization is
+rejected from persisted generation/revision and revoked/superseded metadata.

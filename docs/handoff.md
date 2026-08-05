@@ -1,5 +1,7 @@
 # Handoff
 
+Phase 6.5 launch authorization is decision-only and does not execute products.
+
 Phase 6.4 refresh policy and generation-based replay ordering are implemented.
 Final launch authorization remains the next Phase 6 blocker.
 
@@ -99,3 +101,10 @@ dependency is installed.
 Phase 6.2 lease metadata persistence is complete and verified. Remaining Phase
 6 work is online reconciliation, refresh, replay/generation ordering, and
 concurrency; those are intentionally outside this increment.
+Phase 6.5 remediation is verified with 126 passing tests. Authorization is
+decision-only, single-flight for identical requests, and fail-closed for stale
+operations, malformed leases, stale generations/revisions, and audit failures.
+Final Phase 6 closure reports 130 passing tests. Generation/revision ordering,
+replay reconstruction, and SQLite audit rollback/concurrency are covered.
+Phase 6 final proof is complete: 145 tests pass and stale authorization,
+replay, replacement, and audit transaction behavior are evidenced.

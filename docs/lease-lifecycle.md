@@ -1,5 +1,8 @@
 # Lease Lifecycle
 
+Launch authorization consumes only verified signed lease state and returns a
+decision. It does not execute a product or trust SQLite as an authority.
+
 The platform issues a signed lease envelope. The agent validates the envelope,
 checks the pinned key identifier and Ed25519 signature, parses the payload, and
 then evaluates time, generation, product, installation, device, and version

@@ -9,3 +9,7 @@ operation-generation changes invalidate in-flight results.
 The service returns typed unchanged, updated, revoked, superseded, expired,
 deleted, invalid, and failed states. Older generations cannot replace newer
 metadata.
+Reconciliation replacement or revocation is authoritative; authorization of an
+older lease fails closed after the persisted latest-state check.
+Reconciliation proof confirms revoked and replaced lease state invalidates older
+authorization attempts before an allowed result is returned.

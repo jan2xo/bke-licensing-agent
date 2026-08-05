@@ -106,6 +106,8 @@ Phase 5 final consolidated verification: 79/79 tests passed; all listed Phase 5 
 
 ## Phase 6 — Offline Lease and Launch Authorization
 
+- [x] Add Phase 6.5 final launch authorization decision layer
+
 - [x] Add Phase 6.4 lease refresh policy and replay ordering
 
 - [x] Add Phase 6.3 online lease reconciliation
@@ -119,3 +121,10 @@ Phase 5 final consolidated verification: 79/79 tests passed; all listed Phase 5 
 - [ ] Complete platform lease retrieval integration
 - [x] Upgrade cryptography dependency to the security-fixed `>=50,<51` policy
 - [x] Add Phase 6.2 lease metadata persistence and migration
+Phase 6.5 remediation: authorization single-flight, stale-operation rejection,
+malformed-input fail-closed mapping, and deterministic regression coverage are
+implemented. Repository-wide tooling debt remains separately tracked.
+Final Phase 6 closure evidence is recorded: 130 tests pass and stale lease
+replacement ordering is persisted by generation and server revision.
+Final Phase 6 proof matrix is complete with 145 passing tests and no functional
+Phase 6 blocker identified.

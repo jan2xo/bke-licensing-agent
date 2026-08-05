@@ -1,5 +1,7 @@
 # Phase 6 Implementation Report
 
+Phase 6.5 adds the final product-agnostic launch authorization decision layer.
+
 Phase 6.4 adds threshold-based refresh decisions, single-flight refresh
 deduplication, persisted server revisions, and stale-generation rejection.
 
@@ -25,3 +27,5 @@ leases. The tests exercise PEM public-key loading and `InvalidSignature`.
 Added schema migration 3 and `LeaseMetadataRepository` with typed save, load,
 replace, delete, corruption, and persistence errors. SQLite metadata is never
 used as an authorization source.
+Phase 6 final closure adds explicit stale authorization lifecycle coverage,
+replay-after-reconstruction coverage, and direct SQLite audit transaction tests.

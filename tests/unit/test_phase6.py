@@ -16,6 +16,9 @@ from bke_licensing_agent.licensing.reconciliation import (
     LeaseReconciliationService, ReconciliationState,
 )
 from bke_licensing_agent.licensing.refresh import LeaseRefreshService, RefreshState
+from bke_licensing_agent.licensing.launch_authorization import (
+    AuthorizationReason, LaunchAuthorizationService,
+)
 from bke_licensing_agent.api.errors import ResourceNotFoundError
 from bke_licensing_agent.storage.database import Database
 from bke_licensing_agent.manifest.validator import validate_manifest
@@ -377,3 +380,408 @@ def test_concurrent_refresh_deduplicates(tmp_path):
     for thread in threads: thread.join(timeout=2)
     assert len(calls) == 1 and results[0] == results[1]
     db.close()
+
+
+class AuthorizationIdentity:
+    generation = 1
+    def load_or_create(self): return "i"
+    def session_current(self, generation): return generation == 1
+
+
+def launch_service(tmp_path, private_key):
+    envelope, public_key = signed_lease(private_key, expires_at=NOW + timedelta(hours=1))
+    db = Database(tmp_path / "agent.db")
+    service = LaunchAuthorizationService(LeaseVerifier({"k": public_key}),
+        LeaseMetadataRepository(db), lambda: NOW)
+    service.observe_trusted_time(NOW)
+    return service, envelope, db
+
+
+def test_valid_offline_launch_authorization_is_decision_only(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    service, envelope, db = launch_service(tmp_path, Ed25519PrivateKey.generate())
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert decision.allowed and decision.reason is AuthorizationReason.AUTHORIZED_OFFLINE
+    db.close()
+
+
+@pytest.mark.parametrize("reason", [AuthorizationReason.MISSING_LEASE, AuthorizationReason.WRONG_DEVICE])
+def test_launch_authorization_fails_closed(reason, tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    service, envelope, db = launch_service(tmp_path, Ed25519PrivateKey.generate())
+    if reason is AuthorizationReason.MISSING_LEASE:
+        decision = service.authorize(product(), AuthorizationIdentity(), "d", None)
+    else:
+        decision = service.authorize(product(), AuthorizationIdentity(), "wrong", envelope)
+    assert not decision.allowed and decision.reason is reason
+    db.close()
+
+
+def test_launch_authorization_rejects_clock_rollback(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    envelope, public_key = signed_lease(key, expires_at=NOW + timedelta(hours=1))
+    db = Database(tmp_path / "agent.db")
+    service = LaunchAuthorizationService(LeaseVerifier({"k": public_key}), LeaseMetadataRepository(db),
+        lambda: NOW - timedelta(hours=1))
+    service.observe_trusted_time(NOW)
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason is AuthorizationReason.CLOCK_ROLLBACK_DETECTED
+    db.close()
+
+
+def test_launch_authorization_audit_failure_fails_closed(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    service, envelope, db = launch_service(tmp_path, Ed25519PrivateKey.generate())
+    class Audit:
+        def record_audit_event(self, *args, **kwargs): raise OSError("audit unavailable")
+    service.audit = Audit()
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason is AuthorizationReason.AUDIT_FAILED
+    db.close()
+
+
+def test_launch_authorization_concurrent_callers_share_result(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    service, envelope, db = launch_service(tmp_path, key)
+    original = service.verifier.verify
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def verify(value):
+        calls.append(1)
+        started.set()
+        assert release.wait(timeout=2)
+        return original(value)
+
+    service.verifier.verify = verify
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(
+        service.authorize(product(), AuthorizationIdentity(), "d", envelope, session_generation=1)
+    )) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    assert started.wait(timeout=2)
+    release.set()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert calls == [1]
+    assert results[0] == results[1]
+    assert results[0].allowed
+    db.close()
+
+
+def test_launch_authorization_failure_is_shared_by_waiters(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    service, envelope, db = launch_service(tmp_path, key)
+    original = service.verifier.verify
+    started, release = threading.Event(), threading.Event()
+
+    def verify(value):
+        started.set()
+        assert release.wait(timeout=2)
+        envelope_copy = dict(value)
+        envelope_copy["signature"] = base64.b64encode(b"bad").decode()
+        return original(envelope_copy)
+
+    service.verifier.verify = verify
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(
+        service.authorize(product(), AuthorizationIdentity(), "d", envelope, session_generation=1)
+    )) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    assert started.wait(timeout=2)
+    release.set()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert len(results) == 2
+    assert results[0] == results[1]
+    assert results[0].reason is AuthorizationReason.INVALID_SIGNATURE
+    db.close()
+
+
+def test_launch_authorization_rejects_logout_session_replacement_and_identity_reset(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    service, envelope, db = launch_service(tmp_path, key)
+    original = service.verifier.verify
+    started, release = threading.Event(), threading.Event()
+
+    def verify(value):
+        started.set()
+        assert release.wait(timeout=2)
+        return original(value)
+
+    service.verifier.verify = verify
+    identity = AuthorizationIdentity()
+    result = []
+    thread = threading.Thread(target=lambda: result.append(
+        service.authorize(product(), identity, "d", envelope, session_generation=1)
+    ))
+    thread.start()
+    assert started.wait(timeout=2)
+    identity.generation = 2
+    identity.session_current = lambda generation: False
+    release.set()
+    thread.join(timeout=2)
+    assert result[0].reason is AuthorizationReason.STALE_OPERATION
+    assert not result[0].allowed
+    db.close()
+
+
+@pytest.mark.parametrize("payload", [{}, {"payload": "bad"}, {"payload": "", "signature": "", "key_id": "k", "algorithm": "Bad"}])
+def test_launch_authorization_malformed_matrix_fails_closed(tmp_path, payload):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    service, _, db = launch_service(tmp_path, Ed25519PrivateKey.generate())
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", payload)
+    assert not decision.allowed
+    assert decision.reason is AuthorizationReason.MALFORMED_LEASE
+    db.close()
+
+
+def test_launch_authorization_rejects_stale_generation_and_revision(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    service, envelope, db = launch_service(tmp_path, key)
+    service.repository.save(metadata(generation=2, server_revision=3))
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason in {
+        AuthorizationReason.STALE_LEASE, AuthorizationReason.LEASE_REVOKED,
+    }
+    db.close()
+
+
+def test_launch_authorization_stale_after_refresh_or_reconciliation(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    service, envelope, db = launch_service(tmp_path, key)
+    started, release = threading.Event(), threading.Event()
+    original = service.verifier.verify
+
+    def verify(value):
+        result = original(value)
+        started.set()
+        assert release.wait(timeout=2)
+        return result
+
+    service.verifier.verify = verify
+    identity = AuthorizationIdentity()
+    results = []
+    thread = threading.Thread(target=lambda: results.append(
+        service.authorize(product(), identity, "d", envelope)
+    ))
+    thread.start()
+    assert started.wait(timeout=2)
+    service.repository.save(metadata(generation=2, server_revision=2, lease_id="new"))
+    release.set()
+    thread.join(timeout=2)
+    assert not results[0].allowed
+    assert results[0].reason is AuthorizationReason.STALE_LEASE
+    db.close()
+
+
+def test_launch_authorization_replay_is_rejected_after_restart_and_supersedence(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    service, envelope, db = launch_service(tmp_path, key)
+    service.repository.save(metadata(generation=3, server_revision=4, lease_id="current"))
+    db.close()
+    restarted = Database(tmp_path / "agent.db")
+    service = LaunchAuthorizationService(
+        LeaseVerifier({"k": service.verifier.trusted_keys["k"]}),
+        LeaseMetadataRepository(restarted), lambda: NOW,
+    )
+    service.observe_trusted_time(NOW)
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason is AuthorizationReason.STALE_LEASE
+    restarted.close()
+
+
+def test_sqlite_audit_transaction_rollback_and_concurrent_writes(tmp_path):
+    db = Database(tmp_path / "agent.db")
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def write(index):
+        try:
+            barrier.wait(timeout=2)
+            db.record_audit_event("authorization", f"r{index}", "p", "d", f"l{index}")
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert not errors
+    assert len(db.list_audit_events()) == 2
+    import sqlite3
+    db.connection.set_authorizer(
+        lambda action, *_: sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_INSERT
+        else sqlite3.SQLITE_OK
+    )
+    with pytest.raises(sqlite3.DatabaseError):
+        db.record_audit_event("authorization", "failed")
+    db.connection.set_authorizer(None)
+    assert len(db.list_audit_events()) == 2
+    db.close()
+
+
+def test_allowed_and_denied_authorization_audit_failures_are_explicit(tmp_path):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    service, envelope, db = launch_service(tmp_path, Ed25519PrivateKey.generate())
+
+    class BrokenAudit:
+        def record_audit_event(self, *args, **kwargs):
+            raise OSError("unavailable")
+
+    service.audit = BrokenAudit()
+    allowed = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    denied = service.authorize(product(), AuthorizationIdentity(), "wrong", envelope)
+    assert not allowed.allowed and allowed.reason is AuthorizationReason.AUDIT_FAILED
+    assert not denied.allowed and denied.reason is AuthorizationReason.AUDIT_FAILED
+    db.close()
+
+
+class _AuditCapture:
+    def __init__(self):
+        self.events = []
+
+    def record_audit_event(self, event_type, result, **kwargs):
+        self.events.append((event_type, result, kwargs))
+
+
+def _proof_service(tmp_path, generation=1, revision=1, status="verified"):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    key = Ed25519PrivateKey.generate()
+    envelope, public_key = signed_lease(key, generation=generation, server_revision=revision)
+    db = Database(tmp_path / "agent.db")
+    repository = LeaseMetadataRepository(db)
+    if generation > 1 or revision > 1 or status != "verified":
+        repository.save(metadata(generation=generation, server_revision=revision,
+                                 status=status, lease_id="current"))
+    audit = _AuditCapture()
+    service = LaunchAuthorizationService(LeaseVerifier({"k": public_key}), repository,
+        lambda: NOW, audit=audit)
+    service.observe_trusted_time(NOW)
+    return service, envelope, repository, audit, db, key
+
+
+def _blocked_authorization(service, envelope, identity, mutate):
+    original = service.verifier.verify
+    started, release = threading.Event(), threading.Event()
+
+    def verify(value):
+        result = original(value)
+        started.set()
+        assert release.wait(timeout=2)
+        return result
+
+    service.verifier.verify = verify
+    result = []
+    thread = threading.Thread(target=lambda: result.append(
+        service.authorize(product(), identity, "d", envelope)
+    ))
+    thread.start()
+    assert started.wait(timeout=2)
+    mutate()
+    release.set()
+    thread.join(timeout=2)
+    return result[0]
+
+
+def test_authorization_started_before_refresh_is_rejected_after_refresh(tmp_path):
+    service, envelope, repository, audit, db, _ = _proof_service(tmp_path)
+    decision = _blocked_authorization(service, envelope, AuthorizationIdentity(),
+        lambda: repository.save(metadata(generation=2, server_revision=2, lease_id="refresh")))
+    assert not decision.allowed and decision.reason is AuthorizationReason.STALE_LEASE
+    assert all(event[1] != AuthorizationReason.AUTHORIZED_OFFLINE.value for event in audit.events)
+    assert repository.latest("p", "d").generation == 2
+    db.close()
+
+
+def test_authorization_started_after_refresh_uses_current_lease(tmp_path):
+    service, envelope, repository, audit, db, key = _proof_service(tmp_path)
+    newer, public_key = signed_lease(key, generation=2, server_revision=2, lease_id="refresh")
+    service.verifier = LeaseVerifier({"k": public_key})
+    repository.save(metadata(generation=2, server_revision=2, lease_id="refresh"))
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", newer)
+    assert decision.allowed and decision.lease_id == "refresh"
+    assert any(event[1] == AuthorizationReason.AUTHORIZED_OFFLINE.value for event in audit.events)
+    db.close()
+
+
+def test_authorization_started_before_reconciliation_revocation_is_rejected(tmp_path):
+    service, envelope, repository, audit, db, _ = _proof_service(tmp_path)
+    decision = _blocked_authorization(service, envelope, AuthorizationIdentity(),
+        lambda: repository.save(metadata(generation=2, server_revision=2, status="revoked", lease_id="revoked")))
+    assert not decision.allowed and decision.reason is AuthorizationReason.LEASE_REVOKED
+    assert not any(event[1] == AuthorizationReason.AUTHORIZED_OFFLINE.value for event in audit.events)
+    db.close()
+
+
+def test_authorization_started_after_reconciliation_observes_revocation(tmp_path):
+    service, envelope, repository, audit, db, _ = _proof_service(
+        tmp_path, generation=2, revision=2, status="revoked")
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason is AuthorizationReason.LEASE_REVOKED
+    assert not any(event[1] == AuthorizationReason.AUTHORIZED_OFFLINE.value for event in audit.events)
+    db.close()
+
+
+@pytest.mark.parametrize("transition", ["refresh", "reconciliation", "revocation", "supersedence"])
+def test_replay_rejected_after_refresh(tmp_path, transition):
+    service, envelope, repository, audit, db, _ = _proof_service(tmp_path)
+    status = "revoked" if transition == "revocation" else "superseded" if transition == "supersedence" else "verified"
+    repository.save(metadata(generation=2, server_revision=2, status=status, lease_id=transition))
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason in {
+        AuthorizationReason.STALE_LEASE, AuthorizationReason.LEASE_REVOKED,
+        AuthorizationReason.LEASE_SUPERSEDED,
+    }
+    assert not any(event[1] == AuthorizationReason.AUTHORIZED_OFFLINE.value for event in audit.events)
+    db.close()
+
+
+def test_replay_rejected_after_reconciliation(tmp_path):
+    service, envelope, repository, _, db, _ = _proof_service(tmp_path)
+    repository.save(metadata(generation=2, server_revision=2, lease_id="reconciliation"))
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason is AuthorizationReason.STALE_LEASE
+    db.close()
+
+
+def test_replay_rejected_after_revocation(tmp_path):
+    service, envelope, repository, _, db, _ = _proof_service(tmp_path)
+    repository.save(metadata(generation=2, server_revision=2, status="revoked", lease_id="revocation"))
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason is AuthorizationReason.LEASE_REVOKED
+    db.close()
+
+
+def test_replay_rejected_after_supersedence(tmp_path):
+    service, envelope, repository, _, db, _ = _proof_service(tmp_path)
+    repository.save(metadata(generation=2, server_revision=2, status="superseded", lease_id="supersedence"))
+    decision = service.authorize(product(), AuthorizationIdentity(), "d", envelope)
+    assert not decision.allowed and decision.reason is AuthorizationReason.LEASE_SUPERSEDED
+    db.close()
+
+
+def test_stale_authorization_invalidated_by_refresh_replacement(tmp_path):
+    test_authorization_started_before_refresh_is_rejected_after_refresh(tmp_path)
+
+
+def test_stale_authorization_invalidated_by_reconciliation_replacement(tmp_path):
+    test_authorization_started_before_reconciliation_revocation_is_rejected(tmp_path)
+
+
+def test_stale_authorization_invalidated_by_revocation(tmp_path):
+    test_replay_rejected_after_revocation(tmp_path)
+
+
+def test_stale_authorization_invalidated_by_supersedence(tmp_path):
+    test_replay_rejected_after_supersedence(tmp_path)

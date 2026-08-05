@@ -65,7 +65,7 @@ class LeaseMetadataRepository:
             with self.database._lock:
                 row = self.database.connection.execute(
                     "SELECT * FROM lease_metadata WHERE product_id=? AND device_id=? "
-                    "ORDER BY generation DESC LIMIT 1", (product_id, device_id)
+                    "ORDER BY generation DESC, server_revision DESC LIMIT 1", (product_id, device_id)
                 ).fetchone()
             return self._row_to_metadata(row) if row is not None else None
         except Exception as exc:

@@ -1,5 +1,8 @@
 # Developer Journal
 
+Phase 6.5 added the decision-only launch authorization service with signed
+lease, identity, generation/revision, clock, and audit fail-closed checks.
+
 Phase 6.4 added threshold refresh decisions, persisted server revisions, and
 single-flight refresh with older-generation rejection.
 
@@ -102,3 +105,11 @@ regression suite were reverified.
 
 Phase 6.2 added a dedicated diagnostic-only lease metadata repository and
 schema migration 3. SQLite rows remain untrusted and cannot authorize launch.
+Phase 6.5 remediation added a keyed authorization single-flight boundary. The
+owner performs verification once; waiters reuse the exact typed decision, and
+flight cleanup is guaranteed. Final identity/session generation checks prevent
+stale authorization after logout, replacement, or identity reset.
+Final closure verification added direct audit transaction and replay lifecycle
+tests. Authorization remains diagnostic-decision only and fail-closed.
+The final proof matrix added separate deterministic lifecycle tests for refresh,
+reconciliation, replay, revocation, supersedence, and stale replacement.

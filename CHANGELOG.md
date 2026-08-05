@@ -1,5 +1,7 @@
 # Changelog
 
+- Added product-agnostic launch authorization decisions without product execution.
+
 - Added threshold-based lease refresh and generation/revision replay rejection.
 
 ## 0.1.0
@@ -43,3 +45,10 @@
 
 - Upgraded the Phase 6 cryptography policy from vulnerable 45.0.7-era releases
   to `cryptography>=50,<51`, which covers all fixes reported by pip-audit.
+### Phase 6.5 remediation
+
+- Added deterministic authorization single-flight and stale-operation rejection.
+- Added malformed-input and concurrent success/failure coverage.
+Phase 6 final closure records replay lifecycle, stale replacement, and direct
+SQLite audit transaction evidence.
+Final Phase 6 proof matrix completed for stale authorization and replay lifecycle.

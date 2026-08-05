@@ -1,5 +1,8 @@
 # Roadmap
 
+Phase 6.5 final launch authorization decision layer is implemented; Phase 7
+must not begin until independent audit approval.
+
 Phase 6.4 refresh and replay ordering are implemented; final launch
 authorization remains the next scoped increment.
 
@@ -60,3 +63,7 @@ this repository.
 
 These are separate engineering-quality backlog items and do not block Phase 4
 approval. They must be completed before production readiness.
+Phase 6.5 remediation completed the authorization single-flight and stale-input
+guards. Phase 7 remains gated on independent audit approval.
+Phase 6 final closure evidence is complete; Phase 7 remains gated on audit.
+Phase 6 final proof matrix is complete; Phase 7 remains independently gated.

@@ -11,5 +11,8 @@ This document describes the planned architecture for the BKE Licensing Agent.
 - Support controlled offline operation through signed leases
 # Phase 6 addition
 
+Phase 6.5 extends the boundary with `LaunchAuthorizationService`; decision and
+product execution remain separate responsibilities.
+
 Validated Manifest -> verified signed Lease -> AuthorizationService -> typed
 AuthorizationDecision. The authorization layer does not launch applications.
