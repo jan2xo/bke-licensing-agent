@@ -64,13 +64,25 @@ Phase 5 adds online device identity, entitlement lookup, activation, and
 verification. The platform remains authoritative; local activation metadata
 never authorizes launch.
 
+## Quick Start
+
+This repository contains the product-agnostic BKE Licensing Agent, typed
+License Center API, signed lease verification, and Demo Product reference.
+Source development targets macOS, Linux, and Windows with Python 3.12+.
+
+Layout: `src/` implementation, `samples/` Demo Product, `tests/` tests,
+`docs/` guides, and `packaging/` bundle entry points.
+
+Setup: [Windows](docs/getting-started/windows.md) · [macOS](docs/getting-started/macos.md) · [Linux](docs/getting-started/linux.md).
+See [packaging](docs/packaging-foundation.md), [architecture](docs/architecture.md), and [troubleshooting](docs/getting-started/troubleshooting.md).
+
 ## Getting started
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
 Run the CLI:
@@ -78,6 +90,8 @@ Run the CLI:
 ```bash
 python -m bke_licensing_agent scan --paths "."
 ```
+
+Run `bke-agent`, `bke-license-center`, or `python samples/bke-demo-product/demo_app.py`.
 
 ## Project goals
 

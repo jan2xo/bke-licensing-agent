@@ -143,6 +143,9 @@ Phase 10 production hardening foundation implemented; operational acceptance pen
 - Independent Audit: Pending
 - SOL Truth Audit: Pending
 - Demo Product Certification: Pending
+
+Developer onboarding guides are embedded under `docs/getting-started/` and
+`docs/development/commands.md`.
 - Production Release: Pending
 Demo Product certification foundation added; independent and SOL truth audits remain pending.
 Demo Product integration now consumes the typed authorization boundary and enters
