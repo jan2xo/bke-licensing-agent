@@ -6,6 +6,7 @@ from typing import Any, Callable
 import threading
 
 from ..licensing.lease import LeaseMetadataCorruptError, LeaseMetadataPersistenceError
+from ..storage.database import CURRENT_SCHEMA_VERSION
 
 
 class RecoveryAction(StrEnum):
@@ -116,7 +117,7 @@ class RecoveryService:
         version = self.database.connection.execute(
             "SELECT version FROM schema_version"
         ).fetchone()[0]
-        if version > 4:
+        if version > CURRENT_SCHEMA_VERSION:
             raise RuntimeError("Unsupported database schema version")
 
     def recover_interrupted(self, operation: str, can_resume: bool = False) -> RecoveryResult:

@@ -71,6 +71,51 @@ class LicenseCenterController:
     def retry_activation(self) -> LicenseCenterState:
         return self.activate()
 
+    def add_license(self) -> LicenseCenterState:
+        try:
+            status = self.agent.add_license(self.state.selected_product)
+            self.state = LicenseCenterState(screen=Screen.STATUS, connected=True,
+                authenticated=True, products=self.state.products,
+                selected_product=self.state.selected_product, status=status,
+                return_to_product=True)
+        except Exception as exc:
+            self.state = LicenseCenterState(screen=Screen.ERROR, connected=self.state.connected,
+                authenticated=self.state.authenticated, products=self.state.products,
+                selected_product=self.state.selected_product, error=str(exc))
+        return self.state
+
+    def list_licenses(self) -> tuple[Any, ...]:
+        return tuple(self.agent.list_licenses(self.state.selected_product))
+
+    def select_license(self, license_id: str) -> LicenseCenterState:
+        try:
+            status = self.agent.select_license(self.state.selected_product, license_id)
+            self.state = LicenseCenterState(screen=Screen.STATUS, connected=True,
+                authenticated=True, products=self.state.products,
+                selected_product=self.state.selected_product, status=status,
+                return_to_product=True)
+        except Exception as exc:
+            self.state = LicenseCenterState(screen=Screen.ERROR, connected=self.state.connected,
+                authenticated=self.state.authenticated, products=self.state.products,
+                selected_product=self.state.selected_product, error=str(exc))
+        return self.state
+
+    def remove_license(self, license_id: str) -> LicenseCenterState:
+        try:
+            self.agent.remove_license(self.state.selected_product, license_id)
+            return self._status()
+        except Exception as exc:
+            self.state = LicenseCenterState(screen=Screen.ERROR, connected=self.state.connected,
+                authenticated=self.state.authenticated, products=self.state.products,
+                selected_product=self.state.selected_product, error=str(exc))
+            return self.state
+
+    def refresh_license(self) -> LicenseCenterState:
+        return self._status()
+
+    def deactivate_device(self) -> LicenseCenterState:
+        return self.deactivate()
+
     def deactivate(self) -> LicenseCenterState:
         self.agent.deactivate(self.state.selected_product)
         return self._status()

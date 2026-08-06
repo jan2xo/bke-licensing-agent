@@ -6,7 +6,7 @@ from collections.abc import Callable
 from ..config import get_database_path
 from .models import DiscoveredProductRecord
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -51,6 +51,39 @@ CREATE TABLE IF NOT EXISTS lease_metadata (
 )
 """,),
     4: ("ALTER TABLE lease_metadata ADD COLUMN server_revision INTEGER NOT NULL DEFAULT 0",),
+    5: ("""
+CREATE TABLE IF NOT EXISTS verified_licenses (
+    license_id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    product_version TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    lease_id TEXT NOT NULL UNIQUE,
+    generation INTEGER NOT NULL,
+    server_revision INTEGER NOT NULL,
+    issued_at TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+""", """
+CREATE TABLE IF NOT EXISTS active_license_bindings (
+    product_id TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    active_license_id TEXT NOT NULL,
+    active_lease_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    server_revision INTEGER NOT NULL,
+    binding_version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (product_id, installation_id, device_id),
+    FOREIGN KEY (active_license_id) REFERENCES verified_licenses(license_id)
+)
+"""),
 }
 
 

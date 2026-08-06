@@ -9,6 +9,10 @@ The Tk presentation masks license-key input, disables activation while the
 request is active, closes after success, and leaves the error screen available
 for retry after failure.
 
+The presentation accepts the product-agnostic `activate_license` mode. In that
+mode it displays replacement context and preserves the current authorization
+until the new candidate has been verified and persisted.
+
 The reference Demo Product constructs this controller automatically. On a
 fresh installation it opens the window after `activation_required`; after a
 successful activation, the existing Licensing Agent lease-metadata repository

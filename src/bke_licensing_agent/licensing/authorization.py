@@ -8,6 +8,7 @@ from packaging.version import InvalidVersion, Version
 
 from ..manifest.models import Manifest
 from .lease import LicenseLease, LeaseMetadata, LeaseMetadataStore
+from .license_repository import LicenseRecordCorruptError, VerifiedLicenseRepository
 
 
 class AuthorizationState(StrEnum):
@@ -24,8 +25,20 @@ class AuthorizationState(StrEnum):
 
 
 class AuthorizationDecision:
-    def __init__(self, state: AuthorizationState, reason: str = ""):
+    def __init__(self, state: AuthorizationState, reason: str = "", *,
+                 active_license_id: str | None = None,
+                 edition: str | None = None,
+                 features: tuple[str, ...] = (),
+                 limits: dict[str, int] | None = None,
+                 expires_at: datetime | None = None,
+                 binding_version: int | None = None):
         self.state, self.reason = state, reason
+        self.active_license_id = active_license_id
+        self.edition = edition
+        self.features = features
+        self.limits = dict(limits or {})
+        self.expires_at = expires_at
+        self.binding_version = binding_version
 
     @property
     def authorized(self) -> bool:
@@ -68,3 +81,35 @@ class AuthorizationService:
                 expires_at=lease.expires_at, issuer=lease.issuer,
                 key_id=lease.key_id, verified_at=now))
         return AuthorizationDecision(AuthorizationState.AUTHORIZED)
+
+    def authorize_from_active_binding(
+        self, manifest: Manifest, installation_id: str, device_id: str,
+        repository: VerifiedLicenseRepository,
+        lease_resolver: Callable[[str], LicenseLease | None],
+    ) -> AuthorizationDecision:
+        """Authorize only the license selected by the active binding."""
+        try:
+            record = repository.active_verified_license(
+                manifest.productId, installation_id, device_id)
+            if record is None:
+                return AuthorizationDecision(AuthorizationState.AUTHORIZATION_DENIED,
+                                             "No active license binding")
+            lease = lease_resolver(record.lease_id)
+            if lease is None:
+                return AuthorizationDecision(AuthorizationState.AUTHORIZATION_DENIED,
+                                             "Active lease is unavailable")
+            if (lease.lease_id != record.lease_id or lease.generation != record.generation or
+                    lease.server_revision != record.server_revision):
+                return AuthorizationDecision(AuthorizationState.AUTHORIZATION_DENIED,
+                                             "Active lease is stale")
+            decision = self.authorize(manifest, lease, installation_id, device_id)
+            if decision.authorized:
+                decision.active_license_id = record.license_id[-8:]
+                decision.edition = record.status
+                decision.expires_at = record.expires_at
+                binding = repository.active(manifest.productId, installation_id, device_id)
+                if binding is not None:
+                    decision.binding_version = binding.binding_version
+            return decision
+        except LicenseRecordCorruptError as exc:
+            return AuthorizationDecision(AuthorizationState.AUTHORIZATION_DENIED, str(exc))

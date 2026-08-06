@@ -150,10 +150,10 @@ def test_lease_metadata_save_load_replace_delete_and_idempotence(tmp_path):
 
 def test_lease_metadata_migration_is_current_and_idempotent(tmp_path):
     with Database(tmp_path / "agent.db") as db:
-        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 5
         assert db.connection.execute("SELECT name FROM sqlite_master WHERE name='lease_metadata'").fetchone()
     with Database(tmp_path / "agent.db") as db:
-        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 5
 
 
 def test_lease_metadata_does_not_store_sensitive_fields(tmp_path):

@@ -31,3 +31,11 @@ def test_license_center_denial_is_an_error_screen_and_retry_is_supported():
     controller.connect(); controller.sign_in("x"); controller.select_product("demo")
     assert controller.activate().screen is Screen.ERROR
     assert controller.retry_activation().screen is Screen.ERROR
+
+
+def test_license_center_delegates_refresh_and_deactivation():
+    agent = Agent()
+    controller = LicenseCenterController(agent)
+    controller.connect(); controller.select_product("demo")
+    assert controller.refresh_license().screen is Screen.STATUS
+    assert controller.deactivate_device().screen is Screen.STATUS

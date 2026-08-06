@@ -27,6 +27,15 @@ class MockActivationResponse:
 class MockBKEPlatform:
     SCENARIOS = {
         "BKE-DEMO-VALID": MockActivationState.AUTHORIZED,
+        "BKE-DEMO-LICENSE-1": MockActivationState.AUTHORIZED,
+        "BKE-DEMO-LICENSE-2": MockActivationState.AUTHORIZED,
+        "BKE-DEMO-BASIC": MockActivationState.AUTHORIZED,
+        "BKE-DEMO-PRO": MockActivationState.AUTHORIZED,
+        "BKE-DEMO-ENTERPRISE": MockActivationState.AUTHORIZED,
+        "CERT-LICENSE-A": MockActivationState.AUTHORIZED,
+        "CERT-LICENSE-B": MockActivationState.AUTHORIZED,
+        "CERT-LICENSE-C": MockActivationState.AUTHORIZED,
+        "CERT-LICENSE-BAD-SIGNATURE": MockActivationState.DENIED,
         "BKE-DEMO-INVALID": MockActivationState.DENIED,
         "BKE-DEMO-EXPIRED": MockActivationState.DENIED,
         "BKE-DEMO-REVOKED": MockActivationState.DENIED,
@@ -50,9 +59,10 @@ class MockBKEPlatform:
 
     @classmethod
     def signed_lease(cls, *, product_id="bke-demo-product", device_id="demo-device",
-                     expires_at=None, revoked=False, suspended=False) -> dict[str, str]:
+                     expires_at=None, revoked=False, suspended=False,
+                     lease_id="demo-lease-1", generation=1) -> dict[str, str]:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        lease = LicenseLease(lease_id="demo-lease-1", generation=1, server_revision=1,
+        lease = LicenseLease(lease_id=lease_id, generation=generation, server_revision=generation,
             product_id=product_id, installation_id="demo-installation",
             device_id=device_id, version="1.0.0", issuer="BKE certification platform",
             issued_at=now, not_before=now - timedelta(minutes=1),
@@ -71,13 +81,21 @@ class MockBKEPlatform:
         if state is None:
             return MockActivationResponse(MockActivationState.DENIED, "unknown_license_key")
         if state is MockActivationState.AUTHORIZED and product_id == "bke-demo-product":
-            return MockActivationResponse(state, "verified_test_lease", self.signed_lease())
+            editions = {"BKE-DEMO-PRO": ("demo-lease-pro", 2),
+                        "BKE-DEMO-ENTERPRISE": ("demo-lease-enterprise", 3),
+                        "BKE-DEMO-LICENSE-2": ("demo-lease-2", 2),
+                        "CERT-LICENSE-A": ("cert-license-a", 1),
+                        "CERT-LICENSE-B": ("cert-license-b", 2),
+                        "CERT-LICENSE-C": ("cert-license-c", 3)}
+            lease_id, generation = editions.get(license_key, ("demo-lease-basic", 1))
+            return MockActivationResponse(state, "verified_test_lease", self.signed_lease(lease_id=lease_id, generation=generation))
         if state is MockActivationState.AUTHORIZED:
             return MockActivationResponse(MockActivationState.DENIED, "wrong_product")
         return MockActivationResponse(state, license_key.lower().replace("bke-demo-", ""))
 
-    def retrieve_lease(self, product_id: str = "bke-demo-product") -> dict[str, str] | None:
+    def retrieve_lease(self, product_id: str = "bke-demo-product", lease_id: str | None = None,
+                       generation: int = 1) -> dict[str, str] | None:
         """Return the current certification lease through the platform boundary."""
         if product_id != "bke-demo-product":
             return None
-        return self.signed_lease(product_id=product_id)
+        return self.signed_lease(product_id=product_id, lease_id=lease_id or "demo-lease-basic", generation=generation)
