@@ -3,4 +3,17 @@
 Minimal reference product for discovery and manual certification. It contains
 no licensing logic and never emits credentials, lease contents, or signatures.
 
-Run with `python demo_app.py`.
+From the repository root, run:
+
+```bash
+python samples/bke-demo-product/demo_app.py
+```
+
+The product constructs the certification agent and real Tk License Center
+automatically when authorization is required. After successful activation,
+the Licensing Agent persists verified lease metadata; a later process loads
+that metadata and retrieves/verifies the current signed lease before allowing
+the product to run. The Demo Product has no separate cache.
+
+GUI interaction is manually certified because Tk requires a desktop display;
+the controller and authorization flow remain covered by automated tests.
