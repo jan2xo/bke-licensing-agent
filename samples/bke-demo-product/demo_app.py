@@ -12,6 +12,14 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from bke_licensing_agent.manifest.validator import validate_manifest
 
+DEMO_COMMAND_ACTIONS = {
+    "A": "add_license",
+    "S": "select_license",
+    "V": "view_licenses",
+    "R": "refresh_license",
+    "D": "deactivate_device",
+}
+
 
 def create_certification_agent() -> Any:
     from certification.agent import CertificationAgent

@@ -17,3 +17,10 @@ the product to run. The Demo Product has no separate cache.
 
 GUI interaction is manually certified because Tk requires a desktop display;
 the controller and authorization flow remain covered by automated tests.
+
+During certification, keyboard shortcuts map to typed Agent actions:
+
+`A` Add License, `S` Select License, `V` View Licenses, `R` Refresh License,
+`D` Deactivate Device, and `Q` performs local application shutdown. Future
+products must call `LicenseCenterService` with `LicenseCenterAction` values
+directly; they do not use keyboard commands.

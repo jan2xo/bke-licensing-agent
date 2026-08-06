@@ -13,6 +13,10 @@ The presentation accepts the product-agnostic `activate_license` mode. In that
 mode it displays replacement context and preserves the current authorization
 until the new candidate has been verified and persisted.
 
+Future products integrate through the typed `OpenLicenseCenterRequest` and
+`LicenseCenterAction` contract. Demo keyboard shortcuts are certification-only
+and are translated internally before reaching the Agent service.
+
 The reference Demo Product constructs this controller automatically. On a
 fresh installation it opens the window after `activation_required`; after a
 successful activation, the existing Licensing Agent lease-metadata repository
