@@ -18,7 +18,7 @@ def run(controller: LicenseCenterController, product=None, mode: str = "activati
     ttk.Label(root, textvariable=status).pack(padx=24, pady=8)
     ttk.Label(root, text=f"Product: {getattr(product, 'productId', product or '(none)')}").pack()
     if mode in {"activation_required", "add_license"}:
-        ttk.Entry(root, textvariable=key, show="*").pack(padx=24, pady=8)
+        ttk.Entry(root, textvariable=key).pack(padx=24, pady=8)
 
     def activate() -> None:
         activate_button.configure(state="disabled")
