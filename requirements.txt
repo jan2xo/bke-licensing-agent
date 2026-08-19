@@ -3,4 +3,5 @@ pydantic>=2.9,<3
 keyring>=24.0.0
 requests>=2.31,<3
 jsonschema>=4.0,<5
+cryptography>=50,<51
 pytest>=8.0

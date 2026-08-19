@@ -9,7 +9,7 @@ import requests
 from pydantic import BaseModel, ValidationError
 
 from .config import ApiConfig
-from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT, LOGIN, REFRESH, LOGOUT, SESSION, LICENSES, ENTITLEMENT, DEVICE_STATUS, ACTIVATE, VERIFY_ACTIVATION, DEACTIVATE, LEASE, TRUSTED_KEYS
+from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT, LOGIN, REFRESH, LOGOUT, SESSION, LICENSES, ENTITLEMENT, DEVICE_STATUS, ACTIVATE, LEGACY_ACTIVATE, VERIFY_ACTIVATION, DEACTIVATE, LEASE, TRUSTED_KEYS
 from .errors import (
     ApiError, AuthenticationExpiredError, AuthenticationRequiredError,
     AuthorizationDeniedError, ConflictError, ConnectionTimeoutError,
@@ -21,6 +21,7 @@ from .models import (
     DeviceRegistrationRequest, DeviceRegistrationResponse, HealthResponse,
     LicenseStatusResponse, LicenseVerificationRequest, LicenseVerificationResponse,
     ProductResponse,
+    PlatformLeaseActivationRequest, PlatformLeaseResponse,
 )
 from ..auth.models import (AuthenticationState, LoginRequest, LoginResponse, LogoutRequest,
     LogoutResponse, RefreshRequest, RefreshResponse, SessionInfo, ValidationResponse)
@@ -78,7 +79,11 @@ class LicensingPlatformClient:
         return self._request("GET", DEVICE_STATUS.format(device_id=device_id), TypedDeviceRegistrationResponse, access_token=access_token)
 
     def activate(self, request: ActivationRequest, access_token: str) -> ActivationResponse:
-        return self._request("POST", ACTIVATE, ActivationResponse, request.model_dump(), idempotent=False, access_token=access_token)
+        return self._request("POST", LEGACY_ACTIVATE, ActivationResponse, request.model_dump(), idempotent=False, access_token=access_token)
+
+    def activate_platform_lease(self, request: PlatformLeaseActivationRequest) -> PlatformLeaseResponse:
+        """Authorize one activation through the Digital Solutions signed-lease contract."""
+        return self._request("POST", ACTIVATE, PlatformLeaseResponse, request.model_dump(by_alias=True), idempotent=True, protocol_version="bke.licensing.v2")
 
     def verify_activation(self, request: ActivationVerificationRequest, access_token: str) -> ActivationVerificationResponse:
         return self._request("POST", VERIFY_ACTIVATION, ActivationVerificationResponse, request.model_dump(), idempotent=False, access_token=access_token)
@@ -93,12 +98,14 @@ class LicensingPlatformClient:
         return self._request("GET", TRUSTED_KEYS, TrustedKeyMetadataResponse, access_token=access_token)
 
     def _request(self, method: str, path: str, model: type[T], payload: dict[str, Any] | None = None,
-                 *, idempotent: bool = True, access_token: str | None = None) -> T:
+                 *, idempotent: bool = True, access_token: str | None = None, protocol_version: str | None = None) -> T:
         request_id = str(uuid.uuid4())
         headers = {"Accept": "application/json", "User-Agent": self.config.user_agent,
                    "X-Request-ID": request_id}
         if access_token:
             headers["Authorization"] = f"Bearer {access_token}"
+        if protocol_version:
+            headers["x-bke-licensing-version"] = protocol_version
         url = f"{self.config.base_url}{path}"
         attempts = self.config.retry_count if idempotent else 0
         for attempt in range(attempts + 1):

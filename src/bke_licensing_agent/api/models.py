@@ -49,3 +49,17 @@ class LicenseVerificationResponse(ApiModel):
     status: Literal["active", "expired", "suspended", "revoked", "unavailable"]
     license_id: str | None = None
     policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlatformLeaseActivationRequest(ApiModel):
+    licenseKey: str = Field(min_length=1)
+    installationId: str = Field(min_length=32, max_length=256)
+    deviceId: str = Field(min_length=16, max_length=256)
+    operationId: str = Field(min_length=8, max_length=128)
+    label: str | None = None
+    operatingSystem: str | None = None
+    architecture: str | None = None
+
+
+class PlatformLeaseResponse(ApiModel):
+    lease: dict[str, Any]

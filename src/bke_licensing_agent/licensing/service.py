@@ -1,4 +1,6 @@
 import threading
+import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +20,10 @@ from .errors import ActivationVerificationError
 from .models import (ActivationRequest, ActivationState,
     ActivationVerificationRequest, DeactivationRequest, DeviceMetadata,
     DeviceRegistrationRequest)
+from .lease import LeaseVerifier
+from .license_repository import ActiveLicenseBinding, VerifiedLicenseRecord, VerifiedLicenseRepository
+from .authorization import AuthorizationDecision, AuthorizationService
+from ..api.models import PlatformLeaseActivationRequest
 
 
 @dataclass
@@ -37,6 +43,61 @@ class LicensingService:
         self._condition = threading.Condition()
         self._flights: dict[tuple[str, str, int], _ActivationFlight] = {}
         self._operation_versions: dict[tuple[str, str], int] = {}
+
+    def activate_platform_lease(self, product: Manifest, license_key: str,
+                                verifier: LeaseVerifier,
+                                repository: VerifiedLicenseRepository) -> AuthorizationDecision:
+        """Primary Digital Solutions activation path.
+
+        The response is verified before either the license record or active binding
+        is written. Legacy /devices and /activations calls are not used here.
+        """
+        if not product.is_validated:
+            raise ManifestProvenanceError("Activation requires a manifest validated by the manifest pipeline")
+        self.sessions.current_session()
+        installation_id = self.identity.load_or_create()
+        device_id = self.fingerprint.calculate()
+        request = PlatformLeaseActivationRequest(
+            licenseKey=license_key, installationId=installation_id,
+            deviceId=device_id, operationId=str(uuid.uuid4()),
+            operatingSystem=self.fingerprint.signals.get("platform"),
+            architecture=self.fingerprint.signals.get("architecture"),
+            label=None,
+        )
+        response = self.client.activate_platform_lease(request)
+        lease = verifier.verify(response.lease)
+        if lease.product_id != product.productId:
+            raise ActivationVerificationError("Lease product identity mismatch")
+        if lease.installation_id != installation_id:
+            raise ActivationVerificationError("Lease installation identity mismatch")
+        if lease.device_id != device_id:
+            raise ActivationVerificationError("Lease device identity mismatch")
+        if lease.version != product.version:
+            raise ActivationVerificationError("Lease version identity mismatch")
+        now = datetime.now(timezone.utc)
+        record = VerifiedLicenseRecord(
+            license_id=lease.license_id, product_id=lease.product_id,
+            product_version=lease.version, installation_id=lease.installation_id,
+            device_id=lease.device_id, lease_id=lease.lease_id,
+            generation=lease.generation, server_revision=lease.server_revision,
+            issued_at=lease.issued_at, not_before=lease.not_before,
+            expires_at=lease.expires_at, status="verified", key_id=lease.key_id,
+            created_at=now, updated_at=now,
+        )
+        repository.save(record)
+        repository.bind(ActiveLicenseBinding(
+            product_id=lease.product_id, installation_id=lease.installation_id,
+            device_id=lease.device_id, active_license_id=lease.license_id,
+            active_lease_id=lease.lease_id, generation=lease.generation,
+            server_revision=lease.server_revision, binding_version=1,
+            updated_at=now,
+        ))
+        decision = AuthorizationService().authorize_from_active_binding(
+            product, installation_id, device_id, repository, lambda lease_id: lease if lease_id == lease.lease_id else None,
+        )
+        if not decision.authorized:
+            raise ActivationDeniedError("Verified lease did not authorize the active binding")
+        return decision
 
     def activate(self, product: Manifest, device_name: str | None = None) -> ActivationState:
         if not product.is_validated:

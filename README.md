@@ -592,3 +592,14 @@ The approved deployment architecture is:
 ```
 
 **This shall be the standard installation and integration model for all BKE Digital Solutions software products unless superseded by a future architectural decision.**
+
+## Digital Solutions signed-lease activation
+
+The product remains separate from the Agent. The primary Digital Solutions
+activation bridge is `POST /api/licenses/activate`: the Agent sends the license
+key, stable installation identity, canonical device identity, and a unique
+operation ID. The Agent verifies the returned Ed25519 lease with a statically
+provisioned trusted public key, persists only the verified lease, updates the
+single active binding for the product/installation/device context, and then
+evaluates local authorization. Private signing keys remain exclusively on the
+licensing platform; the Agent never discovers or trusts arbitrary network keys.

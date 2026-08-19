@@ -58,7 +58,8 @@ class VerifiedLicenseRepository:
             with self.database._lock, self.database.connection:
                 self.database.connection.execute(
                     """INSERT INTO verified_licenses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(license_id) DO UPDATE SET product_version=excluded.product_version,
+                    ON CONFLICT(lease_id) DO UPDATE SET license_id=excluded.license_id,
+                    product_version=excluded.product_version,
                     status=excluded.status, updated_at=excluded.updated_at""",
                     (record.license_id, record.product_id, record.product_version,
                      record.installation_id, record.device_id, record.lease_id,
@@ -73,7 +74,7 @@ class VerifiedLicenseRepository:
         try:
             with self.database._lock:
                 row = self.database.connection.execute(
-                    "SELECT * FROM verified_licenses WHERE license_id=?", (license_id,)
+                    "SELECT * FROM verified_licenses WHERE license_id=? ORDER BY updated_at DESC LIMIT 1", (license_id,)
                 ).fetchone()
             return self._record(row) if row else None
         except LicenseRepositoryError:
@@ -87,6 +88,13 @@ class VerifiedLicenseRepository:
                 "SELECT * FROM verified_licenses WHERE product_id=? ORDER BY updated_at DESC", (product_id,)
             ).fetchall()
         return [self._record(row) for row in rows]
+
+    def load_lease(self, lease_id: str) -> VerifiedLicenseRecord | None:
+        with self.database._lock:
+            row = self.database.connection.execute(
+                "SELECT * FROM verified_licenses WHERE lease_id=?", (lease_id,)
+            ).fetchone()
+        return self._record(row) if row else None
 
     def bind(self, binding: ActiveLicenseBinding) -> None:
         try:
@@ -165,7 +173,8 @@ class VerifiedLicenseRepository:
         record = self.load(binding.active_license_id)
         if record is None:
             raise LicenseRecordCorruptError("Active binding references missing license")
-        if (record.product_id != binding.product_id or
+        if (record.license_id != binding.active_license_id or
+                record.product_id != binding.product_id or
                 record.installation_id != binding.installation_id or
                 record.device_id != binding.device_id or
                 record.lease_id != binding.active_lease_id or

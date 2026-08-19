@@ -41,7 +41,7 @@ def product():
 
 
 def lease(**changes):
-    values = dict(lease_id="l", generation=1, product_id="p", installation_id="i",
+    values = dict(license_id="license-l", lease_id="l", generation=1, product_id="p", installation_id="i",
         device_id="d", version="1.0.0", issuer="bke", issued_at=NOW,
         not_before=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
         key_id="k", algorithm="Ed25519")
@@ -150,10 +150,10 @@ def test_lease_metadata_save_load_replace_delete_and_idempotence(tmp_path):
 
 def test_lease_metadata_migration_is_current_and_idempotent(tmp_path):
     with Database(tmp_path / "agent.db") as db:
-        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 6
         assert db.connection.execute("SELECT name FROM sqlite_master WHERE name='lease_metadata'").fetchone()
     with Database(tmp_path / "agent.db") as db:
-        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 6
 
 
 def test_lease_metadata_does_not_store_sensitive_fields(tmp_path):

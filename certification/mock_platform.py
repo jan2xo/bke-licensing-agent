@@ -62,7 +62,7 @@ class MockBKEPlatform:
                      expires_at=None, revoked=False, suspended=False,
                      lease_id="demo-lease-1", generation=1) -> dict[str, str]:
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        lease = LicenseLease(lease_id=lease_id, generation=generation, server_revision=generation,
+        lease = LicenseLease(license_id="demo-license", lease_id=lease_id, generation=generation, server_revision=generation,
             product_id=product_id, installation_id="demo-installation",
             device_id=device_id, version="1.0.0", issuer="BKE certification platform",
             issued_at=now, not_before=now - timedelta(minutes=1),

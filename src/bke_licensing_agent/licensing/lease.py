@@ -32,7 +32,8 @@ class LeaseMetadataSchemaError(LeaseMetadataError): pass
 
 class LicenseLease(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    lease_id: str
+    license_id: str = Field(min_length=1)
+    lease_id: str = Field(min_length=1)
     generation: int = Field(ge=0)
     server_revision: int = Field(default=0, ge=0)
     product_id: str

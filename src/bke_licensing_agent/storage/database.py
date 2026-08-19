@@ -6,7 +6,7 @@ from collections.abc import Callable
 from ..config import get_database_path
 from .models import DiscoveredProductRecord
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -83,6 +83,53 @@ CREATE TABLE IF NOT EXISTS active_license_bindings (
     PRIMARY KEY (product_id, installation_id, device_id),
     FOREIGN KEY (active_license_id) REFERENCES verified_licenses(license_id)
 )
+"""),
+    6: ("""
+CREATE TABLE verified_licenses_v6 (
+    license_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    product_version TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    lease_id TEXT PRIMARY KEY,
+    generation INTEGER NOT NULL,
+    server_revision INTEGER NOT NULL,
+    issued_at TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+""", """
+INSERT INTO verified_licenses_v6 SELECT license_id, product_id, product_version,
+installation_id, device_id, lease_id, generation, server_revision, issued_at,
+not_before, expires_at, status, key_id, created_at, updated_at
+FROM verified_licenses
+""", """
+ALTER TABLE active_license_bindings RENAME TO active_license_bindings_v6
+""", """
+CREATE TABLE active_license_bindings (
+    product_id TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    active_license_id TEXT NOT NULL,
+    active_lease_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    server_revision INTEGER NOT NULL,
+    binding_version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (product_id, installation_id, device_id)
+)
+""", """
+INSERT INTO active_license_bindings SELECT * FROM active_license_bindings_v6
+""", """
+DROP TABLE active_license_bindings_v6
+""", """
+DROP TABLE verified_licenses
+""", """
+ALTER TABLE verified_licenses_v6 RENAME TO verified_licenses
 """),
 }
 

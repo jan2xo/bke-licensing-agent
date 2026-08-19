@@ -65,7 +65,7 @@ def test_authorization_uses_only_the_active_binding(tmp_path):
             updated_at=datetime.now(timezone.utc),
         ))
         lease = LicenseLease(
-            lease_id=stored.lease_id, generation=1, server_revision=1,
+            license_id=stored.license_id, lease_id=stored.lease_id, generation=1, server_revision=1,
             product_id="bke-demo-product", installation_id="install", device_id="device",
             version="1.0.0", issuer="test", issued_at=stored.issued_at,
             not_before=stored.not_before, expires_at=stored.expires_at,
