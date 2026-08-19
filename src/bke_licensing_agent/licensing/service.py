@@ -83,6 +83,8 @@ class LicensingService:
             issued_at=lease.issued_at, not_before=lease.not_before,
             expires_at=lease.expires_at, status="verified", key_id=lease.key_id,
             created_at=now, updated_at=now,
+            signed_payload=response.lease["payload"], signed_signature=response.lease["signature"],
+            signed_algorithm=response.lease["algorithm"],
         )
         repository.save(record)
         repository.bind(ActiveLicenseBinding(

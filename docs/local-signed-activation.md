@@ -36,17 +36,40 @@ python samples/bke-local-product/sample_product.py \
   --installation-id <test-installation-id>
 ```
 
+Start the standalone local Agent API with the persisted SQLite state:
+
+```bash
+python -m bke_licensing_agent.demo serve \
+  --manifest samples/bke-local-product/agent-demo.manifest.json \
+  --database /tmp/bke-agent-demo.sqlite \
+  --installation-id local-agent-installation-000000000000000000000000000000 \
+  --trusted-public-key /path/to/local-public.pem \
+  --key-id local-agent-demo-ed25519-v1
+```
+
+Activate the TEST license through the real Agent service (the sample product
+never receives this value):
+
+```bash
+python -m bke_licensing_agent.demo activate \
+  --manifest samples/bke-local-product/agent-demo.manifest.json \
+  --database /tmp/bke-agent-demo.sqlite \
+  --installation-id local-agent-installation-000000000000000000000000000000 \
+  --trusted-public-key /path/to/local-public.pem \
+  --key-id local-agent-demo-ed25519-v1 \
+  --platform-url http://127.0.0.1:3000 \
+  --license-key BKE-TEST-...
+```
+
 Before activation the expected result is `DENY`; after the Agent has a valid
 active binding the expected result is `ALLOW`.
 
 ## Current boundary
 
-The platform-side `/api/licenses/activate` route is already covered by the
-Digital Solutions integration tests. The Agent HTTP test uses a disposable
-local signed-response authority so it remains runnable without a Next.js,
-PostgreSQL, or production environment. A full two-process Next.js-to-Agent
-demo still requires a local Digital Solutions fixture seeder and is not
-represented as complete by this document.
+The platform-side `/api/licenses/activate` route is covered by the Digital
+Solutions integration tests. The commands above are the real-process path;
+they require the local Digital Solutions fixture from
+`docs/operations/LOCAL-AGENT-DEMO.md`.
 
 The existing refresh service still targets the legacy lease endpoint. A v2
 refresh endpoint and response contract must be agreed by Digital Solutions

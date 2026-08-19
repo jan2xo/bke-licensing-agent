@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "productId": "bke-agent-integration-test-product",
+  "displayName": "BKE Agent Integration Test Product",
+  "version": "1.0.0",
+  "entryPoint": "sample_product.py",
+  "updateChannel": "stable",
+  "minimumAgentVersion": "1.0.0",
+  "platform": "linux",
+  "architecture": "x64"
+}

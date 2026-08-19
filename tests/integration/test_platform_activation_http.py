@@ -12,7 +12,7 @@ from bke_licensing_agent.api.config import ApiConfig
 from bke_licensing_agent.devices.fingerprint import DeviceFingerprint
 from bke_licensing_agent.devices.identity import InstallationIdentity
 from bke_licensing_agent.licensing.lease import LeaseVerifier, LicenseLease
-from bke_licensing_agent.licensing.license_repository import VerifiedLicenseRepository
+from bke_licensing_agent.licensing.license_repository import LicenseRecordCorruptError, VerifiedLicenseRepository
 from bke_licensing_agent.licensing.service import LicensingService
 from bke_licensing_agent.manifest.validator import validate_manifest
 from bke_licensing_agent.storage.database import Database
@@ -65,5 +65,20 @@ def test_signed_platform_activation_over_real_http_persists_binding(tmp_path):
         binding = repository.active(product.productId, Identity().load_or_create(), Fingerprint().calculate())
         assert record and record.license_id == "license-local" and record.lease_id == "lease-local-1"
         assert binding and binding.active_license_id == "license-local" and binding.active_lease_id == "lease-local-1"
+        db.close()
+        restarted = Database(tmp_path / "agent.db")
+        reloaded = VerifiedLicenseRepository(restarted)
+        verified = reloaded.verify_signed_lease("lease-local-1", LeaseVerifier({"local-test-key": public}), product_id=product.productId, installation_id=Identity().load_or_create(), device_id=Fingerprint().calculate(), version=product.version)
+        assert verified.license_id == "license-local"
+        restarted.connection.execute("UPDATE verified_licenses SET signed_signature='tampered' WHERE lease_id='lease-local-1'")
+        restarted.connection.commit()
+        try:
+            reloaded.verify_signed_lease("lease-local-1", LeaseVerifier({"local-test-key": public}), product_id=product.productId, installation_id=Identity().load_or_create(), device_id=Fingerprint().calculate(), version=product.version)
+            raise AssertionError("tampered persisted signature was accepted")
+        except Exception as exc:
+            assert isinstance(exc, LicenseRecordCorruptError) or "signature" in str(exc).lower()
+        restarted.close()
     finally:
-        db.close(); server.shutdown(); server.server_close(); thread.join(timeout=2)
+        try: db.close()
+        except Exception: pass
+        server.shutdown(); server.server_close(); thread.join(timeout=2)

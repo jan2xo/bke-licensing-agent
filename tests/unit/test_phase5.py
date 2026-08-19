@@ -124,10 +124,10 @@ def test_activate_uses_platform_lease_path_without_legacy_fallback(monkeypatch):
 
 def test_migration_version_is_idempotent_and_upgradeable(tmp_path):
     db = Database(tmp_path / "agent.db")
-    assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 6
+    assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 7
     db.close()
     db = Database(tmp_path / "agent.db")
-    assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 6
+    assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 7
     db.close()
 
 
@@ -161,7 +161,7 @@ def test_migration_failure_rolls_back_and_later_startup_recovers(tmp_path):
     ).fetchone() is None
     connection.close()
     with Database(path) as db:
-        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 6
+        assert db.connection.execute("SELECT version FROM schema_version").fetchone()[0] == 7
 
 
 def test_duplicate_activation_cache_upserts(tmp_path):

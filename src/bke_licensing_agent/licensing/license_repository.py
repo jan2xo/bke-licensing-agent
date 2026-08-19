@@ -25,6 +25,9 @@ class VerifiedLicenseRecord(BaseModel):
     key_id: str = Field(min_length=1)
     created_at: datetime
     updated_at: datetime
+    signed_payload: str | None = None
+    signed_signature: str | None = None
+    signed_algorithm: str | None = None
 
 
 class ActiveLicenseBinding(BaseModel):
@@ -57,7 +60,7 @@ class VerifiedLicenseRepository:
         try:
             with self.database._lock, self.database.connection:
                 self.database.connection.execute(
-                    """INSERT INTO verified_licenses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """INSERT INTO verified_licenses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(lease_id) DO UPDATE SET license_id=excluded.license_id,
                     product_version=excluded.product_version,
                     status=excluded.status, updated_at=excluded.updated_at""",
@@ -65,7 +68,8 @@ class VerifiedLicenseRepository:
                      record.installation_id, record.device_id, record.lease_id,
                      record.generation, record.server_revision, record.issued_at.isoformat(),
                      record.not_before.isoformat(), record.expires_at.isoformat(), record.status,
-                     record.key_id, record.created_at.isoformat(), now),
+                     record.key_id, record.created_at.isoformat(), now,
+                     record.signed_payload, record.signed_signature, record.signed_algorithm),
                 )
         except Exception as exc:
             raise LicenseRecordPersistenceError("Could not save verified license") from exc
@@ -95,6 +99,25 @@ class VerifiedLicenseRepository:
                 "SELECT * FROM verified_licenses WHERE lease_id=?", (lease_id,)
             ).fetchone()
         return self._record(row) if row else None
+
+    def verify_signed_lease(self, lease_id: str, verifier, *, product_id: str,
+                            installation_id: str, device_id: str,
+                            version: str) -> LicenseLease:
+        record = self.load_lease(lease_id)
+        if record is None or not record.signed_payload or not record.signed_signature or not record.signed_algorithm:
+            raise LicenseRecordCorruptError("Signed lease envelope is missing")
+        lease = verifier.verify({"payload": record.signed_payload,
+                                 "signature": record.signed_signature,
+                                 "key_id": record.key_id,
+                                 "algorithm": record.signed_algorithm})
+        if (lease.license_id != record.license_id or lease.lease_id != record.lease_id or
+                lease.product_id != product_id or lease.installation_id != installation_id or
+                lease.device_id != device_id or lease.version != version or
+                lease.generation != record.generation or
+                lease.server_revision != record.server_revision or
+                lease.key_id != record.key_id):
+            raise LicenseRecordCorruptError("Signed lease metadata does not match envelope")
+        return lease
 
     def bind(self, binding: ActiveLicenseBinding) -> None:
         try:
@@ -136,11 +159,11 @@ class VerifiedLicenseRepository:
                     if exists:
                         continue
                     self.database.connection.execute(
-                        """INSERT INTO verified_licenses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        """INSERT INTO verified_licenses VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (license_id, row['product_id'], "unknown", row['installation_id'],
                          row['device_id'], row['lease_id'], row['generation'],
                          row['server_revision'], row['issued_at'], row['issued_at'],
-                         row['expires_at'], row['status'], row['key_id'], now.isoformat(), now.isoformat()),
+                         row['expires_at'], row['status'], row['key_id'], now.isoformat(), now.isoformat(), None, None, None),
                     )
                     self.database.connection.execute(
                         """INSERT OR IGNORE INTO active_license_bindings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",

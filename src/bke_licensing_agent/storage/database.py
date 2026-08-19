@@ -6,7 +6,7 @@ from collections.abc import Callable
 from ..config import get_database_path
 from .models import DiscoveredProductRecord
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -130,6 +130,38 @@ DROP TABLE active_license_bindings_v6
 DROP TABLE verified_licenses
 """, """
 ALTER TABLE verified_licenses_v6 RENAME TO verified_licenses
+"""),
+    7: ("""
+CREATE TABLE verified_licenses_v7 (
+    license_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    product_version TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    lease_id TEXT PRIMARY KEY,
+    generation INTEGER NOT NULL,
+    server_revision INTEGER NOT NULL,
+    issued_at TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    signed_payload TEXT,
+    signed_signature TEXT,
+    signed_algorithm TEXT
+)
+""", """
+INSERT INTO verified_licenses_v7
+SELECT license_id, product_id, product_version, installation_id, device_id,
+lease_id, generation, server_revision, issued_at, not_before, expires_at,
+status, key_id, created_at, updated_at, NULL, NULL, NULL
+FROM verified_licenses
+""", """
+DROP TABLE verified_licenses
+""", """
+ALTER TABLE verified_licenses_v7 RENAME TO verified_licenses
 """),
 }
 
