@@ -95,7 +95,7 @@ def test_activation_and_deactivation_use_shared_lock_and_cache(tmp_path):
     db = Database(tmp_path / "agent.db")
     service = LicensingService(Client(), Sessions(), Identity(), Fingerprint(), db)
     product = validate_manifest({"schemaVersion": 1, "productId": "p", "displayName": "P", "version": "1.0.0", "entryPoint": "app", "updateChannel": "stable", "minimumAgentVersion": "1.0.0", "platform": "linux", "architecture": "x64"})
-    assert service.activate(product).state == "active"
+    assert service.activate_legacy(product).state == "active"
     assert service.deactivate(product, "a", "d") is True
     assert {event["event_type"] for event in db.list_audit_events()} >= {"activation_attempted", "activation_succeeded", "device_deactivated"}
     db.close()
@@ -104,7 +104,22 @@ def test_activation_and_deactivation_use_shared_lock_and_cache(tmp_path):
 def test_manifest_provenance_is_required_for_activation():
     from bke_licensing_agent.licensing.errors import ManifestProvenanceError
     product = Manifest(schemaVersion=1, productId="p", displayName="P", version="1.0.0", entryPoint="app", updateChannel="stable", minimumAgentVersion="1.0.0", platform="linux", architecture="x64")
-    with pytest.raises(ManifestProvenanceError): LicensingService(None, None, None, None).activate(product)
+    with pytest.raises(ManifestProvenanceError): LicensingService(None, None, None, None).activate_legacy(product)
+
+
+def test_activate_uses_platform_lease_path_without_legacy_fallback(monkeypatch):
+    service = LicensingService(None, None, None, None)
+    product = object()
+    expected = object()
+    calls = []
+
+    def platform_activation(received_product, license_key, verifier, repository):
+        calls.append((received_product, license_key, verifier, repository))
+        return expected
+
+    monkeypatch.setattr(service, "activate_platform_lease", platform_activation)
+    assert service.activate(product, "license-key", "verifier", "repository") is expected
+    assert calls == [(product, "license-key", "verifier", "repository")]
 
 
 def test_migration_version_is_idempotent_and_upgradeable(tmp_path):
@@ -196,7 +211,7 @@ class BlockingActivationClient:
 def test_malformed_verification_responses_fail_closed(tmp_path, response):
     client = BlockingActivationClient(); client.verify_activation = lambda request, token: response
     service, db = _service_for_blocking(tmp_path, client)
-    with pytest.raises(ActivationVerificationError): service.activate(_validated_product())
+    with pytest.raises(ActivationVerificationError): service.activate_legacy(_validated_product())
     assert db.connection.execute("SELECT COUNT(*) FROM activation_cache").fetchone()[0] == 0
     db.close()
 
@@ -218,7 +233,7 @@ def test_tampered_or_deleted_cache_never_authorizes_activation(tmp_path):
     db.connection.execute("UPDATE activation_cache SET status='active', activation_id='forged'")
     db.connection.commit()
     db.connection.execute("DELETE FROM activation_cache"); db.connection.commit()
-    service.activate(_validated_product())
+    service.activate_legacy(_validated_product())
     assert client.activation_calls == 1
     assert db.connection.execute("SELECT activation_id FROM activation_cache").fetchone() is not None
     db.close()
@@ -256,7 +271,7 @@ def test_concurrent_activation_deduplicates_and_shares_result(tmp_path):
     client = BlockingActivationClient(); service, db = _service_for_blocking(tmp_path, client)
     service.cache = ThreadSafeCache()
     results = []
-    threads = [threading.Thread(target=lambda: results.append(service.activate(_validated_product()))) for _ in range(2)]
+    threads = [threading.Thread(target=lambda: results.append(service.activate_legacy(_validated_product()))) for _ in range(2)]
     for thread in threads: thread.start()
     assert client.started.wait(timeout=2); client.release.set()
     for thread in threads: thread.join(timeout=2)
@@ -294,14 +309,14 @@ class FailingAudit:
 def test_activation_cache_failure_is_injectable_and_typed(tmp_path):
     client = BlockingActivationClient(); service, db = _service_for_blocking(tmp_path, client)
     service.cache = FailingCache("save")
-    with pytest.raises(ActivationPartialFailureError): service.activate(_validated_product())
+    with pytest.raises(ActivationPartialFailureError): service.activate_legacy(_validated_product())
     db.close()
 
 
 def test_activation_audit_failure_is_injectable_and_typed(tmp_path):
     client = BlockingActivationClient(); service, db = _service_for_blocking(tmp_path, client)
     service.cache = ThreadSafeCache(); service.audit = FailingAudit()
-    with pytest.raises(ActivationPartialFailureError): service.activate(_validated_product())
+    with pytest.raises(ActivationPartialFailureError): service.activate_legacy(_validated_product())
     db.close()
 
 
@@ -316,7 +331,7 @@ def test_deactivation_reconciliation_failure_is_injectable_and_typed(tmp_path):
 def test_activation_failure_propagates_to_waiters(tmp_path):
     client = BlockingActivationClient(failure=RuntimeError("remote failure")); service, db = _service_for_blocking(tmp_path, client)
     errors = []
-    threads = [threading.Thread(target=lambda: _capture(errors, service.activate, _validated_product())) for _ in range(2)]
+    threads = [threading.Thread(target=lambda: _capture(errors, service.activate_legacy, _validated_product())) for _ in range(2)]
     for thread in threads: thread.start()
     assert client.started.wait(timeout=2); client.release.set()
     for thread in threads: thread.join(timeout=2)
@@ -329,7 +344,7 @@ def test_activation_rejects_logout_or_session_replacement(tmp_path, invalidator)
     client = BlockingActivationClient(); service, db = _service_for_blocking(tmp_path, client)
     service.cache = ThreadSafeCache()
     errors = []
-    thread = threading.Thread(target=lambda: _capture(errors, service.activate, _validated_product()))
+    thread = threading.Thread(target=lambda: _capture(errors, service.activate_legacy, _validated_product()))
     thread.start()
     assert client.started.wait(timeout=2)
     service.sessions.generation = 2
@@ -344,7 +359,7 @@ def test_activation_rejects_installation_identity_reset(tmp_path):
     client = BlockingActivationClient(); service, db = _service_for_blocking(tmp_path, client)
     service.cache = ThreadSafeCache()
     errors = []
-    thread = threading.Thread(target=lambda: _capture(errors, service.activate, _validated_product()))
+    thread = threading.Thread(target=lambda: _capture(errors, service.activate_legacy, _validated_product()))
     thread.start()
     assert client.started.wait(timeout=2)
     service.identity.reset()
@@ -358,7 +373,7 @@ def test_newer_deactivation_invalidates_inflight_activation(tmp_path):
     client = BlockingActivationClient(); service, db = _service_for_blocking(tmp_path, client)
     service.cache = ThreadSafeCache()
     errors = []
-    activation = threading.Thread(target=lambda: _capture(errors, service.activate, _validated_product()))
+    activation = threading.Thread(target=lambda: _capture(errors, service.activate_legacy, _validated_product()))
     activation.start()
     assert client.started.wait(timeout=2)
     assert service.deactivate(_validated_product(), "old", "d") is True
@@ -382,7 +397,7 @@ def test_newer_activation_invalidates_inflight_deactivation(tmp_path):
     deactivation.start()
     assert deactivation_started.wait(timeout=2)
     activation_errors = []
-    activation = threading.Thread(target=lambda: _capture(activation_errors, service.activate, _validated_product()))
+    activation = threading.Thread(target=lambda: _capture(activation_errors, service.activate_legacy, _validated_product()))
     activation.start()
     assert client.started.wait(timeout=2)
     client.release.set(); release_deactivation.set()
@@ -401,11 +416,11 @@ def _capture(target, function, *args):
 @pytest.mark.parametrize("status", ["revoked", "expired", "suspended", "inactive", "unknown"])
 def test_verification_non_active_states_fail_closed(tmp_path, status):
     client = BlockingActivationClient(verification_status=status, verification_valid=False); service, db = _service_for_blocking(tmp_path, client)
-    with pytest.raises(Exception): service.activate(_validated_product())
+    with pytest.raises(Exception): service.activate_legacy(_validated_product())
     assert db.connection.execute("SELECT COUNT(*) FROM activation_cache").fetchone()[0] == 0
     db.close()
 
 
 def test_manifest_provenance_direct_object_rejected():
     from bke_licensing_agent.licensing.errors import ManifestProvenanceError
-    with pytest.raises(ManifestProvenanceError): LicensingService(None, None, None, None).activate(Manifest(schemaVersion=1, productId="p", displayName="P", version="1.0.0", entryPoint="app", updateChannel="stable", minimumAgentVersion="1.0.0", platform="linux", architecture="x64"))
+    with pytest.raises(ManifestProvenanceError): LicensingService(None, None, None, None).activate_legacy(Manifest(schemaVersion=1, productId="p", displayName="P", version="1.0.0", entryPoint="app", updateChannel="stable", minimumAgentVersion="1.0.0", platform="linux", architecture="x64"))

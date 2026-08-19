@@ -99,7 +99,14 @@ class LicensingService:
             raise ActivationDeniedError("Verified lease did not authorize the active binding")
         return decision
 
-    def activate(self, product: Manifest, device_name: str | None = None) -> ActivationState:
+    def activate(self, product: Manifest, license_key: str,
+                 verifier: LeaseVerifier,
+                 repository: VerifiedLicenseRepository) -> AuthorizationDecision:
+        """Normal production activation; no legacy fallback is permitted."""
+        return self.activate_platform_lease(product, license_key, verifier, repository)
+
+    def activate_legacy(self, product: Manifest, device_name: str | None = None) -> ActivationState:
+        """Deprecated compatibility orchestration; never used for platform v2 activation."""
         if not product.is_validated:
             raise ManifestProvenanceError("Activation requires a manifest validated by the manifest pipeline")
         self.sessions.current_session()
