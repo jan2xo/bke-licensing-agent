@@ -83,7 +83,7 @@ class LicensingPlatformClient:
 
     def activate_platform_lease(self, request: PlatformLeaseActivationRequest) -> PlatformLeaseResponse:
         """Authorize one activation through the Digital Solutions signed-lease contract."""
-        return self._request("POST", ACTIVATE, PlatformLeaseResponse, request.model_dump(by_alias=True), idempotent=True, protocol_version="bke.licensing.v2")
+        return self._request("POST", ACTIVATE, PlatformLeaseResponse, request.model_dump(by_alias=True, exclude_none=True), idempotent=True, protocol_version="bke.licensing.v2")
 
     def verify_activation(self, request: ActivationVerificationRequest, access_token: str) -> ActivationVerificationResponse:
         return self._request("POST", VERIFY_ACTIVATION, ActivationVerificationResponse, request.model_dump(), idempotent=False, access_token=access_token)

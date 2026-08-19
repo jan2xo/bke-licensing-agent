@@ -7,7 +7,7 @@ from bke_licensing_agent.local_api import request_authorization
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--agent-url", required=True)
-    parser.add_argument("--product-id", default="bke-agent-integration-test-product")
+    parser.add_argument("--product-id", default="agent-demo-product")
     parser.add_argument("--version", default="1.0.0")
     parser.add_argument("--installation-id", required=True)
     args = parser.parse_args()

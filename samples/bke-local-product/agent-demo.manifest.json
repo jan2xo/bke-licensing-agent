@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "productId": "bke-agent-integration-test-product",
+  "productId": "agent-demo-product",
   "displayName": "BKE Agent Integration Test Product",
   "version": "1.0.0",
   "entryPoint": "sample_product.py",
