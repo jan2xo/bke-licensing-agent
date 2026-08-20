@@ -13,7 +13,7 @@ dependencies = [
   "pydantic>=2.9,<3",
   "keyring>=24.0.0",
   "requests>=2.31,<3",
-    "jsonschema>=4.0,<5"
+    "jsonschema>=4.0,<5",\n  "bke-updater-core @ git+https://github.com/jan2xo/bke-updater-core.git@feat/universal-updater-core"
     , "cryptography>=50,<51"
 ]
 optional-dependencies = { test = ["pytest>=8.0", "types-jsonschema>=4.0"] }
