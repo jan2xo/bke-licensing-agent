@@ -60,5 +60,7 @@ os._exit(0)
 """
     completed=subprocess.run([sys.executable,"-c",script,str(root),str(stage),str(backup),str(root/"agent")],check=False)
     assert completed.returncode==0
+    deadline=time.time()+10
+    while time.time()<deadline and not (root/"started").exists(): time.sleep(0.05)
     assert (root/"agent").exists()
     assert (root/"started").read_text()=="B"
