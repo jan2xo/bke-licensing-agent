@@ -1,10 +1,13 @@
 """Agent-owned orchestration boundary for bke-updater-core.
 
-This module contains no product-specific update logic and accepts no remote
-commands. Network acquisition is bounded and verified before core replacement.
+Network acquisition is bounded and verified before product-neutral core
+replacement. The Agent records a durable envelope around the core transaction
+so restart/recovery code can distinguish pending, committed, and rolled-back
+updates without trusting an in-memory result.
 """
 from __future__ import annotations
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -23,23 +26,51 @@ class UpdateOrchestrator:
     def __init__(self, trusted_keys: dict[str, bytes], state_root: Path):
         self.verifier=PolicyVerifier(trusted_keys)
         self.state=TransactionStore(state_root)
+
     def validate_product(self, manifest: ProductManifest):
         return validate_manifest_paths(manifest.install_root, manifest.executable)
+
     def verify_policy(self, policy: dict, manifest: ProductManifest, last_revision: int|None=None) -> SignedUpdatePolicy:
         return self.verifier.verify(policy, product_id=manifest.product_id, platform=manifest.platform,
             architecture=manifest.architecture, channel=manifest.update_channel, last_revision=last_revision)
+
     def decide(self, manifest: ProductManifest, policy: SignedUpdatePolicy) -> Decision:
         return decide_update(manifest.version, policy.latest_version, policy.minimum_supported_version)
+
     def cache_verified(self, path: Path, policy: SignedUpdatePolicy, verified_at: str) -> None:
         path.parent.mkdir(parents=True,exist_ok=True)
         tmp=path.with_suffix(path.suffix+".tmp")
         tmp.write_text(json.dumps({"policy":policy.raw,"verified_at":verified_at},sort_keys=True))
         tmp.replace(path)
+
     def load_cached(self, path: Path) -> dict|None:
         if not path.exists(): return None
         document=json.loads(path.read_text())
         if not isinstance(document,dict) or set(document)!={"policy","verified_at"}: raise ValueError("invalid cached policy envelope")
         return document
+
+    def _transaction_id(self, manifest: ProductManifest, policy: SignedUpdatePolicy) -> str:
+        value=re.sub(r"[^A-Za-z0-9_.-]", "-", f"{manifest.product_id}-{policy.release_id}-{policy.revision}")
+        return value[:160]
+
+    def _record(self, transaction_id: str, state: TransactionState, **payload) -> None:
+        self.state.write(transaction_id, state, payload)
+
+    def read_transaction(self, transaction_id: str) -> dict:
+        return self.state.read(transaction_id)
+
+    def pending_transactions(self) -> list[dict]:
+        if not self.state.root.exists():
+            return []
+        pending=[]
+        for item in self.state.root.iterdir():
+            if not item.is_dir() or not (item / "state.json").exists():
+                continue
+            record=self.state.read(item.name)
+            if record["state"] not in {TransactionState.COMMITTED.value, TransactionState.ROLLED_BACK.value, TransactionState.FAILED.value}:
+                pending.append(record)
+        return pending
+
     def execute_update(
         self,
         manifest: ProductManifest,
@@ -51,33 +82,32 @@ class UpdateOrchestrator:
         download_url: str|None=None,
         download_destination: Path|None=None,
     ) -> TransactionState:
-        decision = self.decide(manifest, policy)
-        if decision not in {Decision.UPDATE_AVAILABLE, Decision.UPDATE_REQUIRED}:
+        decision=self.decide(manifest,policy)
+        if decision not in {Decision.UPDATE_AVAILABLE,Decision.UPDATE_REQUIRED}:
             return TransactionState.FAILED
-        staged = artifact
+        transaction_id=self._transaction_id(manifest,policy)
+        self._record(transaction_id,TransactionState.CREATED,product_id=manifest.product_id,target_version=policy.latest_version)
+        staged=artifact
         if acquire is not None:
-            staged = acquire(policy.artifact_id, policy.artifact_size, policy.artifact_sha256)
+            self._record(transaction_id,TransactionState.DOWNLOADING,artifact_id=policy.artifact_id)
+            staged=acquire(policy.artifact_id,policy.artifact_size,policy.artifact_sha256)
         elif staged is None and download_url is not None and download_destination is not None:
-            staged = acquire_artifact(
-                download_url, download_destination,
-                expected_size=policy.artifact_size,
-                expected_sha256=policy.artifact_sha256,
-            )
+            self._record(transaction_id,TransactionState.DOWNLOADING,artifact_id=policy.artifact_id)
+            staged=acquire_artifact(download_url,download_destination,expected_size=policy.artifact_size,expected_sha256=policy.artifact_sha256)
         if staged is None:
+            self._record(transaction_id,TransactionState.FAILED,error="missing verified artifact")
             raise ValueError("verified update requires an artifact or bounded acquisition")
         self.validate_product(manifest)
-        plan = UpdatePlan(
-            manifest.product_id, manifest.install_root, manifest.version,
-            policy.latest_version, Path(staged), backup_root,
-            manifest.install_root / manifest.executable,
-            health_check=manifest.health_check,
-            expected_sha256=policy.artifact_sha256,
-            expected_size=policy.artifact_size,
-        )
-        return replace_transaction(plan, health_probe=health_probe)
+        self._record(transaction_id,TransactionState.VERIFIED,artifact=str(staged),artifact_id=policy.artifact_id)
+        plan=UpdatePlan(manifest.product_id,manifest.install_root,manifest.version,policy.latest_version,Path(staged),backup_root,manifest.install_root/manifest.executable,health_check=manifest.health_check,expected_sha256=policy.artifact_sha256,expected_size=policy.artifact_size)
+        result=replace_transaction(plan,health_probe=health_probe)
+        self._record(transaction_id,result,artifact=str(staged),target_version=policy.latest_version)
+        return result
+
+    def execute_self_update(self, manifest: ProductManifest, policy: SignedUpdatePolicy, artifact: Path|None, backup_root: Path, **kwargs) -> TransactionState:
+        return self.execute_update(manifest,policy,artifact,backup_root,**kwargs)
 
     def offline_decision(self, manifest: ProductManifest, cached: dict|None) -> Decision:
         if cached is None: return Decision.UNSUPPORTED
-        policy=cached["policy"]
-        verified=self.verify_policy(policy,manifest)
+        verified=self.verify_policy(cached["policy"],manifest)
         return self.decide(manifest,verified)
