@@ -154,3 +154,5 @@ jobs:
 # Authority fixture follows the persisted commercial plan constraints.
 
 # Authority follows the Digital Solutions signing-registry bootstrap contract.
+
+# Authority signature canonicalization is code-point ordered across repositories.
