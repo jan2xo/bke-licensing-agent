@@ -41,3 +41,22 @@ def test_broken_agent_b_restores_a_and_relaunches(tmp_path):
     result = subprocess.run([str(root / "agent")], check=False)
     assert result.returncode == 0
     assert (root / "started").read_text() == "A"
+
+def test_real_agent_process_exits_before_helper_replacement(tmp_path):
+    import subprocess, sys
+    root, stage, backup = tmp_path/"agent", tmp_path/"stage", tmp_path/"backup"
+    root.mkdir(); stage.mkdir()
+    executable(root/"agent", root/"started", "A")
+    executable(stage/"agent", root/"started", "B")
+    script = """
+import os, subprocess, sys
+subprocess.Popen([sys.executable, "-m", "bke_updater_core.helper.main",
+ "--install-root", sys.argv[1], "--staged-root", sys.argv[2],
+ "--backup-root", sys.argv[3], "--executable", sys.argv[4],
+ "--wait-pid", str(os.getpid())], close_fds=True)
+os._exit(0)
+"""
+    completed=subprocess.run([sys.executable,"-c",script,str(root),str(stage),str(backup),str(root/"agent")],check=False)
+    assert completed.returncode==0
+    assert (root/"agent").exists()
+    assert (root/"started").read_text()=="B"
