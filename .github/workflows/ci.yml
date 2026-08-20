@@ -26,7 +26,8 @@ jobs:
           set -euo pipefail
           if [ -z "${READ_TOKEN:-}" ]; then
             echo "BKE_UPDATER_CORE_READ_TOKEN_PRESENT=false"
-            exit 0
+            echo "Required sibling-repository credential is unavailable; refusing checkout." >&2
+            exit 1
           fi
           echo "BKE_UPDATER_CORE_READ_TOKEN_PRESENT=true"
 
@@ -61,7 +62,7 @@ jobs:
           repository: jan2xo/bke-updater-core
           ref: feat/universal-updater-core
           path: .ci/bke-updater-core
-          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
