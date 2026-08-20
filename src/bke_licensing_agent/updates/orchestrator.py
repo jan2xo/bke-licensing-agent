@@ -1,13 +1,6 @@
-"""Agent-owned orchestration boundary for bke-updater-core.
-
-Network acquisition is bounded and verified before product-neutral core
-replacement. The Agent records a durable envelope around the core transaction
-so restart/recovery code can distinguish pending, committed, and rolled-back
-updates without trusting an in-memory result.
-"""
+"""Agent-owned orchestration boundary for bke-updater-core."""
 from __future__ import annotations
-import json
-import re
+import json, re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -25,12 +18,25 @@ class CachedPolicy:
 class UpdateOrchestrator:
     def __init__(self, trusted_keys: dict[str, bytes], state_root: Path):
         self.verifier=PolicyVerifier(trusted_keys); self.state=TransactionStore(state_root)
+        self._revision_path=state_root / "highest-policy-revision.json"
     def validate_product(self, manifest: ProductManifest): return validate_manifest_paths(manifest.install_root, manifest.executable)
+    def _highest_revision(self) -> int|None:
+        if not self._revision_path.exists(): return None
+        value=json.loads(self._revision_path.read_text()).get("revision")
+        return value if isinstance(value,int) else None
+    def _accept_revision(self, revision:int) -> None:
+        current=self._highest_revision()
+        if current is not None and revision < current: raise ValueError("policy revision rollback")
+        self._revision_path.parent.mkdir(parents=True,exist_ok=True)
+        self._revision_path.write_text(json.dumps({"revision":revision},sort_keys=True))
     def verify_policy(self, policy: dict, manifest: ProductManifest, last_revision: int|None=None) -> SignedUpdatePolicy:
-        return self.verifier.verify(policy,product_id=manifest.product_id,platform=manifest.platform,architecture=manifest.architecture,channel=manifest.update_channel,last_revision=last_revision)
-    def decide(self, manifest: ProductManifest, policy: SignedUpdatePolicy) -> Decision: return decide_update(manifest.version,policy.latest_version,policy.minimum_supported_version)
+        return self.verifier.verify(policy,product_id=manifest.product_id,platform=manifest.platform,architecture=manifest.architecture,channel=manifest.update_channel,last_revision=self._highest_revision() if last_revision is None else last_revision)
+    def decide(self, manifest: ProductManifest, policy: SignedUpdatePolicy) -> Decision:
+        return decide_update(manifest.version,policy.latest_version,policy.minimum_supported_version)
     def cache_verified(self,path:Path,policy:SignedUpdatePolicy,verified_at:str)->None:
-        path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp"); tmp.write_text(json.dumps({"policy":policy.raw,"verified_at":verified_at},sort_keys=True)); tmp.replace(path)
+        self._accept_revision(policy.revision)
+        path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp")
+        tmp.write_text(json.dumps({"policy":policy.raw,"verified_at":verified_at},sort_keys=True)); tmp.replace(path)
     def load_cached(self,path:Path)->dict|None:
         if not path.exists(): return None
         document=json.loads(path.read_text())
@@ -48,7 +54,7 @@ class UpdateOrchestrator:
                 record=self.state.read(item.name)
                 if record["state"] not in {x.value for x in (TransactionState.COMMITTED,TransactionState.ROLLED_BACK,TransactionState.FAILED)}: result.append(record)
         return result
-    def execute_update(self,manifest:ProductManifest,policy:SignedUpdatePolicy,artifact:Path|None,backup_root:Path,acquire:Callable[[str,int,str],Path]|None=None,health_probe=None,download_url:str|None=None,download_destination:Path|None=None)->TransactionState:
+    def execute_update(self,manifest:ProductManifest,policy:SignedUpdatePolicy,artifact:Path|None,backup_root:Path,acquire:Callable[[str,int,str],Path]|None=None,health_probe=None,download_url:str|None=None,download_destination:Path|None=None,allow_loopback_http:bool=False)->TransactionState:
         decision=self.decide(manifest,policy)
         if decision not in {Decision.UPDATE_AVAILABLE,Decision.UPDATE_REQUIRED}: return TransactionState.FAILED
         transaction_id=self._transaction_id(manifest,policy); self._record(transaction_id,TransactionState.CREATED,product_id=manifest.product_id,target_version=policy.latest_version)
@@ -57,7 +63,8 @@ class UpdateOrchestrator:
             if acquire is not None:
                 self._record(transaction_id,TransactionState.DOWNLOADING,artifact_id=policy.artifact_id); staged=acquire(policy.artifact_id,policy.artifact_size,policy.artifact_sha256)
             elif staged is None and download_url is not None and download_destination is not None:
-                self._record(transaction_id,TransactionState.DOWNLOADING,artifact_id=policy.artifact_id); staged=acquire_artifact(download_url,download_destination,expected_size=policy.artifact_size,expected_sha256=policy.artifact_sha256)
+                self._record(transaction_id,TransactionState.DOWNLOADING,artifact_id=policy.artifact_id)
+                staged=acquire_artifact(download_url,download_destination,expected_size=policy.artifact_size,expected_sha256=policy.artifact_sha256,allow_loopback_http=allow_loopback_http)
         except Exception as exc:
             self._record(transaction_id,TransactionState.FAILED,error=str(exc)); raise
         if staged is None:
@@ -69,4 +76,6 @@ class UpdateOrchestrator:
         return self.execute_update(manifest,policy,artifact,backup_root,**kwargs)
     def offline_decision(self,manifest:ProductManifest,cached:dict|None)->Decision:
         if cached is None: return Decision.UNSUPPORTED
-        verified=self.verify_policy(cached["policy"],manifest); return self.decide(manifest,verified)
+        verified=self.verify_policy(cached["policy"],manifest)
+        self._accept_revision(verified.revision)
+        return self.decide(manifest,verified)
