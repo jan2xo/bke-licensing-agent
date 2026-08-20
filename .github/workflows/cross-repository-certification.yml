@@ -123,7 +123,8 @@ jobs:
         env:
           LICENSE_KEY: BKE-CERTIFICATION-UPDATE-2026
         run: |
-          curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check             -H 'content-type: application/json'             --data '{"license_key":"BKE-CERTIFICATION-UPDATE-2026","product_id":"${{ steps.authority.outputs.product_id }}","current_version":"1.0.0","platform":"linux","architecture":"x86_64","channel":"stable"}'             > /tmp/update-response.json
+          PRODUCT_ID=$(python -c 'import json; print(json.load(open("/tmp/authority-seed.json"))["productId"])')
+          curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check             -H 'content-type: application/json'             --data "{\"license_key\":\"BKE-CERTIFICATION-UPDATE-2026\",\"product_id\":\"$PRODUCT_ID\",\"current_version\":\"1.0.0\",\"platform\":\"linux\",\"architecture\":\"x86_64\",\"channel\":\"stable\"}"             > /tmp/update-response.json
           python - <<'PY'
           import json, pathlib, requests
           response=json.loads(pathlib.Path("/tmp/update-response.json").read_text())
