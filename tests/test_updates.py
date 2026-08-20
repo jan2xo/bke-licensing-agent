@@ -67,7 +67,6 @@ def test_policy_tampering_unknown_key_and_stale_revision_fail_closed(manifest: P
     private_key = Ed25519PrivateKey.generate()
     agent = UpdateOrchestrator({"test-key": private_key.public_key().public_bytes_raw()}, tmp_path / "state")
     policy = _policy(private_key)
-    agent.verify_policy(policy, product_id=manifest.product_id) if False else None
     policy["latest_version"] = "9.9.9"
     with pytest.raises(ValueError):
         agent.verify_policy(policy, manifest)
