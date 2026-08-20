@@ -73,9 +73,17 @@ jobs:
       S3_FORCE_PATH_STYLE: "true"
     steps:
       - uses: actions/checkout@v4
-        with: { repository: jan2xo/bke-digital-solutions, ref: feat/universal-updater-integration, path: digital-solutions, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}}
+        with:
+          repository: jan2xo/bke-digital-solutions
+          ref: feat/universal-updater-integration
+          path: digital-solutions
+          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - uses: actions/checkout@v4
-        with: { repository: jan2xo/bke-updater-core, ref: e379224a3c5cca6abfceff74ae7c205060f5b27a, path: updater-core, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}}
+        with:
+          repository: jan2xo/bke-updater-core
+          ref: e379224a3c5cca6abfceff74ae7c205060f5b27a
+          path: updater-core
+          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - uses: actions/checkout@v4
         with: { path: licensing-agent }
       - uses: actions/setup-node@v4
