@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jan2xo/bke-updater-core
-          ref: feat/universal-updater-core
+          ref: 80f7e5e3ea01e74abd4ec27fe0fb008b99246fca
           path: .ci/bke-updater-core
           token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - name: Install package and test dependencies
