@@ -49,10 +49,6 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd "pg_isready -U bke" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-          MINIO_ROOT_USER: bke
-          MINIO_ROOT_PASSWORD: bke-secret
-        options: --health-cmd "curl -f http://localhost:9000/minio/health/live" --health-interval 5s --health-timeout 5s --health-retries 20
-    env:
       NODE_ENV: test
       APP_URL: http://127.0.0.1:3000
       DATABASE_URL: postgresql://bke:bke@127.0.0.1:5432/bke_test
@@ -122,8 +118,8 @@ jobs:
         run: |
           npm run build
           npm start > /tmp/digital-solutions.log 2>&1 &
-          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/health >/dev/null && break; sleep 2; done
-          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null && break; sleep 2; done
+          curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null
       - name: Call real update authority and redeem grant
         env:
           LICENSE_KEY: BKE-CERTIFICATION-UPDATE-2026
