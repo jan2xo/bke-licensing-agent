@@ -124,9 +124,7 @@ jobs:
           python -m pip install -e . --no-deps -q
           python -m pip install "requests>=2.31,<3" "cryptography>=50,<51" "pydantic>=2.9,<3" "jsonschema>=4.0,<5" "typer>=0.10.0" "keyring>=24.0.0" "packaging>=24,<26" -q
           PRODUCT_ID=$(python -c 'import json; print(json.load(open("/tmp/authority-seed.json"))["productId"])')
-          status=$(curl -sS -o /tmp/update-response.json -w "%{http_code}" -X POST http://127.0.0.1:3000/api/agent/updates/check -H 'content-type: application/json' --data "{\"license_key\":\"BKE-CERTIFICATION-UPDATE-2026\",\"product_id\":\"$PRODUCT_ID\",\"current_version\":\"1.0.0\",\"platform\":\"linux\",\"architecture\":\"x86_64\",\"channel\":\"stable\"}")
-          echo "authority_http_status=$status"
-          if [ "$status" != "200" ]; then python -c 'import json; print({"authority_error": json.load(open("/tmp/update-response.json")).get("error", "unknown")})'; exit 1; fi
+          curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check -H 'content-type: application/json' --data "{\"license_key\":\"BKE-CERTIFICATION-UPDATE-2026\",\"product_id\":\"$PRODUCT_ID\",\"current_version\":\"1.0.0\",\"platform\":\"linux\",\"architecture\":\"x86_64\",\"channel\":\"stable\"}" > /tmp/update-response.json
           python - <<'PY'
           import json, pathlib, requests
           r=json.loads(pathlib.Path("/tmp/update-response.json").read_text())
