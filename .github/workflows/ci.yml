@@ -19,11 +19,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Check out pinned updater core branch
+      - name: Check out pinned updater core
         uses: actions/checkout@v4
         with:
           repository: jan2xo/bke-updater-core
-          ref: 80f7e5e3ea01e74abd4ec27fe0fb008b99246fca
+          ref: e379224a3c5cca6abfceff74ae7c205060f5b27a
           path: .ci/bke-updater-core
           token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - name: Install package and test dependencies
