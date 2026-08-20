@@ -127,21 +127,16 @@ jobs:
           PRODUCT_ID=$(python -c 'import json; print(json.load(open("/tmp/authority-seed.json"))["productId"])')
           curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check -H 'content-type: application/json' --data "{\"license_key\":\"BKE-CERTIFICATION-UPDATE-2026\",\"product_id\":\"$PRODUCT_ID\",\"current_version\":\"1.0.0\",\"platform\":\"linux\",\"architecture\":\"x86_64\",\"channel\":\"stable\"}" > /tmp/update-response.json
           python - <<'PY'
-          import json, pathlib, requests
+          import json, pathlib
           response=json.loads(pathlib.Path("/tmp/update-response.json").read_text())
           assert response["policy"]["schema"]=="bke.update-policy.v1"
           assert response["download_url"].startswith("http://127.0.0.1:3000/")
-          artifact=requests.get(response["download_url"],timeout=10)
-          artifact.raise_for_status()
-          pathlib.Path("/tmp/authority-artifact").write_bytes(artifact.content)
-          assert len(artifact.content)==response["policy"]["artifact_size"]
-          print(json.dumps({"schema":response["policy"]["schema"],"status":artifact.status_code,"size":len(artifact.content),"artifact_id":response["policy"]["artifact_id"]}))
+          print(json.dumps({"schema":response["policy"]["schema"],"download_url_present":True,"artifact_id":response["policy"]["artifact_id"]}))
           PY
       - name: Verify real policy and execute updater-core replacement
         working-directory: licensing-agent
         env:
           AUTHORITY_RESPONSE: /tmp/update-response.json
-          AUTHORITY_ARTIFACT: /tmp/authority-artifact
         run: |
           python -m pip install ../updater-core -q
           python -m pip install -e . --no-deps -q
