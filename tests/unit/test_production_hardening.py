@@ -4,7 +4,7 @@ from logging.handlers import RotatingFileHandler
 
 from bke_licensing_agent.production import DiagnosticsService, HealthState, ShutdownCoordinator, StartupCoordinator, StartupFailure, RedactingFilter, StartupValidator
 from bke_licensing_agent.production.runtime import HealthReport
-from test_production import values
+from tests.test_production import values
 from bke_licensing_agent.production import ProductionConfig
 
 
