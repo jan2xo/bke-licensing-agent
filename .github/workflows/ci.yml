@@ -115,8 +115,8 @@ jobs:
         run: |
           npm run build
           npm start > /tmp/digital-solutions.log 2>&1 &
-          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/health >/dev/null && break; sleep 2; done
-          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null && break; sleep 2; done
+          curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null
       - name: Execute real authority to Agent to core lifecycle
         working-directory: .
         run: |
