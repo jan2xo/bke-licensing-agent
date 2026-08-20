@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from bke_updater_core import PolicyVerifier, decide_update
-from bke_updater_core.models import Decision, ProductManifest, SignedUpdatePolicy
+from bke_updater_core.models import Decision, ProductManifest, SignedUpdatePolicy, UpdatePlan, TransactionState
+from bke_updater_core import replace_transaction
 from bke_updater_core.paths import validate_manifest_paths
 from bke_updater_core.state import TransactionStore
 
@@ -39,6 +40,28 @@ class UpdateOrchestrator:
         document=json.loads(path.read_text())
         if not isinstance(document,dict) or set(document)!={"policy","verified_at"}: raise ValueError("invalid cached policy envelope")
         return document
+    def execute_update(self, manifest: ProductManifest, policy: SignedUpdatePolicy, artifact: Path, backup_root: Path, acquire=None, health_probe=None) -> TransactionState:
+        decision = self.decide(manifest, policy)
+        if decision not in {Decision.UPDATE_AVAILABLE, Decision.UPDATE_REQUIRED}:
+            return TransactionState.FAILED
+        staged = artifact
+        if acquire is not None:
+            staged = acquire(policy.artifact_id, policy.artifact_size, policy.artifact_sha256)
+        self.validate_product(manifest)
+        plan = UpdatePlan(
+            manifest.product_id,
+            manifest.install_root,
+            manifest.version,
+            policy.latest_version,
+            Path(staged),
+            backup_root,
+            manifest.install_root / manifest.executable,
+            health_check=manifest.health_check,
+            expected_sha256=policy.artifact_sha256,
+            expected_size=policy.artifact_size,
+        )
+        return replace_transaction(plan, health_probe=health_probe)
+
     def offline_decision(self, manifest: ProductManifest, cached: dict|None) -> Decision:
         if cached is None: return Decision.UNSUPPORTED
         policy=cached["policy"]
