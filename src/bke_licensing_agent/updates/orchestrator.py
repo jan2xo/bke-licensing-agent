@@ -1,6 +1,6 @@
 """Agent-owned orchestration boundary for bke-updater-core."""
 from __future__ import annotations
-import json, re
+import json, re, os, shutil, subprocess, sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -61,7 +61,28 @@ class UpdateOrchestrator:
         self.validate_product(manifest); self._record(transaction_id,TransactionState.VERIFIED,artifact=str(staged),artifact_id=policy.artifact_id)
         plan=UpdatePlan(manifest.product_id,manifest.install_root,manifest.version,policy.latest_version,Path(staged),backup_root,manifest.install_root/manifest.executable,health_check=manifest.health_check,expected_sha256=policy.artifact_sha256,expected_size=policy.artifact_size)
         result=replace_transaction(plan,health_probe=health_probe); self._record(transaction_id,result,artifact=str(staged),target_version=policy.latest_version); return result
-    def execute_self_update(self,manifest:ProductManifest,policy:SignedUpdatePolicy,artifact:Path|None,backup_root:Path,**kwargs)->TransactionState: return self.execute_update(manifest,policy,artifact,backup_root,**kwargs)
+    def execute_self_update(self,manifest:ProductManifest,policy:SignedUpdatePolicy,artifact:Path|None,backup_root:Path,**kwargs)->TransactionState:
+        """Hand self replacement to the installed external helper; never replace in-process."""
+        if artifact is None: raise ValueError("self-update requires a verified artifact")
+        decision=self.decide(manifest,policy)
+        if decision not in {Decision.UPDATE_AVAILABLE,Decision.UPDATE_REQUIRED}: return TransactionState.FAILED
+        self.validate_product(manifest)
+        transaction_id=self._transaction_id(manifest,policy)
+        self._record(transaction_id,TransactionState.CREATED,product_id=manifest.product_id,target_version=policy.latest_version,self_update=True)
+        stage_root=manifest.install_root.parent / (".bke-self-update-"+transaction_id)
+        stage_root.mkdir(parents=True,exist_ok=True)
+        relative=Path(manifest.executable)
+        staged_executable=stage_root/relative
+        staged_executable.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(artifact,staged_executable); os.chmod(staged_executable,0o755)
+        self._record(transaction_id,TransactionState.VERIFIED,artifact=str(staged_executable),self_update=True)
+        command=[sys.executable,"-m","bke_updater_core.helper.main","--install-root",str(manifest.install_root),"--staged-root",str(stage_root),"--backup-root",str(backup_root),"--executable",str(manifest.install_root/relative),"--wait-pid",str(os.getpid())]
+        launcher=kwargs.pop("launch_helper",subprocess.Popen)
+        launcher(command,close_fds=True)
+        self._record(transaction_id,TransactionState.WAITING_FOR_EXIT,self_update=True,helper="bke_updater_core.helper.main")
+        exit_process=kwargs.pop("exit_process",os._exit)
+        exit_process(0)
+        return TransactionState.WAITING_FOR_EXIT
     def offline_decision(self,manifest:ProductManifest,cached:dict|None)->Decision:
         if cached is None: return Decision.UNSUPPORTED
         current=self._highest_revision()
