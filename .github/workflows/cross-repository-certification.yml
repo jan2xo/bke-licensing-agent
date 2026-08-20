@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17.5-alpine
         env: { POSTGRES_USER: bke, POSTGRES_PASSWORD: bke, POSTGRES_DB: bke_test }
         ports: ["5432:5432"]
         options: --health-cmd "pg_isready -U bke" --health-interval 5s --health-timeout 5s --health-retries 10
@@ -82,8 +82,8 @@ jobs:
         with: { path: licensing-agent }
       - name: Start disposable object storage
         run: |
-          docker run -d --name bke-cert-minio -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=bke -e MINIO_ROOT_PASSWORD=bke-secret minio/minio:latest server /data
-          docker run -d --name bke-cert-redis -p 6379:6379 redis:7-alpine
+          docker run -d --name bke-cert-minio -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=bke -e MINIO_ROOT_PASSWORD=bke-secret minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          docker run -d --name bke-cert-redis -p 6379:6379 redis:7.4.2-alpine
           for attempt in $(seq 1 30); do docker exec bke-cert-redis redis-cli ping >/dev/null 2>&1 && break; sleep 2; done
           docker exec bke-cert-redis redis-cli ping
           for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null && break; sleep 2; done
