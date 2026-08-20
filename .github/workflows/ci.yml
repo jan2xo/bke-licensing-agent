@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jan2xo/bke-updater-core
-          ref: 49e45ad8e61b480b191d026025cb11685d964eca
+          ref: 56878d76b1cf2e14068c772414bb31b22100c2fd
           path: .ci/bke-updater-core
           token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - name: Install package and test dependencies
@@ -79,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: jan2xo/bke-updater-core
-          ref: 49e45ad8e61b480b191d026025cb11685d964eca
+          ref: 56878d76b1cf2e14068c772414bb31b22100c2fd
           path: updater-core
           token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - uses: actions/setup-node@v4
