@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: jan2xo/bke-updater-core
-          ref: c035fd3db8cb86acdb6dda5cc86bfd0903e49996
+          ref: ddf0b56ecca012b63463012673edb5d9a08c3f0a
           path: .ci/bke-updater-core
           token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - uses: actions/checkout@v4
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: jan2xo/bke-updater-core
-          ref: c035fd3db8cb86acdb6dda5cc86bfd0903e49996
+          ref: ddf0b56ecca012b63463012673edb5d9a08c3f0a
           path: updater-core
           token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - uses: actions/checkout@v4
