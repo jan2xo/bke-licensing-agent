@@ -148,3 +148,5 @@ jobs:
           assert subprocess.run([str(root/"product.sh")],capture_output=True,text=True).stdout.strip()=="authority-product-v2"
           print({"policy_verified":True,"transaction":result.value,"product":"authority-product-v2"})
           PY
+
+# Authority fixture follows the persisted commercial plan constraints.
