@@ -27,16 +27,126 @@ jobs:
           path: .ci/bke-digital-solutions
           token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+        with: { python-version: "3.12" }
       - name: Install pinned updater components
         run: |
           python -m pip install --upgrade pip
           python -m pip install .ci/bke-updater-core
           python -m pip install -e . --no-deps
           python -m pip install "pytest>=8.0" "cryptography>=50,<51" "pydantic>=2.9,<3" "requests>=2.31,<3" "jsonschema>=4.0,<5" "typer>=0.10.0" "keyring>=24.0.0"
-      - name: Verify sibling sources and run executable certification
+      - name: Run executable certification
         run: |
           test -f .ci/bke-updater-core/pyproject.toml
           test -f .ci/bke-digital-solutions/package.json
           python -m pytest -q tests/integration/test_product_lifecycle.py tests/integration/test_agent_self_update.py tests/integration/test_persisted_self_update.py tests/unit/test_acquisition.py
+
+  digital-solutions-authority:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: bke, POSTGRES_PASSWORD: bke, POSTGRES_DB: bke_test }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U bke" --health-interval 5s --health-timeout 5s --health-retries 10
+      minio:
+        image: minio/minio:latest
+        ports: ["9000:9000", "9001:9001"]
+        env:
+          MINIO_ROOT_USER: bke
+          MINIO_ROOT_PASSWORD: bke-secret
+        options: --health-cmd "curl -f http://localhost:9000/minio/health/live" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      NODE_ENV: test
+      APP_URL: http://127.0.0.1:3000
+      DATABASE_URL: postgresql://bke:bke@127.0.0.1:5432/bke_test
+      SESSION_SECRET: ci-session-secret-with-at-least-32-chars
+      LICENSE_PEPPER: ci-license-pepper-with-at-least-32-chars
+      LICENSE_SIGNING_KEY_ID: ci-ed25519-v1
+      PAYMENT_PROVIDER: mock
+      EMAIL_FROM: test@example.com
+      CRON_SECRET: ci-cron-secret-with-at-least-32-chars
+      S3_BUCKET: test
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_ID: bke
+      S3_SECRET_ACCESS_KEY: bke-secret
+      S3_FORCE_PATH_STYLE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: jan2xo/bke-digital-solutions, ref: feat/universal-updater-integration, path: digital-solutions, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+      - uses: actions/checkout@v4
+        with: { repository: jan2xo/bke-updater-core, ref: e379224a3c5cca6abfceff74ae7c205060f5b27a, path: updater-core, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+      - uses: actions/checkout@v4
+        with: { path: licensing-agent }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache-dependency-path: digital-solutions/package-lock.json }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Generate ephemeral signing key
+        working-directory: digital-solutions
+        run: |
+          openssl genpkey -algorithm ED25519 -out /tmp/authority-private.pem 2>/dev/null
+          openssl pkey -in /tmp/authority-private.pem -pubout -out /tmp/authority-public.pem 2>/dev/null
+          {
+            echo 'LICENSE_SIGNING_PRIVATE_KEY<<BKE_AUTH_EOF'
+            cat /tmp/authority-private.pem
+            echo 'BKE_AUTH_EOF'
+            echo 'LICENSE_SIGNING_PUBLIC_KEY<<BKE_AUTH_EOF'
+            cat /tmp/authority-public.pem
+            echo 'BKE_AUTH_EOF'
+          } >> "$GITHUB_ENV"
+      - name: Install and prepare Digital Solutions
+        working-directory: digital-solutions
+        run: |
+          npm ci
+          npm run db:generate
+          npm run db:deploy
+          npm run db:seed
+          npx tsx scripts/certify-update-authority.ts
+      - name: Start real Digital Solutions server
+        working-directory: digital-solutions
+        run: |
+          npm run build
+          npm start > /tmp/digital-solutions.log 2>&1 &
+          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/health >/dev/null && break; sleep 2; done
+          curl -fsS http://127.0.0.1:3000/api/health >/dev/null
+      - name: Call real update authority and redeem grant
+        env:
+          LICENSE_KEY: BKE-CERTIFICATION-UPDATE-2026
+        run: |
+          curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check             -H 'content-type: application/json'             --data '{"license_key":"BKE-CERTIFICATION-UPDATE-2026","product_id":"certification-product","current_version":"1.0.0","platform":"linux","architecture":"x86_64","channel":"stable"}'             > /tmp/update-response.json
+          python - <<'PY'
+          import json, pathlib, requests
+          response=json.loads(pathlib.Path("/tmp/update-response.json").read_text())
+          assert response["policy"]["schema"]=="bke.update-policy.v1"
+          assert response["download_url"].startswith("http://127.0.0.1:3000/")
+          artifact=requests.get(response["download_url"],timeout=10)
+          artifact.raise_for_status()
+          pathlib.Path("/tmp/authority-artifact").write_bytes(artifact.content)
+          assert len(artifact.content)==response["policy"]["artifact_size"]
+          print(json.dumps({"schema":response["policy"]["schema"],"status":artifact.status_code,"size":len(artifact.content),"artifact_id":response["policy"]["artifact_id"]}))
+          PY
+      - name: Verify real policy and execute updater-core replacement
+        working-directory: licensing-agent
+        env:
+          AUTHORITY_RESPONSE: /tmp/update-response.json
+          AUTHORITY_ARTIFACT: /tmp/authority-artifact
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess
+          from bke_updater_core.models import ProductManifest, TransactionState
+          from bke_licensing_agent.updates.orchestrator import UpdateOrchestrator
+          response=json.loads(pathlib.Path("/tmp/update-response.json").read_text())
+          install=pathlib.Path("/tmp/authority-install"); install.mkdir()
+          current=install/"product.sh"; current.write_text("#!/usr/bin/env sh\necho authority-product-v1\n"); current.chmod(0o755)
+          policy=response["policy"]
+          manifest=ProductManifest(policy["product_id"],"1.0.0","linux","x86_64","product.sh",install)
+          from bke_updater_core import PolicyVerifier
+          key=pathlib.Path("/tmp/authority-public.pem").read_bytes()
+          verifier=PolicyVerifier({"ci-ed25519-v1":key})
+          verified=verifier.verify(policy,product_id=manifest.product_id,platform="linux",architecture="x86_64",channel="stable")
+          result=UpdateOrchestrator({"ci-ed25519-v1":key},pathlib.Path("/tmp/authority-state")).execute_update(manifest,verified,pathlib.Path("/tmp/authority-artifact"),pathlib.Path("/tmp/authority-backup"))
+          assert result is TransactionState.COMMITTED
+          assert subprocess.run([str(install/"product.sh")],capture_output=True,text=True).stdout.strip()=="authority-product-v2"
+          print(json.dumps({"policy_verified":True,"transaction":result.value,"product":"authority-product-v2"}))
+          PY
