@@ -1,18 +1,18 @@
 """Agent-owned orchestration boundary for bke-updater-core.
 
 This module contains no product-specific update logic and accepts no remote
-commands. Network policy acquisition is deliberately injected by the Agent.
+commands. Network acquisition is bounded and verified before core replacement.
 """
 from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from bke_updater_core import PolicyVerifier, decide_update
+from bke_updater_core import PolicyVerifier, decide_update, replace_transaction
 from bke_updater_core.models import Decision, ProductManifest, SignedUpdatePolicy, UpdatePlan, TransactionState
-from bke_updater_core import replace_transaction
 from bke_updater_core.paths import validate_manifest_paths
 from bke_updater_core.state import TransactionStore
+from .acquisition import acquire_artifact
 
 @dataclass(frozen=True)
 class CachedPolicy:
@@ -40,21 +40,35 @@ class UpdateOrchestrator:
         document=json.loads(path.read_text())
         if not isinstance(document,dict) or set(document)!={"policy","verified_at"}: raise ValueError("invalid cached policy envelope")
         return document
-    def execute_update(self, manifest: ProductManifest, policy: SignedUpdatePolicy, artifact: Path, backup_root: Path, acquire=None, health_probe=None) -> TransactionState:
+    def execute_update(
+        self,
+        manifest: ProductManifest,
+        policy: SignedUpdatePolicy,
+        artifact: Path|None,
+        backup_root: Path,
+        acquire: Callable[[str,int,str],Path]|None=None,
+        health_probe=None,
+        download_url: str|None=None,
+        download_destination: Path|None=None,
+    ) -> TransactionState:
         decision = self.decide(manifest, policy)
         if decision not in {Decision.UPDATE_AVAILABLE, Decision.UPDATE_REQUIRED}:
             return TransactionState.FAILED
         staged = artifact
         if acquire is not None:
             staged = acquire(policy.artifact_id, policy.artifact_size, policy.artifact_sha256)
+        elif staged is None and download_url is not None and download_destination is not None:
+            staged = acquire_artifact(
+                download_url, download_destination,
+                expected_size=policy.artifact_size,
+                expected_sha256=policy.artifact_sha256,
+            )
+        if staged is None:
+            raise ValueError("verified update requires an artifact or bounded acquisition")
         self.validate_product(manifest)
         plan = UpdatePlan(
-            manifest.product_id,
-            manifest.install_root,
-            manifest.version,
-            policy.latest_version,
-            Path(staged),
-            backup_root,
+            manifest.product_id, manifest.install_root, manifest.version,
+            policy.latest_version, Path(staged), backup_root,
             manifest.install_root / manifest.executable,
             health_check=manifest.health_check,
             expected_sha256=policy.artifact_sha256,
