@@ -138,11 +138,12 @@ jobs:
           PY
           python - <<'PY'
           import json, pathlib, subprocess
+          from cryptography.hazmat.primitives import serialization
           from bke_updater_core import PolicyVerifier
           from bke_updater_core.models import ProductManifest, TransactionState
           from bke_licensing_agent.updates.orchestrator import UpdateOrchestrator
           r=json.loads(pathlib.Path("/tmp/update-response.json").read_text()); p=r["policy"]
-          key=pathlib.Path("/tmp/authority-public.pem").read_bytes()
+          key=serialization.load_pem_public_key(pathlib.Path("/tmp/authority-public.pem").read_bytes()).public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
           verified=PolicyVerifier({"ci-ed25519-v1":key}).verify(p,product_id=p["product_id"],platform="linux",architecture="x86_64",channel="stable")
           root=pathlib.Path("/tmp/authority-install"); root.mkdir(); old=root/"product.sh"; old.write_text("#!/usr/bin/env sh\necho authority-product-v1\n"); old.chmod(0o755)
           result=UpdateOrchestrator({"ci-ed25519-v1":key},pathlib.Path("/tmp/authority-state")).execute_update(ProductManifest(p["product_id"],"1.0.0","linux","x86_64","product.sh",root),verified,pathlib.Path("/tmp/authority-artifact"),pathlib.Path("/tmp/authority-backup"))
