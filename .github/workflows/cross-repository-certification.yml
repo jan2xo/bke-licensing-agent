@@ -164,3 +164,5 @@ jobs:
           assert subprocess.run([str(install/"product.sh")],capture_output=True,text=True).stdout.strip()=="authority-product-v2"
           print(json.dumps({"policy_verified":True,"transaction":result.value,"product":"authority-product-v2"}))
           PY
+
+# Authority runtime certification uses an explicit disposable MinIO process command.
