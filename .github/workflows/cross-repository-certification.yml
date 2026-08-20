@@ -39,4 +39,4 @@ jobs:
         run: |
           test -f .ci/bke-updater-core/pyproject.toml
           test -f .ci/bke-digital-solutions/package.json
-          python -m pytest -q tests/integration/test_product_lifecycle.py tests/integration/test_agent_self_update.py tests/unit/test_acquisition.py
+          python -m pytest -q tests/integration/test_product_lifecycle.py tests/integration/test_agent_self_update.py tests/integration/test_persisted_self_update.py tests/unit/test_acquisition.py
