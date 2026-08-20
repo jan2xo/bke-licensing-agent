@@ -6,15 +6,15 @@ Final certification-world evidence, 2026-08-20.
 
 Agent certification consumes updater-core commit:
 
-`54cdae7b664ef620cfc715cd9e63acd000ab889f`
+`c035fd3db8cb86acdb6dda5cc86bfd0903e49996`
 
-All Agent CI and cross-repository workflow checkout references use this SHA.
+All Agent CI and cross-repository workflow checkout references use this SHA. The obsolete top-level helper package was removed; tests exercise the packaged helper.
 
 ## Executed results
 
-- Updater Core CI: PASS — run 32371017853.
-- Licensing Agent CI: PASS — run 32371420135.
-- Cross-repository certification: PASS — run 32371420186.
+- Updater Core CI: PASS — run 32373726202.
+- Licensing Agent CI: PASS — run 32373928724.
+- Cross-repository certification: PASS — run 32373928714.
 - Digital Solutions authority HTTP lifecycle: PASS.
 - Executable updater certification: PASS.
 - Real broken-Agent external-helper rollback: PASS.
