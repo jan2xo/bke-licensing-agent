@@ -14,7 +14,7 @@ dependencies = [
   "keyring>=24.0.0",
   "requests>=2.31,<3",
   "jsonschema>=4.0,<5",
-  "bke-updater-core @ git+https://github.com/jan2xo/bke-updater-core.git@da3f198a75777f760c8e881c7c0df51fd5518e49",
+  "bke-updater-core @ git+https://github.com/jan2xo/bke-updater-core.git@5f605628d3c9264dfd4e998f20c903b0a08e4940",
   "cryptography>=50,<51",
 ]
 optional-dependencies = { test = ["pytest>=8.0", "types-jsonschema>=4.0"] }
