@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+      BKE_TEST_SIGNING_KEY_ID: ci-ed25519-v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Configure authenticated private dependency fetch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[test]"
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Validate package import and metadata
+        run: python -c "import bke_licensing_agent, bke_updater_core; print(bke_licensing_agent.__name__, bke_updater_core.__name__)"
+      - name: Build wheel
+        run: python -m pip install build && python -m build --wheel
+      - name: Check diff and repository hygiene
+        run: git diff --check
