@@ -97,14 +97,7 @@ jobs:
         run: |
           openssl genpkey -algorithm ED25519 -out /tmp/authority-private.pem 2>/dev/null
           openssl pkey -in /tmp/authority-private.pem -pubout -out /tmp/authority-public.pem 2>/dev/null
-          {
-            echo 'LICENSE_SIGNING_PRIVATE_KEY<<BKE_AUTH_EOF'
-            cat /tmp/authority-private.pem
-            echo 'BKE_AUTH_EOF'
-            echo 'LICENSE_SIGNING_PUBLIC_KEY<<BKE_AUTH_EOF'
-            cat /tmp/authority-public.pem
-            echo 'BKE_AUTH_EOF'
-          } >> "$GITHUB_ENV"
+          chmod 600 /tmp/authority-private.pem /tmp/authority-public.pem
       - name: Install and prepare Digital Solutions
         working-directory: digital-solutions
         run: |
@@ -121,6 +114,7 @@ jobs:
         working-directory: digital-solutions
         run: |
           npm run build
+          export LICENSE_SIGNING_PRIVATE_KEY="$(cat /tmp/authority-private.pem)"
           npm start > /tmp/digital-solutions.log 2>&1 &
           for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null && break; sleep 2; done
           curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null
