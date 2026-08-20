@@ -1,0 +1,1 @@
+{"schema":"bke.product.v1","product_id":"mock-product-b","version":"1.0.0","platform":"windows","architecture":"x64","executable":"MockProductB.exe","install_root":".","update_channel":"stable","health_check":"process-startup"}
