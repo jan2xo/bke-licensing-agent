@@ -76,7 +76,7 @@ class UpdateOrchestrator:
         staged_executable.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(artifact,staged_executable); os.chmod(staged_executable,0o755)
         self._record(transaction_id,TransactionState.VERIFIED,artifact=str(staged_executable),self_update=True)
-        command=[sys.executable,"-m","bke_updater_core.helper.main","--install-root",str(manifest.install_root),"--staged-root",str(stage_root),"--backup-root",str(backup_root),"--executable",str(manifest.install_root/relative),"--wait-pid",str(os.getpid())]
+        command=[sys.executable,"-m","bke_updater_core.helper.main","--install-root",str(manifest.install_root),"--staged-root",str(stage_root),"--backup-root",str(backup_root),"--executable",str(manifest.install_root/relative),"--wait-pid",str(os.getpid()),"--transaction-root",str(self.state.root),"--transaction-id",transaction_id]
         launcher=kwargs.pop("launch_helper",subprocess.Popen)
         launcher(command,close_fds=True)
         self._record(transaction_id,TransactionState.WAITING_FOR_EXIT,self_update=True,helper="bke_updater_core.helper.main")
