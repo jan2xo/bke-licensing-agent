@@ -19,6 +19,42 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Diagnose updater core read credential
+        env:
+          READ_TOKEN: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${READ_TOKEN:-}" ]; then
+            echo "BKE_UPDATER_CORE_READ_TOKEN_PRESENT=false"
+            exit 0
+          fi
+          echo "BKE_UPDATER_CORE_READ_TOKEN_PRESENT=true"
+
+          user_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${READ_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            https://api.github.com/user)"
+          repo_status="$(curl --silent --show-error --output /tmp/bke-updater-core.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${READ_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/jan2xo/bke-updater-core)"
+
+          echo "GITHUB_AUTH_HTTP_STATUS=${user_status}"
+          echo "BKE_UPDATER_CORE_HTTP_STATUS=${repo_status}"
+          if [ "${repo_status}" = "200" ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("/tmp/bke-updater-core.json").read_text())
+          print("BKE_UPDATER_CORE_METADATA=" + json.dumps({
+              "full_name": data.get("full_name"),
+              "private": data.get("private"),
+              "default_branch": data.get("default_branch"),
+              "archived": data.get("archived"),
+          }, sort_keys=True))
+          PY
+          fi
       - name: Check out pinned updater core branch
         uses: actions/checkout@v4
         with:
