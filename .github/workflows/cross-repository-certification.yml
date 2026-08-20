@@ -19,13 +19,13 @@ jobs:
           repository: jan2xo/bke-updater-core
           ref: e379224a3c5cca6abfceff74ae7c205060f5b27a
           path: .ci/bke-updater-core
-          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}}
       - uses: actions/checkout@v4
         with:
           repository: jan2xo/bke-digital-solutions
           ref: feat/universal-updater-integration
           path: .ci/bke-digital-solutions
-          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}}
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Install pinned updater components
@@ -73,9 +73,9 @@ jobs:
       S3_FORCE_PATH_STYLE: "true"
     steps:
       - uses: actions/checkout@v4
-        with: { repository: jan2xo/bke-digital-solutions, ref: feat/universal-updater-integration, path: digital-solutions, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+        with: { repository: jan2xo/bke-digital-solutions, ref: feat/universal-updater-integration, path: digital-solutions, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}}
       - uses: actions/checkout@v4
-        with: { repository: jan2xo/bke-updater-core, ref: e379224a3c5cca6abfceff74ae7c205060f5b27a, path: updater-core, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+        with: { repository: jan2xo/bke-updater-core, ref: e379224a3c5cca6abfceff74ae7c205060f5b27a, path: updater-core, token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}}
       - uses: actions/checkout@v4
         with: { path: licensing-agent }
       - uses: actions/setup-node@v4
@@ -102,7 +102,11 @@ jobs:
           npm run db:generate
           npm run db:deploy
           npm run db:seed
-          npx tsx scripts/certify-update-authority.ts
+          npx tsx scripts/certify-update-authority.ts > /tmp/authority-seed.json
+      - id: authority
+        name: Export authority fixture identity
+        working-directory: digital-solutions
+        run: echo "product_id=$(python -c 'import json; print(json.load(open(\"/tmp/authority-seed.json\"))[\"productId\"])')" >> "$GITHUB_OUTPUT"
       - name: Start real Digital Solutions server
         working-directory: digital-solutions
         run: |
@@ -114,7 +118,7 @@ jobs:
         env:
           LICENSE_KEY: BKE-CERTIFICATION-UPDATE-2026
         run: |
-          curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check             -H 'content-type: application/json'             --data '{"license_key":"BKE-CERTIFICATION-UPDATE-2026","product_id":"certification-product","current_version":"1.0.0","platform":"linux","architecture":"x86_64","channel":"stable"}'             > /tmp/update-response.json
+          curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check             -H 'content-type: application/json'             --data '{"license_key":"BKE-CERTIFICATION-UPDATE-2026","product_id":"${{ steps.authority.outputs.product_id }}","current_version":"1.0.0","platform":"linux","architecture":"x86_64","channel":"stable"}'             > /tmp/update-response.json
           python - <<'PY'
           import json, pathlib, requests
           response=json.loads(pathlib.Path("/tmp/update-response.json").read_text())
