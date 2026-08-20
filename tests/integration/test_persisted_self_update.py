@@ -9,6 +9,7 @@ def executable(path:Path, code:int, pid_file:Path, marker:Path):
         f"from pathlib import Path",
         f"Path({str(pid_file)!r}).write_text(str(os.getpid()))",
         f"Path({str(marker)!r}).write_text('BKE_AGENT_READY')",
+        "print('BKE_AGENT_READY', flush=True)",
     ]
     if code:
         body.append(f"raise SystemExit({code})")
