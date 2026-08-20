@@ -124,7 +124,10 @@ jobs:
           LICENSE_KEY: BKE-CERTIFICATION-UPDATE-2026
         run: |
           PRODUCT_ID=$(python -c 'import json; print(json.load(open("/tmp/authority-seed.json"))["productId"])')
-          curl -fsS -X POST http://127.0.0.1:3000/api/agent/updates/check             -H 'content-type: application/json'             --data "{\"license_key\":\"BKE-CERTIFICATION-UPDATE-2026\",\"product_id\":\"$PRODUCT_ID\",\"current_version\":\"1.0.0\",\"platform\":\"linux\",\"architecture\":\"x86_64\",\"channel\":\"stable\"}"             > /tmp/update-response.json
+          echo "authority_product_id_present=$([ -n "$PRODUCT_ID" ] && echo true || echo false)"
+          status=$(curl -sS -o /tmp/update-response.json -w "%{http_code}" -X POST http://127.0.0.1:3000/api/agent/updates/check -H 'content-type: application/json' --data "{\"license_key\":\"BKE-CERTIFICATION-UPDATE-2026\",\"product_id\":\"$PRODUCT_ID\",\"current_version\":\"1.0.0\",\"platform\":\"linux\",\"architecture\":\"x86_64\",\"channel\":\"stable\"}")
+          echo "authority_http_status=$status"
+          if [ "$status" != "200" ]; then python -c 'import json; print({"authority_error": json.load(open("/tmp/update-response.json")).get("error", "unknown")})'; exit 1; fi
           python - <<'PY'
           import json, pathlib, requests
           response=json.loads(pathlib.Path("/tmp/update-response.json").read_text())
