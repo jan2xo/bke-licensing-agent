@@ -115,6 +115,7 @@ jobs:
         run: |
           npm run build
           export LICENSE_SIGNING_PRIVATE_KEY="$(cat /tmp/authority-private.pem)"
+          export LICENSE_SIGNING_PUBLIC_KEY="$(cat /tmp/authority-public.pem)"
           npm start > /tmp/digital-solutions.log 2>&1 &
           for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null && break; sleep 2; done
           curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null
