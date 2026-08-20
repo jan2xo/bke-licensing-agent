@@ -1,11 +1,8 @@
 import sys, time
 from pathlib import Path
 
-CORE_ROOT = Path(".ci/bke-updater-core").resolve()
-if CORE_ROOT.exists():
-    sys.path.insert(0, str(CORE_ROOT))
-from helper.main import replace_and_launch
-from helper.protocol import HelperPlan
+from bke_updater_core.helper.main import replace_and_launch
+from bke_updater_core.helper.protocol import HelperPlan
 
 def executable(path: Path, marker: Path, version: str, code: int = 0):
     path.write_text(
