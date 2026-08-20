@@ -1,4 +1,4 @@
-import sys
+import sys, time
 from pathlib import Path
 
 CORE_ROOT = Path(".ci/bke-updater-core").resolve()
@@ -45,7 +45,7 @@ def test_broken_agent_b_restores_a_and_relaunches(tmp_path):
     assert (root / "started").read_text() == "A"
 
 def test_real_agent_process_exits_before_helper_replacement(tmp_path):
-    import subprocess, sys, time
+    import subprocess, sys
     root, stage, backup = tmp_path/"agent", tmp_path/"stage", tmp_path/"backup"
     root.mkdir(); stage.mkdir()
     executable(root/"agent", root/"started", "A")
