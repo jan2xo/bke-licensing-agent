@@ -62,7 +62,7 @@ class LicenseCenterController:
             self.state = LicenseCenterState(screen=Screen.STATUS, connected=True, authenticated=True,
                 products=self.state.products, selected_product=self.state.selected_product, status=status,
                 return_to_product=True)
-        except Exception as exc:
+        except Exception:
             self.state = LicenseCenterState(screen=Screen.ERROR, connected=self.state.connected,
                 authenticated=self.state.authenticated, products=self.state.products,
                 selected_product=self.state.selected_product, error="activation_failed")
