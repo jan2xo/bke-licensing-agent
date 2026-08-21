@@ -1,7 +1,9 @@
 from pathlib import Path
 import typer
 
+from .config import get_agent_port
 from .discovery.scanner import scan as discovery_scan
+from .runtime import InstalledAgentRuntime
 from .storage.database import Database
 from .storage.models import DiscoveredProductRecord
 from .manifest.validator import validate_manifest
@@ -58,6 +60,17 @@ def list_cached():
         typer.echo(f"  path: {record.product_root}")
         typer.echo(f"  entryPoint: {record.entry_point_path}")
         typer.echo(f"  discoveredAt: {record.discovered_at}")
+
+
+@app.command()
+def serve(port: int | None = typer.Option(None, "--port", help="Override the canonical loopback authorization port.")):
+    """Run the installed loopback-only authorization service until stopped."""
+    runtime = InstalledAgentRuntime(port=port if port is not None else get_agent_port())
+    typer.echo(f"BKE Licensing Agent listening on http://127.0.0.1:{runtime.port}")
+    try:
+        runtime.serve_forever()
+    finally:
+        runtime.close()
 
 
 @app.callback(invoke_without_command=True)
