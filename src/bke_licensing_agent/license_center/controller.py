@@ -65,7 +65,7 @@ class LicenseCenterController:
         except Exception as exc:
             self.state = LicenseCenterState(screen=Screen.ERROR, connected=self.state.connected,
                 authenticated=self.state.authenticated, products=self.state.products,
-                selected_product=self.state.selected_product, error=str(exc))
+                selected_product=self.state.selected_product, error="activation_failed")
         return self.state
 
     def retry_activation(self) -> LicenseCenterState:

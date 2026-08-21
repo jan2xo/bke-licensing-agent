@@ -24,6 +24,7 @@ from .lease import LeaseVerifier
 from .license_repository import ActiveLicenseBinding, VerifiedLicenseRecord, VerifiedLicenseRepository
 from .authorization import AuthorizationDecision, AuthorizationService
 from ..api.models import PlatformLeaseActivationRequest
+from .diagnostics import ActivationDiagnostic, classify_activation_failure, emit_activation_diagnostic
 
 
 @dataclass
@@ -36,10 +37,12 @@ class _ActivationFlight:
 class LicensingService:
     def __init__(self, client: LicensingPlatformClient, sessions: SessionManager,
                  identity: InstallationIdentity, fingerprint: DeviceFingerprint,
-                 cache=None, agent_version="0.1.0", audit=None):
+                 cache=None, agent_version="0.1.0", audit=None, diagnostic_sink=None):
         self.client, self.sessions = client, sessions
         self.identity, self.fingerprint, self.cache, self.audit = identity, fingerprint, cache, audit
         self.agent_version = agent_version
+        self.diagnostic_sink = diagnostic_sink
+        self.last_activation_diagnostic: ActivationDiagnostic | None = None
         self._condition = threading.Condition()
         self._flights: dict[tuple[str, str, int], _ActivationFlight] = {}
         self._operation_versions: dict[tuple[str, str], int] = {}
@@ -64,42 +67,48 @@ class LicensingService:
             architecture=self.fingerprint.signals.get("architecture"),
             label=None,
         )
-        response = self.client.activate_platform_lease(request)
-        lease = verifier.verify(response.lease)
-        if lease.product_id != product.productId:
-            raise ActivationVerificationError("Lease product identity mismatch")
-        if lease.installation_id != installation_id:
-            raise ActivationVerificationError("Lease installation identity mismatch")
-        if lease.device_id != device_id:
-            raise ActivationVerificationError("Lease device identity mismatch")
-        if lease.version != product.version:
-            raise ActivationVerificationError("Lease version identity mismatch")
-        now = datetime.now(timezone.utc)
-        record = VerifiedLicenseRecord(
-            license_id=lease.license_id, product_id=lease.product_id,
-            product_version=lease.version, installation_id=lease.installation_id,
-            device_id=lease.device_id, lease_id=lease.lease_id,
-            generation=lease.generation, server_revision=lease.server_revision,
-            issued_at=lease.issued_at, not_before=lease.not_before,
-            expires_at=lease.expires_at, status="verified", key_id=lease.key_id,
-            created_at=now, updated_at=now,
-            signed_payload=response.lease["payload"], signed_signature=response.lease["signature"],
-            signed_algorithm=response.lease["algorithm"],
-        )
-        repository.save(record)
-        repository.bind(ActiveLicenseBinding(
-            product_id=lease.product_id, installation_id=lease.installation_id,
-            device_id=lease.device_id, active_license_id=lease.license_id,
-            active_lease_id=lease.lease_id, generation=lease.generation,
-            server_revision=lease.server_revision, binding_version=1,
-            updated_at=now,
-        ))
-        decision = AuthorizationService().authorize_from_active_binding(
-            product, installation_id, device_id, repository, lambda lease_id: lease if lease_id == lease.lease_id else None,
-        )
-        if not decision.authorized:
-            raise ActivationDeniedError("Verified lease did not authorize the active binding")
-        return decision
+        try:
+            response = self.client.activate_platform_lease(request)
+            lease = verifier.verify(response.lease)
+            if lease.product_id != product.productId:
+                raise ActivationVerificationError("Lease product identity mismatch")
+            if lease.installation_id != installation_id:
+                raise ActivationVerificationError("Lease installation identity mismatch")
+            if lease.device_id != device_id:
+                raise ActivationVerificationError("Lease device identity mismatch")
+            if lease.version != product.version:
+                raise ActivationVerificationError("Lease version identity mismatch")
+            now = datetime.now(timezone.utc)
+            record = VerifiedLicenseRecord(
+                license_id=lease.license_id, product_id=lease.product_id,
+                product_version=lease.version, installation_id=lease.installation_id,
+                device_id=lease.device_id, lease_id=lease.lease_id,
+                generation=lease.generation, server_revision=lease.server_revision,
+                issued_at=lease.issued_at, not_before=lease.not_before,
+                expires_at=lease.expires_at, status="verified", key_id=lease.key_id,
+                created_at=now, updated_at=now,
+                signed_payload=response.lease["payload"], signed_signature=response.lease["signature"],
+                signed_algorithm=response.lease["algorithm"],
+            )
+            repository.save(record)
+            repository.bind(ActiveLicenseBinding(
+                product_id=lease.product_id, installation_id=lease.installation_id,
+                device_id=lease.device_id, active_license_id=lease.license_id,
+                active_lease_id=lease.lease_id, generation=lease.generation,
+                server_revision=lease.server_revision, binding_version=1,
+                updated_at=now,
+            ))
+            decision = AuthorizationService().authorize_from_active_binding(
+                product, installation_id, device_id, repository, lambda lease_id: lease if lease_id == lease.lease_id else None,
+            )
+            if not decision.authorized:
+                raise ActivationDeniedError("Verified lease did not authorize the active binding")
+            self.last_activation_diagnostic = None
+            return decision
+        except Exception as exc:
+            self.last_activation_diagnostic = classify_activation_failure(exc)
+            emit_activation_diagnostic(self.diagnostic_sink, self.last_activation_diagnostic)
+            raise
 
     def activate(self, product: Manifest, license_key: str,
                  verifier: LeaseVerifier,
