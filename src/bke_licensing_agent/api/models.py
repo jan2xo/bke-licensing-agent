@@ -56,6 +56,7 @@ class PlatformLeaseActivationRequest(ApiModel):
     installationId: str = Field(min_length=32, max_length=256)
     deviceId: str = Field(min_length=16, max_length=256)
     operationId: str = Field(min_length=8, max_length=128)
+    productVersion: str = Field(min_length=1)
     label: str | None = None
     operatingSystem: str | None = None
     architecture: str | None = None
