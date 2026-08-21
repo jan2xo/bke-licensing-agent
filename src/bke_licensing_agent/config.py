@@ -5,6 +5,7 @@ DEFAULT_DATA_DIR = Path.home() / ".local" / "share" / "bke_licensing_agent"
 DATABASE_FILENAME = "agent.db"
 AGENT_HOST = "127.0.0.1"
 DEFAULT_AGENT_PORT = 43873
+DEFAULT_PLATFORM_BASE_URL = "https://jl-bke.com"
 TRUSTED_KEYS_DIRNAME = "trusted-keys"
 
 
@@ -26,6 +27,10 @@ def get_agent_port() -> int:
     if not 1 <= port <= 65535:
         raise ValueError("BKE_AGENT_PORT must be between 1 and 65535")
     return port
+
+
+def get_platform_base_url() -> str:
+    return os.getenv("BKE_PLATFORM_BASE_URL", DEFAULT_PLATFORM_BASE_URL).rstrip("/")
 
 
 def get_trusted_keys_dir() -> Path:
