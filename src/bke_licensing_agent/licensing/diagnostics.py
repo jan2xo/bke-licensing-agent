@@ -13,7 +13,7 @@ from .errors import ActivationDeniedError, ActivationVerificationError
 from .lease import (
     LeaseInvalidSignatureError, LeaseMalformedError, LeaseUnknownKeyError,
 )
-from .license_repository import LicenseRecordPersistenceError
+from .license_repository import LicenseRecordCorruptError, LicenseRecordPersistenceError
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ def classify_activation_failure(exc: Exception) -> ActivationDiagnostic:
         return ActivationDiagnostic("lease_binding_mismatch", "lease_verification")
     if isinstance(exc, ActivationDeniedError):
         return ActivationDiagnostic("activation_rejected", "authorization")
-    if isinstance(exc, LicenseRecordPersistenceError):
+    if isinstance(exc, (LicenseRecordCorruptError, LicenseRecordPersistenceError)):
         return ActivationDiagnostic("persistence_failed", "binding_persistence")
     return ActivationDiagnostic("unsupported_response", "activation")
 
