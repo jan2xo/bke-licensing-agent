@@ -139,3 +139,22 @@ def test_phase5_api_contract_methods_are_typed_and_non_idempotent_writes_are_not
     assert client(session).verify_activation(ActivationVerificationRequest(activation_id="a", product_id="p", device_id="d"), "token").valid
     session = FakeSession([FakeResponse(data={"success": True})])
     assert client(session).deactivate(DeactivationRequest(activation_id="a", device_id="d"), "token").success
+
+
+def test_trusted_key_metadata_uses_digital_solutions_contract_route():
+    session = FakeSession([FakeResponse(data={
+        "version": "bke.licensing.v2",
+        "keys": [{
+            "key_id": "key-1",
+            "algorithm": "Ed25519",
+            "public_key": "PUBLIC KEY",
+            "status": "ACTIVE",
+            "activated_at": None,
+            "retired_at": None,
+        }],
+    })])
+    result = client(session).retrieve_key_metadata("")
+    assert result.keys[0].key_id == "key-1"
+    assert session.calls[0][0] == "GET"
+    assert session.calls[0][1] == "https://api.example.test/api/licensing/keys"
+    assert "Authorization" not in session.calls[0][2]["headers"]
