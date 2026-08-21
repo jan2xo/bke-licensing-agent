@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from .api.config import ApiConfig
 from .config import get_agent_port, get_platform_base_url, get_trusted_keys_dir
 from .devices.fingerprint import DeviceFingerprint
 from .licensing.authorization import AuthorizationService
+from .licensing.diagnostics import classify_activation_failure, emit_activation_diagnostic
 from .licensing.lease import LeaseVerifier
 from .licensing.license_repository import VerifiedLicenseRepository
 from .licensing.service import LicensingService
@@ -25,6 +27,17 @@ def _load_trusted_keys(directory: Path) -> dict[str, str]:
         if path.is_file():
             keys[path.stem] = path.read_text()
     return keys
+
+
+def _emit_safe_activation_diagnostic(payload: dict[str, str]) -> None:
+    """Write only the pre-classified non-sensitive diagnostic category/stage."""
+    category = payload.get("category", "unsupported_response")
+    stage = payload.get("stage", "activation")
+    print(
+        f"activation_diagnostic category={category} stage={stage}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 class _LicenseKeySession:
@@ -120,6 +133,7 @@ class InstalledAgentRuntime:
         if manifest is None:
             return {"authorized": False, "reason": "invalid_product_context"}
 
+        service: LicensingService | None = None
         try:
             client = LicensingPlatformClient(ApiConfig(base_url=get_platform_base_url()))
             metadata = client.retrieve_key_metadata("")
@@ -134,10 +148,16 @@ class InstalledAgentRuntime:
                 sessions=_LicenseKeySession(),  # type: ignore[arg-type]
                 identity=_RequestInstallationIdentity(installation_id),  # type: ignore[arg-type]
                 fingerprint=self.fingerprint,
+                diagnostic_sink=_emit_safe_activation_diagnostic,
             )
             decision = service.activate(manifest, license_key, LeaseVerifier(trusted_keys), self.repository)
             return {"authorized": decision.authorized, "reason": decision.reason or decision.state.value}
-        except Exception:
+        except Exception as exc:
+            if service is None or service.last_activation_diagnostic is None:
+                emit_activation_diagnostic(
+                    _emit_safe_activation_diagnostic,
+                    classify_activation_failure(exc),
+                )
             return {"authorized": False, "reason": "activation_failed"}
 
     def serve_forever(self) -> None:
