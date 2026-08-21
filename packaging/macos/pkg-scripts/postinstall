@@ -1,0 +1,19 @@
+#!/bin/bash
+set -euo pipefail
+
+LABEL="com.bkedigitalsolutions.licensing-agent"
+PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+DATA_DIR="/Library/Application Support/BKE Digital Solutions/Licensing Agent Data"
+LOG_DIR="/Library/Logs/BKE Digital Solutions"
+
+mkdir -p "$DATA_DIR/trusted-keys" "$LOG_DIR"
+chmod 755 "$DATA_DIR" "$DATA_DIR/trusted-keys" "$LOG_DIR"
+chown root:wheel "$PLIST"
+chmod 644 "$PLIST"
+
+launchctl bootout system/$LABEL >/dev/null 2>&1 || true
+launchctl bootstrap system "$PLIST"
+launchctl enable system/$LABEL
+launchctl kickstart -k system/$LABEL
+
+exit 0
