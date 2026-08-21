@@ -86,6 +86,9 @@ def test_platform_activation_request_carries_requested_product_version():
         licenseKey="BKE-TEST", installationId="i" * 32, deviceId="d" * 16,
         operationId="operation-1", productVersion="1.0.0")
     assert request.model_dump()["productVersion"] == "1.0.0"
+    session = FakeSession([FakeResponse(data={"lease": {"payload": "{}", "signature": "sig", "key_id": "k", "algorithm": "Ed25519"}})])
+    client(session).activate_platform_lease(request)
+    assert session.calls[0][2]["headers"]["x-bke-licensing-version"] == "bke.licensing.v3"
 
 
 @pytest.mark.parametrize("status, error", [(401, AuthenticationExpiredError), (403, AuthorizationDeniedError),
