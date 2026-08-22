@@ -4,11 +4,6 @@ on:
   push:
     branches:
       - feat/v1-packaging-foundation
-    paths:
-      - "pyproject.toml"
-      - "src/**"
-      - "packaging/**"
-      - ".github/workflows/packaging.yml"
   workflow_dispatch:
 
 permissions:
