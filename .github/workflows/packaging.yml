@@ -86,6 +86,9 @@ jobs:
       - name: Smoke test frozen Windows service dependencies
         shell: pwsh
         run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --service-smoke
+      - name: Smoke test frozen Windows SCM host entrypoint
+        shell: pwsh
+        run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --service-host-smoke
       - name: Smoke test frozen Windows License Center
         shell: pwsh
         run: dist/windows/bke-license-center/bke-license-center.exe --smoke

@@ -37,6 +37,13 @@ class LicensingAgentService(win32serviceutil.ServiceFramework):
             self.runtime.close()
 
 
+def _run_service_host() -> None:
+    """Connect the frozen executable to the Windows Service Control Manager."""
+    servicemanager.Initialize()
+    servicemanager.PrepareToHostSingle(LicensingAgentService)
+    servicemanager.StartServiceCtrlDispatcher()
+
+
 if __name__ == "__main__":
     if "--service-smoke" in sys.argv[1:]:
         service_class = win32serviceutil.GetServiceClassString(LicensingAgentService)
@@ -46,7 +53,18 @@ if __name__ == "__main__":
             "BKE Licensing Agent Windows service dependency smoke: "
             f"win32timezone and {service_class} OK"
         )
+    elif "--service-host-smoke" in sys.argv[1:]:
+        required = (
+            servicemanager.Initialize,
+            servicemanager.PrepareToHostSingle,
+            servicemanager.StartServiceCtrlDispatcher,
+        )
+        if not all(callable(item) for item in required):
+            raise RuntimeError("Windows service host functions are unavailable")
+        print("BKE Licensing Agent Windows service host smoke: SCM host functions OK")
     elif "--smoke" in sys.argv[1:]:
         print("BKE Licensing Agent Windows service smoke: import and entrypoint OK")
+    elif len(sys.argv) == 1:
+        _run_service_host()
     else:
         win32serviceutil.HandleCommandLine(LicensingAgentService)
