@@ -60,6 +60,7 @@ class LicensingService:
         request = PlatformLeaseActivationRequest(
             licenseKey=license_key, installationId=installation_id,
             deviceId=device_id, operationId=str(uuid.uuid4()),
+            productVersion=product.version,
             operatingSystem=self.fingerprint.signals.get("platform"),
             architecture=self.fingerprint.signals.get("architecture"),
             label=None,
