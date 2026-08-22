@@ -45,9 +45,10 @@ def test_signed_platform_activation_over_real_http_persists_binding(tmp_path):
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
             assert self.path == "/api/licenses/activate"
-            assert self.headers["x-bke-licensing-version"] == "bke.licensing.v2"
+            assert self.headers["x-bke-licensing-version"] == "bke.licensing.v3"
             body = json.loads(self.rfile.read(int(self.headers["content-length"])))
             assert body["licenseKey"] == "local-test-license"
+            assert body["productVersion"] == product.version
             response = json.dumps({"lease": envelope}).encode()
             self.send_response(201); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(response))); self.end_headers(); self.wfile.write(response)
         def log_message(self, *_args): return

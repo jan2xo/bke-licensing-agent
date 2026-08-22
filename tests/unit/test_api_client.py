@@ -10,7 +10,7 @@ from bke_licensing_agent.api.errors import (
     InvalidServerResponseError, RateLimitExceededError, ResourceNotFoundError,
     ServerUnavailableError,
 )
-from bke_licensing_agent.api.models import DeviceRegistrationRequest, LicenseVerificationRequest
+from bke_licensing_agent.api.models import DeviceRegistrationRequest, LicenseVerificationRequest, PlatformLeaseActivationRequest
 from bke_licensing_agent.licensing.models import ActivationRequest, ActivationVerificationRequest, DeactivationRequest
 
 
@@ -79,6 +79,16 @@ def test_request_models_serialize_for_device_and_verification():
     verify_session = FakeSession([FakeResponse(data={"valid": True, "status": "active", "license_id": "lic-1"})])
     client(verify_session).verify_license(LicenseVerificationRequest(product_id="p", device_id="d", installed_version="1.0.0"))
     assert verify_session.calls[0][2]["json"]["product_id"] == "p"
+
+
+def test_platform_activation_request_carries_requested_product_version():
+    request = PlatformLeaseActivationRequest(
+        licenseKey="BKE-TEST", installationId="i" * 32, deviceId="d" * 16,
+        operationId="operation-1", productVersion="1.0.0")
+    assert request.model_dump()["productVersion"] == "1.0.0"
+    session = FakeSession([FakeResponse(data={"lease": {"payload": "{}", "signature": "sig", "key_id": "k", "algorithm": "Ed25519"}})])
+    client(session).activate_platform_lease(request)
+    assert session.calls[0][2]["headers"]["x-bke-licensing-version"] == "bke.licensing.v3"
 
 
 @pytest.mark.parametrize("status, error", [(401, AuthenticationExpiredError), (403, AuthorizationDeniedError),
