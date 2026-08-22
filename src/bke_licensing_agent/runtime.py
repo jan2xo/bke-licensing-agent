@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 
 from .api.client import LicensingPlatformClient
 from .api.config import ApiConfig
 from .config import get_agent_port, get_platform_base_url, get_trusted_keys_dir
 from .devices.fingerprint import DeviceFingerprint
+from .discovery.paths import parse_discovery_paths, resolve_manifest_entry
+from .discovery.scanner import scan_locations
 from .licensing.authorization import AuthorizationService
 from .licensing.lease import LeaseVerifier
 from .licensing.license_repository import VerifiedLicenseRepository
@@ -17,6 +19,7 @@ from .licensing.service import LicensingService
 from .local_api import LocalAuthorizationServer
 from .manifest.validator import validate_manifest
 from .storage.database import Database
+from .storage.models import DiscoveredProductRecord
 
 
 def _load_trusted_keys(directory: Path) -> dict[str, str]:
@@ -55,6 +58,39 @@ class InstalledAgentRuntime:
         self.port = port if port is not None else get_agent_port()
         self._server: LocalAuthorizationServer | None = None
         self._stop_event = Event()
+        self._discovery_lock = Lock()
+
+    @staticmethod
+    def _is_beneath(path: Path, root: Path) -> bool:
+        try:
+            path.resolve().relative_to(root.resolve())
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _refresh_discovered_products(self) -> None:
+        """Synchronize the Agent-owned discovery cache with bounded roots."""
+        with self._discovery_lock:
+            roots = parse_discovery_paths()
+            discovered = scan_locations(roots)
+            current_paths = {str(item.manifest_path) for item in discovered}
+
+            for item in discovered:
+                manifest = validate_manifest(item.manifest)
+                self.database.save_discovered_product(DiscoveredProductRecord.create(
+                    product_id=manifest.productId,
+                    display_name=manifest.displayName,
+                    version=manifest.version,
+                    manifest_path=item.manifest_path,
+                    product_root=item.product_root,
+                    entry_point_path=item.entry_point_path,
+                ))
+
+            for record in self.database.list_discovered_products():
+                manifest_path = Path(record.manifest_path)
+                if any(self._is_beneath(manifest_path, root) for root in roots):
+                    if record.manifest_path not in current_paths:
+                        self.database.delete_discovered_product(record.manifest_path)
 
     def _validated_product(self, product_id: str, version: str):
         matching = [
@@ -66,7 +102,11 @@ class InstalledAgentRuntime:
         record = matching[0]
         try:
             manifest = validate_manifest(json.loads(Path(record.manifest_path).read_text()))
+            entry_point = resolve_manifest_entry(manifest.entryPoint, Path(record.manifest_path).parent)
+            if not entry_point.is_file():
+                raise ValueError("entryPoint file does not exist")
         except Exception:
+            self.database.delete_discovered_product(record.manifest_path)
             return None
         if manifest.productId != product_id or manifest.version != version:
             return None
@@ -78,7 +118,10 @@ class InstalledAgentRuntime:
         installation_id = request["installation_id"]
         manifest = self._validated_product(product_id, version)
         if manifest is None:
-            return {"authorized": False, "reason": "unknown_product_or_version"}
+            self._refresh_discovered_products()
+            manifest = self._validated_product(product_id, version)
+            if manifest is None:
+                return {"authorized": False, "reason": "unknown_product_or_version"}
 
         binding = self.repository.active(product_id, installation_id, self.device_id)
         if binding is None:
@@ -142,6 +185,11 @@ class InstalledAgentRuntime:
             return {"authorized": False, "reason": "activation_failed"}
 
     def serve_forever(self) -> None:
+        if self._stop_event.is_set():
+            return
+        self._refresh_discovered_products()
+        if self._stop_event.is_set():
+            return
         with LocalAuthorizationServer(self.authorize, self.activate, port=self.port) as server:
             self._server = server
             try:

@@ -274,3 +274,10 @@ class Database:
             "SELECT * FROM discovered_products ORDER BY discovered_at DESC"
         )
         return [DiscoveredProductRecord.from_row(dict(row)) for row in cursor.fetchall()]
+
+    def delete_discovered_product(self, manifest_path: str) -> None:
+        with self._lock, self.connection:
+            self.connection.execute(
+                "DELETE FROM discovered_products WHERE manifest_path = ?",
+                (manifest_path,),
+            )

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sys
 from typing import Sequence
 
 DEFAULT_DISCOVERY_PATHS = [
@@ -9,6 +10,18 @@ DEFAULT_DISCOVERY_PATHS = [
 ]
 
 
+def default_discovery_paths() -> list[Path]:
+    """Return bounded, platform-specific installed-product roots."""
+    if sys.platform == "win32":
+        program_files = (
+            os.getenv("ProgramW6432")
+            or os.getenv("ProgramFiles")
+            or r"C:\Program Files"
+        )
+        return [Path(program_files) / "BKE Digital Solutions"]
+    return [path for path in DEFAULT_DISCOVERY_PATHS]
+
+
 def parse_discovery_paths(paths: str | None = None) -> list[Path]:
     if paths is None:
         paths = os.getenv("BKE_DISCOVERY_PATHS", "")
@@ -16,7 +29,7 @@ def parse_discovery_paths(paths: str | None = None) -> list[Path]:
     separator = ";" if os.name == "nt" else ":"
     candidates = [entry.strip() for entry in paths.split(separator) if entry.strip()]
     if not candidates:
-        return [path for path in DEFAULT_DISCOVERY_PATHS]
+        return default_discovery_paths()
 
     return [Path(os.path.expanduser(candidate)) for candidate in candidates]
 
