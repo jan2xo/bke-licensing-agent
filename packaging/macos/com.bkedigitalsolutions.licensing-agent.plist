@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bkedigitalsolutions.licensing-agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application Support/BKE Digital Solutions/Licensing Agent/bke-licensing-agent/bke-licensing-agent</string>
+        <string>serve</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BKE_AGENT_DATA_DIR</key>
+        <string>/Library/Application Support/BKE Digital Solutions/Licensing Agent Data</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>/Library/Logs/BKE Digital Solutions/licensing-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Logs/BKE Digital Solutions/licensing-agent-error.log</string>
+</dict>
+</plist>

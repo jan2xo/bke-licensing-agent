@@ -58,7 +58,7 @@ class Manifest(BaseModel):
         return value
 
     def as_dict(self) -> dict[str, Any]:
-        return self.model_dump()
+        return self.model_dump(exclude_none=True)
 
     @property
     def is_validated(self) -> bool:

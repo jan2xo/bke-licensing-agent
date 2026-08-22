@@ -1,4 +1,5 @@
 import json
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -13,7 +14,44 @@ def test_local_api_returns_minimal_decision_and_not_lease_data():
 
 def test_local_api_rejects_malformed_requests():
     with LocalAuthorizationServer(lambda _request: {"authorized": True}) as server:
-        from urllib.request import Request, urlopen
         request = Request(f"{server.url}/v1/authorize", data=json.dumps({"product_id": "p"}).encode(), headers={"content-type": "application/json"}, method="POST")
+        with pytest.raises(Exception):
+            urlopen(request)
+
+
+def test_license_center_requires_valid_product_context_and_never_places_key_in_url():
+    seen = []
+    with LocalAuthorizationServer(
+        lambda _request: {"authorized": False, "reason": "activation_required"},
+        lambda request: seen.append(request) or {"authorized": True, "reason": "ALLOW"},
+    ) as server:
+        url = server.license_center_url("product-a", "1.0.0", "installation-1")
+        with urlopen(url) as response:
+            page = response.read().decode()
+        assert "BKE License Center" in page
+        assert "product-a" in page
+        assert "license_key" in page
+        assert "license_key=" not in url
+
+        request = Request(
+            f"{server.url}/v1/activate",
+            data=json.dumps({"product_id": "product-a", "version": "1.0.0", "installation_id": "installation-1", "license_key": "secret-key"}).encode(),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())
+        assert result == {"authorized": True, "reason": "ALLOW"}
+        assert seen[0]["license_key"] == "secret-key"
+
+
+def test_activation_rejects_missing_license_key():
+    with LocalAuthorizationServer(lambda _request: {"authorized": False}, lambda _request: {"authorized": True}) as server:
+        request = Request(
+            f"{server.url}/v1/activate",
+            data=json.dumps({"product_id": "p", "version": "1", "installation_id": "i"}).encode(),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
         with pytest.raises(Exception):
             urlopen(request)
