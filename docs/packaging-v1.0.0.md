@@ -29,3 +29,16 @@ Release or `v1.0.0` tag is authorized.
 
 Normal uninstall removes the service and application files but preserves the
 durable state directory. A deliberate full purge is a separate operator action.
+
+## Windows state boundary
+
+The installer does not grant `users-modify` permission to the ProgramData
+directory or its `trusted-keys` child. The Windows Service is registered using
+the pywin32 default service account (LocalSystem); ordinary interactive users
+access the Agent through its loopback API and do not receive direct write
+access to trusted keys, device identity, or authoritative licensing state.
+
+The hosted packaging workflow also records runtime dependency evidence from the
+installed package dependency closure separately from build-tool inventory, runs
+safe `--help` smoke checks against the frozen binaries, and binds evidence to
+the exact pull-request head SHA used for checkout and manifest generation.

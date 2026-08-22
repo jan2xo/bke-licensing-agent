@@ -27,8 +27,10 @@ Source: "..\..\dist\windows\bke-licensing-agent-service-wrapper\*"; DestDir: "{a
 Source: "..\..\dist\windows\bke-license-center\*"; DestDir: "{app}\license-center"; Flags: recursesubdirs ignoreversion
 
 [Dirs]
-Name: "{#DataDir}"; Permissions: users-modify
-Name: "{#DataDir}\trusted-keys"; Permissions: users-modify
+; Inno creates ProgramData with administrator/service ownership defaults.
+; Do not grant ordinary users modification rights over licensing state or trusted keys.
+Name: "{#DataDir}"
+Name: "{#DataDir}\trusted-keys"
 
 [Registry]
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "BKE_AGENT_DATA_DIR"; ValueData: "{#DataDir}"; Flags: preservestringtype
@@ -41,8 +43,8 @@ Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "--startu
 Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "start"; Flags: runhidden waituntilterminated
 
 [UninstallRun]
-Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated
-Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "remove"; Flags: runhidden waituntilterminated
+Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "stop"; RunOnceId: "StopBkeLicensingAgent"; Flags: runhidden waituntilterminated
+Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "remove"; RunOnceId: "RemoveBkeLicensingAgent"; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

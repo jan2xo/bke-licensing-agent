@@ -20,11 +20,14 @@ jobs:
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Install build dependencies
-        run: python -m pip install pyinstaller build && python -m pip install -e . --no-deps
+        run: python -m pip install pyinstaller build && python -m pip install -e .
       - name: Freeze native Linux executables
         run: |
           pyinstaller --clean --noconfirm bke-licensing-agent.spec
@@ -33,20 +36,27 @@ jobs:
           mkdir -p dist/linux
           mv dist-agent dist/linux/bke-licensing-agent
           mv dist/bke-license-center dist/linux/bke-license-center
+      - name: Smoke test frozen Linux Agent
+        run: dist/linux/bke-licensing-agent/bke-licensing-agent --help
+      - name: Smoke test frozen Linux License Center
+        run: dist/linux/bke-license-center/bke-license-center --help
       - name: Build Debian package
         run: packaging/linux/build-deb.sh
       - name: Generate Linux release evidence
         env:
           PYTHON: python
         run: python scripts/release_evidence.py platform linux-x64 dist/installer/bke-licensing-agent_1.0.0_amd64.deb dist/release-evidence/linux-x64
-      - uses: actions/attest-build-provenance@v2
+      - name: Attest Linux package provenance
+        uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/installer/bke-licensing-agent_1.0.0_amd64.deb
-      - uses: actions/upload-artifact@v4
+      - name: Upload Linux release candidate
+        uses: actions/upload-artifact@v4
         with:
           name: BKE-Licensing-Agent-1.0.0-Linux-x64
           path: dist/installer/bke-licensing-agent_1.0.0_amd64.deb
-      - uses: actions/upload-artifact@v4
+      - name: Upload Linux release evidence
+        uses: actions/upload-artifact@v4
         with:
           name: release-evidence-linux-x64
           path: dist/release-evidence/linux-x64
@@ -56,12 +66,15 @@ jobs:
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Install build dependencies
         shell: pwsh
-        run: python -m pip install pyinstaller pywin32 && python -m pip install -e . --no-deps
+        run: python -m pip install pyinstaller pywin32 && python -m pip install -e .
       - name: Freeze Windows executables
         shell: pwsh
         run: |
@@ -70,6 +83,12 @@ jobs:
           Move-Item dist/bke-license-center dist/windows/bke-license-center
           pyinstaller --clean --noconfirm --name bke-licensing-agent-service packaging/windows/service_entry.py
           Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service-wrapper
+      - name: Smoke test frozen Windows Agent service wrapper
+        shell: pwsh
+        run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --help
+      - name: Smoke test frozen Windows License Center
+        shell: pwsh
+        run: dist/windows/bke-license-center/bke-license-center.exe --help
       - name: Build Inno Setup installer
         shell: pwsh
         run: |
@@ -78,14 +97,17 @@ jobs:
       - name: Generate Windows release evidence
         shell: pwsh
         run: python scripts/release_evidence.py platform windows-x64 dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe dist/release-evidence/windows-x64
-      - uses: actions/attest-build-provenance@v2
+      - name: Attest Windows installer provenance
+        uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
-      - uses: actions/upload-artifact@v4
+      - name: Upload Windows release candidate
+        uses: actions/upload-artifact@v4
         with:
           name: BKE-Licensing-Agent-1.0.0-Windows-x64
           path: dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
-      - uses: actions/upload-artifact@v4
+      - name: Upload Windows release evidence
+        uses: actions/upload-artifact@v4
         with:
           name: release-evidence-windows-x64
           path: dist/release-evidence/windows-x64
@@ -95,11 +117,14 @@ jobs:
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Install build dependencies
-        run: python -m pip install pyinstaller && python -m pip install -e . --no-deps
+        run: python -m pip install pyinstaller && python -m pip install -e .
       - name: Freeze native macOS executables
         run: |
           pyinstaller --clean --noconfirm bke-licensing-agent.spec
@@ -107,20 +132,27 @@ jobs:
           pyinstaller --clean --noconfirm bke-license-center.spec
           mkdir -p dist
           mv dist-agent dist/bke-licensing-agent
+      - name: Smoke test frozen macOS Agent
+        run: dist/bke-licensing-agent/bke-licensing-agent --help
+      - name: Smoke test frozen macOS License Center
+        run: dist/bke-license-center/bke-license-center --help
       - name: Build macOS package
         run: packaging/macos/build-pkg.sh 1.0.0
       - name: Generate macOS release evidence
         env:
           PYTHON: python
         run: python scripts/release_evidence.py platform macos-arm64 dist/installer/BKE-Licensing-Agent-1.0.0.pkg dist/release-evidence/macos-arm64
-      - uses: actions/attest-build-provenance@v2
+      - name: Attest macOS package provenance
+        uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/installer/BKE-Licensing-Agent-1.0.0.pkg
-      - uses: actions/upload-artifact@v4
+      - name: Upload macOS release candidate
+        uses: actions/upload-artifact@v4
         with:
           name: BKE-Licensing-Agent-1.0.0-macOS
           path: dist/installer/BKE-Licensing-Agent-1.0.0.pkg
-      - uses: actions/upload-artifact@v4
+      - name: Upload macOS release evidence
+        uses: actions/upload-artifact@v4
         with:
           name: release-evidence-macos-arm64
           path: dist/release-evidence/macos-arm64
@@ -131,7 +163,10 @@ jobs:
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Install evidence validators
@@ -156,7 +191,8 @@ jobs:
           assert manifest['source']['commit'] == __import__('os').environ['SOURCE_SHA']
           print('release evidence: valid')
           PY
-      - uses: actions/upload-artifact@v4
+      - name: Upload aggregate release evidence
+        uses: actions/upload-artifact@v4
         with:
           name: BKE-Licensing-Agent-1.0.0-release-evidence
           path: dist/release-envelope

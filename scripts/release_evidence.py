@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import subprocess
+from importlib import metadata
 from pathlib import Path
 
 VERSION = "1.0.0"
@@ -23,7 +24,37 @@ def digest(path: Path) -> tuple[str, int]:
     return h.hexdigest(), size
 
 
-def package_inventory() -> list[dict[str, str]]:
+def runtime_inventory() -> list[dict[str, str]]:
+    """Return the installed runtime dependency closure, excluding build tooling."""
+    distribution = metadata.distribution("bke-licensing-agent")
+    direct = []
+    for requirement in distribution.requires or []:
+        direct.append(requirement.split("[", 1)[0].split(";", 1)[0].strip().split(" ", 1)[0])
+    wanted = {name.lower().replace("_", "-"): "direct" for name in direct}
+    queue = list(direct)
+    while queue:
+        name = queue.pop(0)
+        try:
+            dist = metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            continue
+        for requirement in dist.requires or []:
+            dep = requirement.split("[", 1)[0].split(";", 1)[0].strip().split(" ", 1)[0]
+            key = dep.lower().replace("_", "-")
+            if key not in wanted:
+                wanted[key] = "transitive"
+                queue.append(dep)
+    result = []
+    for name, kind in sorted(wanted.items()):
+        try:
+            version = metadata.version(name)
+        except metadata.PackageNotFoundError as exc:
+            raise SystemExit(f"runtime dependency is not installed: {name}") from exc
+        result.append({"name": name, "version": version, "scope": kind, "internal": name == "bke-updater-core"})
+    return result
+
+
+def build_inventory() -> list[dict[str, str]]:
     result = subprocess.run([os.environ.get("PYTHON", "python"), "-m", "pip", "list", "--format=json"], check=True, capture_output=True, text=True)
     return [{"name": item["name"], "version": item["version"]} for item in json.loads(result.stdout)]
 
@@ -43,14 +74,15 @@ def platform_evidence(platform: str, artifact: Path, output: Path) -> None:
     }
     (output / "artifact.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (output / "SHA256SUMS.txt").write_text(f"{sha}  {artifact.name}\n")
-    components = [{"type": "library", "name": item["name"], "version": item["version"]} for item in package_inventory()]
+    runtime = runtime_inventory()
+    components = [{"type": "library", "name": item["name"], "version": item["version"], "scope": "required"} for item in runtime]
     sbom = {
         "bomFormat": "CycloneDX", "specVersion": "1.5", "version": 1,
-        "metadata": {"component": {"type": "application", "name": "bke-licensing-agent", "version": VERSION}},
+        "metadata": {"component": {"type": "application", "name": "BKE Licensing Agent", "version": VERSION}, "properties": [{"name": "platform", "value": platform}]},
         "components": components
     }
     (output / "sbom.cdx.json").write_text(json.dumps(sbom, indent=2, sort_keys=True) + "\n")
-    (output / "dependency-inventory.json").write_text(json.dumps({"format": "pip-list", "packages": package_inventory()}, indent=2, sort_keys=True) + "\n")
+    (output / "dependency-inventory.json").write_text(json.dumps({"format": "runtime-closure", "runtime": runtime, "buildOnly": build_inventory()}, indent=2, sort_keys=True) + "\n")
     (output / "migration.json").write_text(json.dumps({"schema": "bke.licensing-agent.migration.v1", "migration": "none"}, indent=2) + "\n")
 
 
