@@ -142,7 +142,6 @@ class InstalledAgentRuntime:
             return {"authorized": False, "reason": "activation_failed"}
 
     def serve_forever(self) -> None:
-        self._stop_event.clear()
         with LocalAuthorizationServer(self.authorize, self.activate, port=self.port) as server:
             self._server = server
             try:

@@ -20,3 +20,15 @@ def test_runtime_close_returns_serve_forever_and_releases_loopback_server(tmp_pa
 
     assert not thread.is_alive()
     assert runtime._server is None
+
+
+def test_runtime_close_before_serve_forever_preserves_stop_request(tmp_path):
+    runtime = InstalledAgentRuntime(database=Database(tmp_path / "agent.db"), port=0)
+    runtime.close()
+
+    thread = Thread(target=runtime.serve_forever)
+    thread.start()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert runtime._server is None
