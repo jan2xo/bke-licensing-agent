@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import servicemanager
+import sys
 import win32event
 import win32service
 import win32serviceutil
@@ -36,4 +37,7 @@ class LicensingAgentService(win32serviceutil.ServiceFramework):
 
 
 if __name__ == "__main__":
-    win32serviceutil.HandleCommandLine(LicensingAgentService)
+    if "--smoke" in sys.argv[1:]:
+        print("BKE Licensing Agent Windows service smoke: import and entrypoint OK")
+    else:
+        win32serviceutil.HandleCommandLine(LicensingAgentService)

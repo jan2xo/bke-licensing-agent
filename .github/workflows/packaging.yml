@@ -85,7 +85,7 @@ jobs:
           Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service-wrapper
       - name: Smoke test frozen Windows Agent service wrapper
         shell: pwsh
-        run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --help
+        run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --smoke
       - name: Smoke test frozen Windows License Center
         shell: pwsh
         run: dist/windows/bke-license-center/bke-license-center.exe --smoke

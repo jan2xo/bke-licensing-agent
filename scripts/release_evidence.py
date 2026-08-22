@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 from importlib import metadata
+from packaging.requirements import Requirement
 from pathlib import Path
 
 VERSION = "1.0.0"
@@ -29,7 +30,7 @@ def runtime_inventory() -> list[dict[str, str]]:
     distribution = metadata.distribution("bke-licensing-agent")
     direct = []
     for requirement in distribution.requires or []:
-        direct.append(requirement.split("[", 1)[0].split(";", 1)[0].strip().split(" ", 1)[0])
+        direct.append(Requirement(requirement).name)
     wanted = {name.lower().replace("_", "-"): "direct" for name in direct}
     queue = list(direct)
     while queue:
@@ -39,7 +40,7 @@ def runtime_inventory() -> list[dict[str, str]]:
         except metadata.PackageNotFoundError:
             continue
         for requirement in dist.requires or []:
-            dep = requirement.split("[", 1)[0].split(";", 1)[0].strip().split(" ", 1)[0]
+            dep = Requirement(requirement).name
             key = dep.lower().replace("_", "-")
             if key not in wanted:
                 wanted[key] = "transitive"
