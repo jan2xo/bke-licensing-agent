@@ -38,7 +38,7 @@ def platform_evidence(platform: str, artifact: Path, output: Path) -> None:
         "sha256": sha,
         "size": size,
         "format": {"windows-x64": "inno-setup-exe", "linux-x64": "deb", "macos-arm64": "pkg"}[platform],
-        "sourceCommit": os.environ.get("GITHUB_SHA", ""),
+        "sourceCommit": os.environ.get("SOURCE_SHA") or os.environ.get("GITHUB_SHA", ""),
         "migration": "none"
     }
     (output / "artifact.json").write_text(json.dumps(metadata, indent=2) + "\n")

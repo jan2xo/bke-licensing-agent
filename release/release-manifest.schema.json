@@ -26,13 +26,16 @@
       "minItems": 3,
       "items": {
         "type": "object",
-        "required": ["platform", "filename", "sha256", "size", "format"],
+        "required": ["platform", "version", "filename", "sha256", "size", "format", "sourceCommit", "migration"],
         "properties": {
           "platform": { "enum": ["windows-x64", "linux-x64", "macos-arm64"] },
+          "version": { "const": "1.0.0" },
           "filename": { "type": "string", "minLength": 1 },
           "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "size": { "type": "integer", "minimum": 1 },
-          "format": { "enum": ["inno-setup-exe", "deb", "pkg"] }
+          "format": { "enum": ["inno-setup-exe", "deb", "pkg"] },
+          "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "migration": { "const": "none" }
         },
         "additionalProperties": false
       }
