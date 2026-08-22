@@ -1,7 +1,9 @@
 name: Native packaging
 
 on:
-  pull_request:
+  push:
+    branches:
+      - feat/v1-packaging-foundation
     paths:
       - "pyproject.toml"
       - "src/**"
