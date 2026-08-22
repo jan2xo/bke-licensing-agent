@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="${1:-0.1.0}"
+VERSION="${1:-1.0.0}"
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PKGROOT="$ROOT_DIR/build/pkgroot"
 OUTDIR="$ROOT_DIR/dist/installer"

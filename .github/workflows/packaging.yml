@@ -1,0 +1,86 @@
+name: Native packaging
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "src/**"
+      - "packaging/**"
+      - ".github/workflows/packaging.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install build dependencies
+        run: python -m pip install pyinstaller build && python -m pip install -e . --no-deps
+      - name: Freeze native Linux executables
+        run: |
+          pyinstaller --clean --noconfirm bke-licensing-agent.spec
+          mv dist/bke-licensing-agent dist-agent
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          mkdir -p dist/linux
+          mv dist-agent dist/linux/bke-licensing-agent
+          mv dist/bke-license-center dist/linux/bke-license-center
+      - name: Build Debian package
+        run: packaging/linux/build-deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-Linux-x64
+          path: dist/installer/bke-licensing-agent_1.0.0_amd64.deb
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install build dependencies
+        shell: pwsh
+        run: python -m pip install pyinstaller pywin32 && python -m pip install -e . --no-deps
+      - name: Freeze Windows executables
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          Move-Item dist/bke-license-center dist/windows/bke-license-center
+          pyinstaller --clean --noconfirm --name bke-licensing-agent-service packaging/windows/service_entry.py
+          Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service-wrapper
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-Windows-x64
+          path: dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install build dependencies
+        run: python -m pip install pyinstaller && python -m pip install -e . --no-deps
+      - name: Freeze native macOS executables
+        run: |
+          pyinstaller --clean --noconfirm bke-licensing-agent.spec
+          mv dist/bke-licensing-agent dist-agent
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          mkdir -p dist
+          mv dist-agent dist/bke-licensing-agent
+      - name: Build macOS package
+        run: packaging/macos/build-pkg.sh 1.0.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-macOS
+          path: dist/installer/BKE-Licensing-Agent-1.0.0.pkg
