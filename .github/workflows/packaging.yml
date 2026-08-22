@@ -39,7 +39,7 @@ jobs:
       - name: Smoke test frozen Linux Agent
         run: dist/linux/bke-licensing-agent/bke-licensing-agent --help
       - name: Smoke test frozen Linux License Center
-        run: dist/linux/bke-license-center/bke-license-center --help
+        run: dist/linux/bke-license-center/bke-license-center --smoke
       - name: Build Debian package
         run: packaging/linux/build-deb.sh
       - name: Generate Linux release evidence
@@ -88,7 +88,7 @@ jobs:
         run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --help
       - name: Smoke test frozen Windows License Center
         shell: pwsh
-        run: dist/windows/bke-license-center/bke-license-center.exe --help
+        run: dist/windows/bke-license-center/bke-license-center.exe --smoke
       - name: Build Inno Setup installer
         shell: pwsh
         run: |
@@ -135,7 +135,7 @@ jobs:
       - name: Smoke test frozen macOS Agent
         run: dist/bke-licensing-agent/bke-licensing-agent --help
       - name: Smoke test frozen macOS License Center
-        run: dist/bke-license-center/bke-license-center --help
+        run: dist/bke-license-center/bke-license-center --smoke
       - name: Build macOS package
         run: packaging/macos/build-pkg.sh 1.0.0
       - name: Generate macOS release evidence

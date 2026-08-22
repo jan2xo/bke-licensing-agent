@@ -1,6 +1,7 @@
 """Platform-neutral License Center command entry point."""
 
 import tkinter as tk
+import sys
 from tkinter import ttk
 
 
@@ -68,6 +69,9 @@ def build_standalone_window(root: tk.Tk) -> None:
 
 def main() -> None:
     """Start the standalone desktop shell."""
+    if "--smoke" in sys.argv[1:]:
+        print("BKE License Center smoke: import and entrypoint OK")
+        return
     root = tk.Tk()
     build_standalone_window(root)
     root.mainloop()
