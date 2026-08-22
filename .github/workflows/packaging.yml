@@ -78,11 +78,14 @@ jobs:
           pyinstaller --clean --noconfirm bke-license-center.spec
           New-Item -ItemType Directory -Force dist/windows | Out-Null
           Move-Item dist/bke-license-center dist/windows/bke-license-center
-          pyinstaller --clean --noconfirm --name bke-licensing-agent-service packaging/windows/service_entry.py
+          pyinstaller --clean --noconfirm --hidden-import win32timezone --name bke-licensing-agent-service packaging/windows/service_entry.py
           Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service-wrapper
       - name: Smoke test frozen Windows Agent service wrapper
         shell: pwsh
         run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --smoke
+      - name: Smoke test frozen Windows service dependencies
+        shell: pwsh
+        run: dist/windows/bke-licensing-agent-service-wrapper/bke-licensing-agent-service.exe --service-smoke
       - name: Smoke test frozen Windows License Center
         shell: pwsh
         run: dist/windows/bke-license-center/bke-license-center.exe --smoke

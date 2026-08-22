@@ -38,10 +38,6 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 [Icons]
 Name: "{group}\BKE License Center"; Filename: "{app}\license-center\bke-license-center.exe"
 
-[Run]
-Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "--startup auto install"; Flags: runhidden waituntilterminated
-Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "start"; Flags: runhidden waituntilterminated
-
 [UninstallRun]
 Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "stop"; RunOnceId: "StopBkeLicensingAgent"; Flags: runhidden waituntilterminated
 Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "remove"; RunOnceId: "RemoveBkeLicensingAgent"; Flags: runhidden waituntilterminated
@@ -49,3 +45,32 @@ Filename: "{app}\service\bke-licensing-agent-service.exe"; Parameters: "remove";
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 ; Durable {commonappdata} state is intentionally preserved.
+
+[Code]
+procedure RunServiceCommand(const Parameters, Description: String);
+var
+  ResultCode: Integer;
+  ServiceExecutable: String;
+begin
+  ServiceExecutable := ExpandConstant('{app}\service\bke-licensing-agent-service.exe');
+  if not Exec(ServiceExecutable, Parameters, '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode) then
+  begin
+    RaiseException(Format('%s could not be executed (system error %d).',
+      [Description, ResultCode]));
+  end;
+  if ResultCode <> 0 then
+  begin
+    RaiseException(Format('%s failed with exit code %d.',
+      [Description, ResultCode]));
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    RunServiceCommand('--startup auto install', 'BKE Licensing Agent service registration');
+    RunServiceCommand('start', 'BKE Licensing Agent service startup');
+  end;
+end;

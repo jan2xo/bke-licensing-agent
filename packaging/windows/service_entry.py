@@ -7,6 +7,7 @@ import sys
 import win32event
 import win32service
 import win32serviceutil
+import win32timezone
 
 from bke_licensing_agent.runtime import InstalledAgentRuntime
 
@@ -37,7 +38,15 @@ class LicensingAgentService(win32serviceutil.ServiceFramework):
 
 
 if __name__ == "__main__":
-    if "--smoke" in sys.argv[1:]:
+    if "--service-smoke" in sys.argv[1:]:
+        service_class = win32serviceutil.GetServiceClassString(LicensingAgentService)
+        if not service_class.endswith(".LicensingAgentService"):
+            raise RuntimeError("could not resolve frozen Windows service class")
+        print(
+            "BKE Licensing Agent Windows service dependency smoke: "
+            f"win32timezone and {service_class} OK"
+        )
+    elif "--smoke" in sys.argv[1:]:
         print("BKE Licensing Agent Windows service smoke: import and entrypoint OK")
     else:
         win32serviceutil.HandleCommandLine(LicensingAgentService)
