@@ -56,13 +56,11 @@ begin
   if not Exec(ServiceExecutable, Parameters, '', SW_HIDE,
     ewWaitUntilTerminated, ResultCode) then
   begin
-    RaiseException(Format('%s could not be executed (system error %d).',
-      [Description, ResultCode]));
+    RaiseException(Format('%s could not be executed (system error %d).', [Description, ResultCode]));
   end;
   if ResultCode <> 0 then
   begin
-    RaiseException(Format('%s failed with exit code %d.',
-      [Description, ResultCode]));
+    RaiseException(Format('%s failed with exit code %d.', [Description, ResultCode]));
   end;
 end;
 
