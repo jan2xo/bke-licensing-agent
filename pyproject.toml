@@ -1,6 +1,6 @@
 [project]
 name = "bke-licensing-agent"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A reusable licensing and application management agent for BKE Digital Solutions."
 readme = "README.md"
 authors = [
@@ -16,6 +16,7 @@ dependencies = [
   "jsonschema>=4.0,<5",
   "bke-updater-core @ git+https://github.com/jan2xo/bke-updater-core.git@3b25e6abe50e35a356a2130166292889f9b4fd94",
   "cryptography>=50,<51",
+  "pywin32==312; sys_platform == 'win32'",
 ]
 optional-dependencies = { test = ["pytest>=8.0", "types-jsonschema>=4.0"] }
 
@@ -30,6 +31,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+
+[tool.setuptools.dynamic]
+version = { attr = "bke_licensing_agent.version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

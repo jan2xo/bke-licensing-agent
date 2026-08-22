@@ -16,4 +16,8 @@ bke-license-center
 python samples\bke-demo-product\demo_app.py
 ```
 
-Windows native packaging is not verified here.
+The hosted packaging workflow builds the native Windows x64 candidate using
+PyInstaller plus Inno Setup. The installer registers the persistent Agent as a
+machine-level Windows Service and keeps durable state under
+`C:\ProgramData\BKE Digital Solutions\Licensing Agent`. Native install and
+reboot certification is still required before release.

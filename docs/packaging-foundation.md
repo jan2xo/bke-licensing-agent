@@ -22,11 +22,20 @@ Defined targets:
 - `windows-x64`
 - `windows-arm64`
 
-These target definitions do not imply that an artifact has been built or
-verified. A target is supported only after native build and runtime tests on
-that operating system. The current portable Python distribution is the host
-development foundation; native installers and frozen bundles remain future
-packaging work.
+The release version is `1.0.0`, sourced from
+`src/bke_licensing_agent/version.py` and exposed through package metadata.
+Native packaging foundations are repository-owned for all three platforms:
+
+- macOS: PyInstaller bundles plus `packaging/macos/build-pkg.sh` and LaunchDaemon.
+- Windows x64: PyInstaller bundles, a pywin32 Windows Service entry point, and
+  `packaging/windows/bke-licensing-agent.iss` for Inno Setup.
+- Linux amd64: PyInstaller bundles, `packaging/linux/bke-licensing-agent.service`,
+  and `packaging/linux/build-deb.sh` for a Debian package.
+
+Each service invokes `serve`, remains loopback-only on `127.0.0.1:43873`, and
+keeps durable state separate from application binaries. Native installation and
+reboot certification is a later release gate; hosted builds prove packaging
+implementation only.
 
 ## Current-host bundle certification
 

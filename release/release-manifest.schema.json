@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jan2xo/bke-licensing-agent/releases/v1.0.0/manifest.schema.json",
+  "type": "object",
+  "required": ["schema", "version", "source", "artifacts", "platforms"],
+  "properties": {
+    "schema": { "const": "bke.licensing-agent.release.v1" },
+    "version": { "const": "1.0.0" },
+    "source": {
+      "type": "object",
+      "required": ["commit", "repository"],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "repository": { "const": "jan2xo/bke-licensing-agent" }
+      },
+      "additionalProperties": false
+    },
+    "platforms": {
+      "type": "array",
+      "items": { "enum": ["windows-x64", "linux-x64", "macos-arm64"] },
+      "minItems": 3,
+      "uniqueItems": true
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["platform", "version", "filename", "sha256", "size", "format", "sourceCommit", "migration"],
+        "properties": {
+          "platform": { "enum": ["windows-x64", "linux-x64", "macos-arm64"] },
+          "version": { "const": "1.0.0" },
+          "filename": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "size": { "type": "integer", "minimum": 1 },
+          "format": { "enum": ["inno-setup-exe", "deb", "pkg"] },
+          "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "migration": { "const": "none" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["sbomFormat", "migration", "provenance"],
+      "properties": {
+        "sbomFormat": { "const": "CycloneDX-JSON-1.5" },
+        "migration": { "const": "none" },
+        "provenance": { "const": "github-actions-attestation" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

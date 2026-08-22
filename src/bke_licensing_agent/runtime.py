@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
+from threading import Event
 
 from .api.client import LicensingPlatformClient
 from .api.config import ApiConfig
@@ -54,6 +54,7 @@ class InstalledAgentRuntime:
         self.device_id = self.fingerprint.calculate()
         self.port = port if port is not None else get_agent_port()
         self._server: LocalAuthorizationServer | None = None
+        self._stop_event = Event()
 
     def _validated_product(self, product_id: str, version: str):
         matching = [
@@ -144,14 +145,15 @@ class InstalledAgentRuntime:
         with LocalAuthorizationServer(self.authorize, self.activate, port=self.port) as server:
             self._server = server
             try:
-                while True:
-                    time.sleep(1)
+                while not self._stop_event.wait(1):
+                    pass
             except KeyboardInterrupt:
                 return
             finally:
                 self._server = None
 
     def close(self) -> None:
+        self._stop_event.set()
         if self._server is not None:
             self._server.close()
             self._server = None

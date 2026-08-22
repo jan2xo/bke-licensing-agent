@@ -36,7 +36,7 @@ class _ActivationFlight:
 class LicensingService:
     def __init__(self, client: LicensingPlatformClient, sessions: SessionManager,
                  identity: InstallationIdentity, fingerprint: DeviceFingerprint,
-                 cache=None, agent_version="0.1.0", audit=None):
+                 cache=None, agent_version="1.0.0", audit=None):
         self.client, self.sessions = client, sessions
         self.identity, self.fingerprint, self.cache, self.audit = identity, fingerprint, cache, audit
         self.agent_version = agent_version

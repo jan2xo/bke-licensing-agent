@@ -16,4 +16,8 @@ bke-license-center
 python samples/bke-demo-product/demo_app.py
 ```
 
-Linux packaging is planned and not verified here.
+The hosted packaging workflow builds the native Linux x64 candidate as a `.deb`.
+It installs the Agent under `/opt/bke-digital-solutions/licensing-agent`, uses
+systemd for boot startup, and keeps durable state under
+`/var/lib/bke-digital-solutions/licensing-agent`. Native install and reboot
+certification is still required before release.
