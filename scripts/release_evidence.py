@@ -25,15 +25,26 @@ def digest(path: Path) -> tuple[str, int]:
     return h.hexdigest(), size
 
 
-def runtime_inventory() -> list[dict[str, str]]:
+PLATFORM_MARKER_ENVIRONMENTS = {
+    "windows-x64": {"sys_platform": "win32"},
+    "linux-x64": {"sys_platform": "linux"},
+    "macos-arm64": {"sys_platform": "darwin"},
+}
+
+
+def canonical_name(name: str) -> str:
+    return name.lower().replace("_", "-")
+
+
+def runtime_inventory(marker_environment: dict[str, str] | None = None) -> list[dict[str, str]]:
     """Return the installed runtime dependency closure, excluding build tooling."""
     distribution = metadata.distribution("bke-licensing-agent")
     direct = []
     for requirement in distribution.requires or []:
         parsed = Requirement(requirement)
-        if parsed.marker is None or parsed.marker.evaluate():
+        if parsed.marker is None or parsed.marker.evaluate(environment=marker_environment):
             direct.append(parsed.name)
-    wanted = {name.lower().replace("_", "-"): "direct" for name in direct}
+    wanted = {canonical_name(name): "direct" for name in direct}
     queue = list(direct)
     while queue:
         name = queue.pop(0)
@@ -43,10 +54,10 @@ def runtime_inventory() -> list[dict[str, str]]:
             continue
         for requirement in dist.requires or []:
             parsed = Requirement(requirement)
-            if parsed.marker is not None and not parsed.marker.evaluate():
+            if parsed.marker is not None and not parsed.marker.evaluate(environment=marker_environment):
                 continue
             dep = parsed.name
-            key = dep.lower().replace("_", "-")
+            key = canonical_name(dep)
             if key not in wanted:
                 wanted[key] = "transitive"
                 queue.append(dep)
@@ -60,9 +71,13 @@ def runtime_inventory() -> list[dict[str, str]]:
     return result
 
 
-def build_inventory() -> list[dict[str, str]]:
+def build_inventory(runtime_names: set[str]) -> list[dict[str, str]]:
     result = subprocess.run([os.environ.get("PYTHON", "python"), "-m", "pip", "list", "--format=json"], check=True, capture_output=True, text=True)
-    return [{"name": item["name"], "version": item["version"]} for item in json.loads(result.stdout)]
+    return [
+        {"name": item["name"], "version": item["version"]}
+        for item in json.loads(result.stdout)
+        if canonical_name(item["name"]) not in runtime_names
+    ]
 
 
 def platform_evidence(platform: str, artifact: Path, output: Path) -> None:
@@ -80,7 +95,8 @@ def platform_evidence(platform: str, artifact: Path, output: Path) -> None:
     }
     (output / "artifact.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (output / "SHA256SUMS.txt").write_text(f"{sha}  {artifact.name}\n")
-    runtime = runtime_inventory()
+    runtime = runtime_inventory(PLATFORM_MARKER_ENVIRONMENTS[platform])
+    runtime_names = {canonical_name(item["name"]) for item in runtime}
     components = [{"type": "library", "name": item["name"], "version": item["version"], "scope": "required"} for item in runtime]
     sbom = {
         "bomFormat": "CycloneDX", "specVersion": "1.5", "version": 1,
@@ -88,7 +104,7 @@ def platform_evidence(platform: str, artifact: Path, output: Path) -> None:
         "components": components
     }
     (output / "sbom.cdx.json").write_text(json.dumps(sbom, indent=2, sort_keys=True) + "\n")
-    (output / "dependency-inventory.json").write_text(json.dumps({"format": "runtime-closure", "runtime": runtime, "buildOnly": build_inventory()}, indent=2, sort_keys=True) + "\n")
+    (output / "dependency-inventory.json").write_text(json.dumps({"format": "runtime-closure", "runtime": runtime, "buildOnly": build_inventory(runtime_names)}, indent=2, sort_keys=True) + "\n")
     (output / "migration.json").write_text(json.dumps({"schema": "bke.licensing-agent.migration.v1", "migration": "none"}, indent=2) + "\n")
 
 
