@@ -13,6 +13,7 @@ from pathlib import Path
 
 VERSION = "1.0.0"
 SCHEMA = "bke.licensing-agent.release.v1"
+APPLICATION_NAME = "bke-licensing-agent"
 
 
 def digest(path: Path) -> tuple[str, int]:
@@ -76,7 +77,7 @@ def build_inventory(runtime_names: set[str]) -> list[dict[str, str]]:
     return [
         {"name": item["name"], "version": item["version"]}
         for item in json.loads(result.stdout)
-        if canonical_name(item["name"]) not in runtime_names
+        if canonical_name(item["name"]) not in runtime_names | {APPLICATION_NAME}
     ]
 
 
@@ -104,7 +105,13 @@ def platform_evidence(platform: str, artifact: Path, output: Path) -> None:
         "components": components
     }
     (output / "sbom.cdx.json").write_text(json.dumps(sbom, indent=2, sort_keys=True) + "\n")
-    (output / "dependency-inventory.json").write_text(json.dumps({"format": "runtime-closure", "runtime": runtime, "buildOnly": build_inventory(runtime_names)}, indent=2, sort_keys=True) + "\n")
+    inventory = {
+        "format": "runtime-closure",
+        "application": {"name": APPLICATION_NAME, "version": VERSION},
+        "runtime": runtime,
+        "buildOnly": build_inventory(runtime_names),
+    }
+    (output / "dependency-inventory.json").write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n")
     (output / "migration.json").write_text(json.dumps({"schema": "bke.licensing-agent.migration.v1", "migration": "none"}, indent=2) + "\n")
 
 

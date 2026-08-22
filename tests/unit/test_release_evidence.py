@@ -56,6 +56,8 @@ def release_dependency_metadata(monkeypatch):
         "version",
         lambda name: versions[release_evidence.canonical_name(name)],
     )
+
+
 @pytest.mark.parametrize(
     ("platform", "expects_pywin32"),
     (("windows-x64", True), ("linux-x64", False), ("macos-arm64", False)),
@@ -72,6 +74,7 @@ def test_platform_runtime_evidence_isolated_by_target(
     output = tmp_path / platform
     monkeypatch.setenv("SOURCE_SHA", "b" * 40)
     installed = [
+        {"name": "bke-licensing-agent", "version": "1.0.0"},
         {"name": "bke-updater-core", "version": "0.1.0"},
         {"name": "PyInstaller", "version": "6.15.0"},
         {"name": "requests", "version": "2.32.5"},
@@ -94,6 +97,8 @@ def test_platform_runtime_evidence_isolated_by_target(
         for item in json.loads((output / "sbom.cdx.json").read_text())["components"]
     }
 
+    assert inventory["application"] == {"name": "bke-licensing-agent", "version": "1.0.0"}
+    assert "bke-licensing-agent" not in build_only
     assert ("pywin32" in runtime) is expects_pywin32
     assert ("pywin32" in components) is expects_pywin32
     assert "pywin32" not in build_only
