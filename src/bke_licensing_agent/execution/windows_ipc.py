@@ -1,7 +1,9 @@
 """Windows-only named-pipe peer authentication adapter."""
 
+import ctypes
 import hashlib
 import os
+from ctypes import wintypes
 from pathlib import Path
 
 from .module_launch import PeerIdentity
@@ -36,13 +38,32 @@ def current_user_and_system_security_attributes():
     return attributes
 
 
+def _query_full_process_image_name(process_handle) -> str:
+    """Resolve a process image path using the stable Win32 API directly.
+
+    pywin32 does not expose QueryFullProcessImageName consistently across runner
+    versions, so the IPC trust boundary uses kernel32 with the already-opened
+    PROCESS_QUERY_LIMITED_INFORMATION handle instead of depending on that wrapper.
+    """
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    query = kernel32.QueryFullProcessImageNameW
+    query.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    query.restype = wintypes.BOOL
+
+    size = wintypes.DWORD(32768)
+    buffer = ctypes.create_unicode_buffer(size.value)
+    if not query(wintypes.HANDLE(int(process_handle)), 0, buffer, ctypes.byref(size)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return buffer.value
+
+
 def peer_identity_from_pipe(pipe_handle) -> PeerIdentity:
     win32api, win32con, win32pipe, win32process, _, _ = _modules()
     pid = int(win32pipe.GetNamedPipeClientProcessId(pipe_handle))
     access = win32con.PROCESS_QUERY_LIMITED_INFORMATION | win32con.SYNCHRONIZE
     process = win32api.OpenProcess(access, False, pid)
     try:
-        path = win32process.QueryFullProcessImageName(process, 0)
+        path = _query_full_process_image_name(process)
         created = win32process.GetProcessTimes(process)["CreationTime"]
         creation_time = int(created.timestamp() * 10_000_000)
         digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
