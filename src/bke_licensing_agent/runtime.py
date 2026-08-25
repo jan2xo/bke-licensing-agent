@@ -17,6 +17,7 @@ from .config import (
     get_trusted_keys_dir,
 )
 from .devices.fingerprint import DeviceFingerprint
+from .discovery.scanner import scan as discovery_scan
 from .execution.module_launch import (
     BundlePolicy,
     EnterpriseModuleLaunchService,
@@ -42,6 +43,7 @@ from .license_center.native_launcher import NativeLicenseCenterLauncher
 from .license_center.service import LicenseCenterAction, LicenseCenterService, OpenLicenseCenterRequest
 from .manifest.validator import validate_manifest
 from .storage.database import Database
+from .storage.models import DiscoveredProductRecord
 
 
 def _load_trusted_keys(directory: Path) -> dict[str, str]:
@@ -82,13 +84,42 @@ class InstalledAgentRuntime:
         self._server: LocalAuthorizationServer | None = None
         self._module_server = module_server
         if self._module_server is None and os.name == "nt":
+            self._refresh_discovery()
             self._module_server = self._build_module_server()
 
-    def _validated_product_record(self, product_id: str, version: str):
+    def _refresh_discovery(self) -> None:
+        """Refresh trusted discovery metadata from configured install roots.
+
+        Discovery never grants authorization. It only gives the Agent canonical
+        manifest/root/entry-point locations that are later bound to signed lease
+        and signed bundle-policy checks.
+        """
+        try:
+            discovered = discovery_scan()
+        except Exception:
+            return
+        for product in discovered:
+            try:
+                validated = validate_manifest(product.manifest)
+                self.database.save_discovered_product(DiscoveredProductRecord.create(
+                    product_id=validated.productId,
+                    display_name=validated.displayName,
+                    version=validated.version,
+                    manifest_path=product.manifest_path,
+                    product_root=product.product_root,
+                    entry_point_path=product.entry_point_path,
+                ))
+            except Exception:
+                continue
+
+    def _validated_product_record(self, product_id: str, version: str, *, refresh_on_miss: bool = True):
         matching = [
             record for record in self.database.list_discovered_products()
             if record.product_id == product_id and record.version == version
         ]
+        if not matching and refresh_on_miss and os.name == "nt":
+            self._refresh_discovery()
+            return self._validated_product_record(product_id, version, refresh_on_miss=False)
         if not matching:
             return None
         record = matching[0]
@@ -97,6 +128,8 @@ class InstalledAgentRuntime:
         except Exception:
             return None
         if manifest.productId != product_id or manifest.version != version:
+            return None
+        if Path(record.entry_point_path).resolve() != (Path(record.product_root).resolve() / manifest.entryPoint).resolve():
             return None
         return record, manifest
 
@@ -136,6 +169,17 @@ class InstalledAgentRuntime:
         except Exception:
             return manifest, None
 
+    def _ensure_module_server(self) -> None:
+        if os.name != "nt" or self._module_server is not None:
+            return
+        self._refresh_discovery()
+        server = self._build_module_server()
+        if server is None:
+            return
+        self._module_server = server
+        if self._server is not None:
+            self._module_server.start()
+
     def authorize(self, request: dict[str, str]) -> dict[str, object]:
         product_id = request["product_id"]
         version = request["version"]
@@ -172,6 +216,8 @@ class InstalledAgentRuntime:
                 self.repository,
                 lambda lease_id: lease if lease_id == lease.lease_id else None,
             )
+            if decision.authorized:
+                self._ensure_module_server()
             return {"authorized": decision.authorized, "reason": decision.reason or decision.state.value}
         except Exception:
             return {"authorized": False, "reason": "unverifiable_signed_lease"}
@@ -198,6 +244,20 @@ class InstalledAgentRuntime:
             product_version=policy.source.version,
         )
 
+    def _bundle_policy_candidates(self) -> list[Path]:
+        candidates = list(get_bundle_policies_dir().glob("*.json"))
+        for record in self.database.list_discovered_products():
+            product_policy_dir = Path(record.product_root) / "bundle-policies"
+            if product_policy_dir.is_dir():
+                candidates.extend(product_policy_dir.glob("*.json"))
+        unique: dict[Path, None] = {}
+        for candidate in candidates:
+            try:
+                unique[candidate.resolve()] = None
+            except OSError:
+                continue
+        return sorted(unique)
+
     def _build_module_server(self) -> ModuleLaunchPipeServer | None:
         """Build Windows IPC only from Agent-verified signed policies and discovery state."""
         if os.name != "nt":
@@ -207,12 +267,14 @@ class InstalledAgentRuntime:
             return None
         verifier = SignedBundlePolicyVerifier(keys)
         contexts: dict[str, ModuleLaunchContext] = {}
-        for path in sorted(get_bundle_policies_dir().glob("*.json")):
+        for path in self._bundle_policy_candidates():
             try:
                 envelope = json.loads(path.read_text())
                 policy = verifier.verify(envelope)
-                source_resolved = self._validated_product_record(policy.source.product_id, policy.source.version)
-                target_resolved = self._validated_product_record(policy.target.product_id, policy.target.version)
+                source_resolved = self._validated_product_record(
+                    policy.source.product_id, policy.source.version, refresh_on_miss=False)
+                target_resolved = self._validated_product_record(
+                    policy.target.product_id, policy.target.version, refresh_on_miss=False)
                 if source_resolved is None or target_resolved is None:
                     continue
                 source_record, source_manifest = source_resolved
@@ -267,10 +329,8 @@ class InstalledAgentRuntime:
                 fingerprint=self.fingerprint,
             )
             decision = service.activate(manifest, license_key, LeaseVerifier(trusted_keys), self.repository)
-            if decision.authorized and self._module_server is None and os.name == "nt":
-                self._module_server = self._build_module_server()
-                if self._module_server is not None and self._server is not None:
-                    self._module_server.start()
+            if decision.authorized:
+                self._ensure_module_server()
             return {"authorized": decision.authorized, "reason": decision.reason or decision.state.value}
         except Exception:
             return {"authorized": False, "reason": "activation_failed"}
