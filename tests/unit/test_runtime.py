@@ -19,6 +19,22 @@ def test_installed_runtime_denies_unknown_product(tmp_path: Path):
         runtime.close()
 
 
+def test_installed_runtime_rejects_native_center_for_unknown_product(tmp_path: Path):
+    database = Database(tmp_path / "agent.db")
+    runtime = InstalledAgentRuntime(database=database, port=0)
+    try:
+        result = runtime.open_license_center({
+            "product_id": "missing-product", "version": "1.0.0",
+            "installation_id": "installation-1", "correlation_id": "corr-1",
+        })
+        assert result == {
+            "outcome": "invalid_product_context", "reason": "invalid product context",
+            "correlation_id": "corr-1", "authorization_changed": False,
+        }
+    finally:
+        runtime.close()
+
+
 def test_trusted_key_loader_uses_filename_stem_as_key_id(tmp_path: Path):
     (tmp_path / "authority-v1.pem").write_text("PUBLIC KEY")
     (tmp_path / "ignore.txt").write_text("not a key")

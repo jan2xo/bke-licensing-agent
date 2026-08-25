@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from pathlib import Path
 
 from .api.client import LicensingPlatformClient
@@ -15,6 +16,8 @@ from .licensing.lease import LeaseVerifier
 from .licensing.license_repository import VerifiedLicenseRepository
 from .licensing.service import LicensingService
 from .local_api import LocalAuthorizationServer
+from .license_center.native_launcher import NativeLicenseCenterLauncher
+from .license_center.service import LicenseCenterAction, LicenseCenterService, OpenLicenseCenterRequest
 from .manifest.validator import validate_manifest
 from .storage.database import Database
 
@@ -140,8 +143,25 @@ class InstalledAgentRuntime:
         except Exception:
             return {"authorized": False, "reason": "activation_failed"}
 
+    def open_license_center(self, request: dict[str, str]) -> dict[str, object]:
+        product_id = request["product_id"]
+        version = request["version"]
+        manifest = self._validated_product(product_id, version)
+        correlation_id = request.get("correlation_id") or str(uuid.uuid4())
+        if manifest is None:
+            return {"outcome": "invalid_product_context", "reason": "invalid product context",
+                    "correlation_id": correlation_id, "authorization_changed": False}
+        typed = OpenLicenseCenterRequest(
+            product_id=product_id, product_version=version,
+            action=LicenseCenterAction.ACTIVATION_REQUIRED,
+            correlation_id=correlation_id, manifest=manifest,
+            safe_context={"installation_id": request["installation_id"]},
+        )
+        result = LicenseCenterService(NativeLicenseCenterLauncher()).open_license_center(typed)
+        return result.model_dump()
+
     def serve_forever(self) -> None:
-        with LocalAuthorizationServer(self.authorize, self.activate, port=self.port) as server:
+        with LocalAuthorizationServer(self.authorize, self.activate, self.open_license_center, port=self.port) as server:
             self._server = server
             try:
                 while True:
