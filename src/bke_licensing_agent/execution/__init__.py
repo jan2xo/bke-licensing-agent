@@ -9,3 +9,10 @@ from .service import (
 
 __all__ = ["ArtifactMetadata", "ExecutionResult", "ExecutionState",
            "LaunchExecutionService", "LaunchPolicyError", "ProcessState"]
+from .module_launch import (
+    BinaryIdentity, BundlePolicy, EnterpriseModuleLaunchService, ModuleLaunchDenied,
+    PeerIdentity, PendingSession, SignedBundlePolicyVerifier,
+)
+
+__all__ = ["BinaryIdentity", "BundlePolicy", "EnterpriseModuleLaunchService",
+           "ModuleLaunchDenied", "PeerIdentity", "PendingSession", "SignedBundlePolicyVerifier"]

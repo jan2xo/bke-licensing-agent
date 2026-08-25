@@ -8,6 +8,18 @@ permissions:
   contents: read
 
 jobs:
+  windows-ipc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Windows IPC test dependencies
+        run: python -m pip install -e ".[test]"
+      - name: Exercise native named-pipe identity and session contracts
+        run: python -m pytest -q tests/windows tests/unit/test_module_launch.py
+
   verify:
     runs-on: ubuntu-latest
     env:
