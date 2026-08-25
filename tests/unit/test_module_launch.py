@@ -10,6 +10,7 @@ from bke_licensing_agent.execution.module_launch import (
     EnterpriseModuleLaunchService, ModuleLaunchDenied, PeerIdentity, SignedBundlePolicyVerifier,
 )
 from bke_licensing_agent.execution.service import ArtifactMetadata, LaunchExecutionService
+from bke_licensing_agent.execution.module_pipe import ModuleLaunchPipeServer, SCHEMA
 from bke_licensing_agent.licensing.launch_authorization import AuthorizationDecision, AuthorizationReason
 from bke_licensing_agent.manifest.validator import validate_manifest
 
@@ -92,3 +93,11 @@ def test_expired_session_denied(tmp_path):
     service=EnterpriseModuleLaunchService(LaunchExecutionService(popen=lambda *a,**k:Process()),lambda pid:child,lambda handle:peers[handle],clock=lambda:next(times),ttl=timedelta(seconds=5))
     service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)
     with pytest.raises(ModuleLaunchDenied, match="expired"): service.redeem("child","installation","device")
+
+
+def test_wire_schema_has_explicit_success_and_denial():
+    server=ModuleLaunchPipeServer(lambda _pipe,request:{"operation":request["operation"]})
+    assert server._dispatch(object(),{"schema":SCHEMA,"request_id":"r1","operation":"launch"}) == {
+        "schema":SCHEMA,"request_id":"r1","ok":True,"result":{"operation":"launch"}}
+    denied=server._dispatch(object(),{"schema":"wrong","request_id":"r2","operation":"launch"})
+    assert denied=={"schema":SCHEMA,"request_id":"r2","ok":False,"error":"invalid_request"}

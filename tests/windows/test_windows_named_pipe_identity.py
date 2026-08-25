@@ -1,5 +1,8 @@
 import os
+import json
+import struct
 import threading
+import time
 
 import pytest
 
@@ -26,3 +29,37 @@ def test_named_pipe_dacl_and_real_peer_pid():
     finally:
         if client: win32file.CloseHandle(client[0])
         win32file.CloseHandle(pipe)
+
+
+def test_versioned_pipe_server_end_to_end_and_explicit_denial():
+    import win32con, win32file, win32pipe
+    from bke_licensing_agent.execution.module_pipe import ModuleLaunchPipeServer, SCHEMA, per_user_pipe_name
+    from bke_licensing_agent.execution.windows_ipc import peer_identity_from_pipe
+    seen=[]
+    def dispatch(pipe, request):
+        peer=peer_identity_from_pipe(pipe); seen.append(peer)
+        if request["operation"] != "launch":
+            from bke_licensing_agent.execution.module_launch import ModuleLaunchDenied
+            raise ModuleLaunchDenied("unsupported_operation")
+        return {"child_pid": 123, "policy_id": request["policy_id"]}
+    server=ModuleLaunchPipeServer(dispatch, io_timeout=2); server.start()
+    deadline=time.time()+5
+    while True:
+        try:
+            win32pipe.WaitNamedPipe(per_user_pipe_name(),200); break
+        except Exception:
+            if time.time()>=deadline: raise
+    def request(value):
+        handle=win32file.CreateFile(per_user_pipe_name(),win32con.GENERIC_READ|win32con.GENERIC_WRITE,0,None,win32con.OPEN_EXISTING,0,None)
+        try:
+            payload=json.dumps(value,separators=(",", ":")).encode(); win32file.WriteFile(handle,struct.pack("!I",len(payload))+payload)
+            _,header=win32file.ReadFile(handle,4); size=struct.unpack("!I",header)[0]; _,body=win32file.ReadFile(handle,size)
+            return json.loads(body)
+        finally: win32file.CloseHandle(handle)
+    try:
+        allowed=request({"schema":SCHEMA,"operation":"launch","request_id":"one","policy_id":"policy"})
+        denied=request({"schema":SCHEMA,"operation":"magic","request_id":"two"})
+        assert allowed=={"schema":SCHEMA,"request_id":"one","ok":True,"result":{"child_pid":123,"policy_id":"policy"}}
+        assert denied["ok"] is False and denied["error"]=="unsupported_operation"
+        assert len(seen)==2 and all(peer.pid==os.getpid() for peer in seen)
+    finally: server.stop()

@@ -20,6 +20,7 @@ from .license_center.native_launcher import NativeLicenseCenterLauncher
 from .license_center.service import LicenseCenterAction, LicenseCenterService, OpenLicenseCenterRequest
 from .manifest.validator import validate_manifest
 from .storage.database import Database
+from .execution.module_pipe import ModuleLaunchPipeServer
 
 
 def _load_trusted_keys(directory: Path) -> dict[str, str]:
@@ -50,13 +51,15 @@ class _RequestInstallationIdentity:
 class InstalledAgentRuntime:
     """Resolve product authorization from Agent-owned persisted state only."""
 
-    def __init__(self, database: Database | None = None, port: int | None = None):
+    def __init__(self, database: Database | None = None, port: int | None = None,
+                 module_server: ModuleLaunchPipeServer | None = None):
         self.database = database or Database()
         self.repository = VerifiedLicenseRepository(self.database)
         self.fingerprint = DeviceFingerprint()
         self.device_id = self.fingerprint.calculate()
         self.port = port if port is not None else get_agent_port()
         self._server: LocalAuthorizationServer | None = None
+        self._module_server = module_server
 
     def _validated_product(self, product_id: str, version: str):
         matching = [
@@ -161,6 +164,8 @@ class InstalledAgentRuntime:
         return result.model_dump()
 
     def serve_forever(self) -> None:
+        if self._module_server is not None:
+            self._module_server.start()
         with LocalAuthorizationServer(self.authorize, self.activate, self.open_license_center, port=self.port) as server:
             self._server = server
             try:
@@ -170,9 +175,13 @@ class InstalledAgentRuntime:
                 return
             finally:
                 self._server = None
+                if self._module_server is not None:
+                    self._module_server.stop()
 
     def close(self) -> None:
         if self._server is not None:
             self._server.close()
             self._server = None
+        if self._module_server is not None:
+            self._module_server.stop()
         self.database.close()
