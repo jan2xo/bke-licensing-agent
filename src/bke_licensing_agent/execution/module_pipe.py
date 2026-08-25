@@ -7,7 +7,6 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -34,7 +33,6 @@ def per_user_pipe_name() -> str:
 @dataclass(frozen=True)
 class ModuleLaunchContext:
     policy: BundlePolicy
-    source_decision: AuthorizationDecision
     target_manifest: Manifest
     target_root: Path
     target_artifact: ArtifactMetadata
@@ -42,24 +40,28 @@ class ModuleLaunchContext:
 
 class EnterpriseModulePipeDispatcher:
     def __init__(self, service: EnterpriseModuleLaunchService,
-                 contexts: Mapping[str, ModuleLaunchContext]):
-        self._service, self._contexts = service, dict(contexts)
+                 contexts: Mapping[str, ModuleLaunchContext],
+                 authorize_source: Callable[[BundlePolicy, str], AuthorizationDecision]):
+        self._service = service
+        self._contexts = dict(contexts)
+        self._authorize_source = authorize_source
 
     def __call__(self, pipe_handle: object, request: dict[str, object]) -> dict[str, object]:
         operation = request.get("operation")
         if operation == "launch":
             policy_id = request.get("policy_id")
+            installation_id = request.get("installation_id")
+            if not isinstance(installation_id, str) or not installation_id:
+                raise ModuleLaunchDenied("invalid_source_binding")
             context = self._contexts.get(str(policy_id))
             if context is None:
                 raise ModuleLaunchDenied("unknown_policy")
-            pid = self._service.launch(context.policy, pipe_handle, context.source_decision,
+            source_decision = self._authorize_source(context.policy, installation_id)
+            pid = self._service.launch(context.policy, pipe_handle, source_decision,
                 context.target_manifest, context.target_root, context.target_artifact)
             return {"child_pid": pid, "policy_id": context.policy.policy_id}
         if operation == "redeem":
-            installation_id, device_id = request.get("installation_id"), request.get("device_id")
-            if not isinstance(installation_id, str) or not installation_id or not isinstance(device_id, str) or not device_id:
-                raise ModuleLaunchDenied("invalid_redemption_binding")
-            session = self._service.redeem(pipe_handle, installation_id, device_id)
+            session = self._service.redeem(pipe_handle)
             return {"enterprise": True, "policy_id": session.policy_id,
                     "expires_at": session.expires_at.isoformat()}
         raise ModuleLaunchDenied("unsupported_operation")
@@ -113,11 +115,15 @@ class ModuleLaunchPipeServer:
                 self._write(pipe, response)
                 win32file.FlushFileBuffers(pipe)
             except Exception:
-                try: self._write(pipe, self._response("unknown", False, error="transport_error"))
-                except Exception: pass
+                try:
+                    self._write(pipe, self._response("unknown", False, error="transport_error"))
+                except Exception:
+                    pass
             finally:
-                try: win32pipe.DisconnectNamedPipe(pipe)
-                except Exception: pass
+                try:
+                    win32pipe.DisconnectNamedPipe(pipe)
+                except Exception:
+                    pass
                 win32file.CloseHandle(pipe)
 
     def _dispatch(self, pipe, request):
@@ -147,9 +153,11 @@ class ModuleLaunchPipeServer:
                 raise TimeoutError("pipe_read_timeout")
             available = win32pipe.PeekNamedPipe(pipe, 0)[1]
             if not available:
-                time.sleep(0.01); continue
+                time.sleep(0.01)
+                continue
             _, data = win32file.ReadFile(pipe, min(remaining, available))
-            chunks.append(data); remaining -= len(data)
+            chunks.append(data)
+            remaining -= len(data)
         return b"".join(chunks)
 
     @staticmethod
@@ -163,6 +171,8 @@ class ModuleLaunchPipeServer:
     @staticmethod
     def _response(request_id, ok, *, result=None, error=None):
         value = {"schema": SCHEMA, "request_id": request_id, "ok": ok}
-        if ok: value["result"] = result or {}
-        else: value["error"] = error or "denied"
+        if ok:
+            value["result"] = result or {}
+        else:
+            value["error"] = error or "denied"
         return value
