@@ -7,6 +7,7 @@ AGENT_HOST = "127.0.0.1"
 DEFAULT_AGENT_PORT = 43873
 DEFAULT_PLATFORM_BASE_URL = "https://jl-bke.com"
 TRUSTED_KEYS_DIRNAME = "trusted-keys"
+BUNDLE_POLICIES_DIRNAME = "bundle-policies"
 
 
 def get_data_dir() -> Path:
@@ -35,5 +36,12 @@ def get_platform_base_url() -> str:
 
 def get_trusted_keys_dir() -> Path:
     path = get_data_dir() / TRUSTED_KEYS_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_bundle_policies_dir() -> Path:
+    """Agent-owned location for signed enterprise bundle-policy envelopes."""
+    path = get_data_dir() / BUNDLE_POLICIES_DIRNAME
     path.mkdir(parents=True, exist_ok=True)
     return path
