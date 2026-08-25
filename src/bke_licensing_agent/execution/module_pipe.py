@@ -33,6 +33,7 @@ def per_user_pipe_name() -> str:
 @dataclass(frozen=True)
 class ModuleLaunchContext:
     policy: BundlePolicy
+    source_path: Path
     target_manifest: Manifest
     target_root: Path
     target_artifact: ArtifactMetadata
@@ -58,7 +59,8 @@ class EnterpriseModulePipeDispatcher:
                 raise ModuleLaunchDenied("unknown_policy")
             source_decision = self._authorize_source(context.policy, installation_id)
             pid = self._service.launch(context.policy, pipe_handle, source_decision,
-                context.target_manifest, context.target_root, context.target_artifact)
+                context.source_path, context.target_manifest, context.target_root,
+                context.target_artifact)
             return {"child_pid": pid, "policy_id": context.policy.policy_id}
         if operation == "redeem":
             session = self._service.redeem(pipe_handle)
