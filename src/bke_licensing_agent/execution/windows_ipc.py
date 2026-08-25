@@ -39,12 +39,7 @@ def current_user_and_system_security_attributes():
 
 
 def _query_full_process_image_name(process_handle) -> str:
-    """Resolve a process image path using the stable Win32 API directly.
-
-    pywin32 does not expose QueryFullProcessImageName consistently across runner
-    versions, so the IPC trust boundary uses kernel32 with the already-opened
-    PROCESS_QUERY_LIMITED_INFORMATION handle instead of depending on that wrapper.
-    """
+    """Resolve a process image path using the stable Win32 API directly."""
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     query = kernel32.QueryFullProcessImageNameW
     query.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
@@ -57,16 +52,21 @@ def _query_full_process_image_name(process_handle) -> str:
     return buffer.value
 
 
-def peer_identity_from_pipe(pipe_handle) -> PeerIdentity:
-    win32api, win32con, win32pipe, win32process, _, _ = _modules()
-    pid = int(win32pipe.GetNamedPipeClientProcessId(pipe_handle))
+def process_identity_from_pid(pid: int) -> PeerIdentity:
+    """Return the kernel-observed identity for an existing process."""
+    win32api, win32con, _, win32process, _, _ = _modules()
     access = win32con.PROCESS_QUERY_LIMITED_INFORMATION | win32con.SYNCHRONIZE
-    process = win32api.OpenProcess(access, False, pid)
+    process = win32api.OpenProcess(access, False, int(pid))
     try:
         path = _query_full_process_image_name(process)
         created = win32process.GetProcessTimes(process)["CreationTime"]
         creation_time = int(created.timestamp() * 10_000_000)
         digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-        return PeerIdentity(pid, path, digest, creation_time)
+        return PeerIdentity(int(pid), path, digest, creation_time)
     finally:
         win32api.CloseHandle(process)
+
+
+def peer_identity_from_pipe(pipe_handle) -> PeerIdentity:
+    _, _, win32pipe, _, _, _ = _modules()
+    return process_identity_from_pid(int(win32pipe.GetNamedPipeClientProcessId(pipe_handle)))
