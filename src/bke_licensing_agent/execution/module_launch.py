@@ -88,8 +88,9 @@ class SignedBundlePolicyVerifier:
         digest = str(value["sha256"]).lower()
         entry_point = str(value["entry_point"]).replace("\\", "/")
         portable = PurePosixPath(entry_point)
+        has_drive_prefix = len(entry_point) >= 2 and entry_point[1] == ":"
         if (len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) or
-                portable.is_absolute() or ".." in portable.parts or not entry_point):
+                portable.is_absolute() or has_drive_prefix or ".." in portable.parts or not entry_point):
             raise ValueError("binary identity")
         return BinaryIdentity(str(value["product_id"]), str(value["version"]), entry_point, digest)
 
@@ -124,8 +125,7 @@ class EnterpriseModuleLaunchService:
         target_path = (Path(target_root).resolve() / target_manifest.entryPoint).resolve()
         if (target_manifest.productId != policy.target.product_id or target_manifest.version != policy.target.version or
                 target_manifest.entryPoint.replace("\\", "/") != policy.target.entry_point or
-                target_artifact.sha256.lower() != policy.target.sha256 or
-                Path(source_path).name != Path(policy.source.entry_point).name):
+                target_artifact.sha256.lower() != policy.target.sha256):
             raise ModuleLaunchDenied("target_policy_mismatch")
         target_decision = replace(source_decision, product_id=policy.target.product_id,
                                   product_version=policy.target.version)
