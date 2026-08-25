@@ -10,7 +10,9 @@ from bke_licensing_agent.execution.module_launch import (
     EnterpriseModuleLaunchService, ModuleLaunchDenied, PeerIdentity, SignedBundlePolicyVerifier,
 )
 from bke_licensing_agent.execution.service import ArtifactMetadata, LaunchExecutionService
-from bke_licensing_agent.execution.module_pipe import ModuleLaunchPipeServer, SCHEMA
+from bke_licensing_agent.execution.module_pipe import (
+    EnterpriseModulePipeDispatcher, ModuleLaunchContext, ModuleLaunchPipeServer, SCHEMA,
+)
 from bke_licensing_agent.licensing.launch_authorization import AuthorizationDecision, AuthorizationReason
 from bke_licensing_agent.manifest.validator import validate_manifest
 
@@ -64,26 +66,23 @@ def test_exact_child_single_use_and_offline_decision(tmp_path):
     peers={"source":source,"child":child}
     service=EnterpriseModuleLaunchService(execution, lambda pid: child, lambda handle:peers[handle], clock=lambda:NOW)
     assert service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)==77
-    session=service.redeem("child","installation","device")
+    session=service.redeem("child")
     assert session.pid==77
-    with pytest.raises(ModuleLaunchDenied, match="unknown_or_used"): service.redeem("child","installation","device")
+    with pytest.raises(ModuleLaunchDenied, match="unknown_or_used"): service.redeem("child")
 
 
-@pytest.mark.parametrize("change", ["source", "child", "installation", "device"])
+@pytest.mark.parametrize("change", ["source", "child"])
 def test_spoofed_source_or_child_binding_denied(tmp_path, change):
     _,_,policy,manifest,artifact,root,source,child=fixture(tmp_path)
     peers={"source":source,"child":child}
     process=Process(); service=EnterpriseModuleLaunchService(LaunchExecutionService(popen=lambda *a,**k:process),lambda pid:child,lambda handle:peers[handle],clock=lambda:NOW)
     if change=="source":
-        source=PeerIdentity(source.pid,source.path,"0"*64,source.creation_time)
-        peers["source"]=source
+        peers["source"]=PeerIdentity(source.pid,source.path,"0"*64,source.creation_time)
         with pytest.raises(ModuleLaunchDenied, match="source_identity"): service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)
         return
     service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)
-    if change=="child": peers["child"]=PeerIdentity(child.pid,child.path,child.sha256,999)
-    installation="wrong" if change=="installation" else "installation"
-    device="wrong" if change=="device" else "device"
-    with pytest.raises(ModuleLaunchDenied, match="child_binding"): service.redeem("child",installation,device)
+    peers["child"]=PeerIdentity(child.pid,child.path,child.sha256,999)
+    with pytest.raises(ModuleLaunchDenied, match="child_binding"): service.redeem("child")
 
 
 def test_expired_session_denied(tmp_path):
@@ -92,7 +91,20 @@ def test_expired_session_denied(tmp_path):
     peers={"source":source,"child":child}
     service=EnterpriseModuleLaunchService(LaunchExecutionService(popen=lambda *a,**k:Process()),lambda pid:child,lambda handle:peers[handle],clock=lambda:next(times),ttl=timedelta(seconds=5))
     service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)
-    with pytest.raises(ModuleLaunchDenied, match="expired"): service.redeem("child","installation","device")
+    with pytest.raises(ModuleLaunchDenied, match="expired"): service.redeem("child")
+
+
+def test_dispatcher_fresh_authorizes_source_installation_and_redeems_without_echo(tmp_path):
+    _,_,policy,manifest,artifact,root,source,child=fixture(tmp_path)
+    peers={"source":source,"child":child}
+    service=EnterpriseModuleLaunchService(LaunchExecutionService(popen=lambda *a,**k:Process()),lambda pid:child,lambda handle:peers[handle],clock=lambda:NOW)
+    calls=[]
+    dispatcher=EnterpriseModulePipeDispatcher(service,{policy.policy_id:ModuleLaunchContext(policy,manifest,root,artifact)},
+        lambda _policy,installation:(calls.append(installation) or decision("bke-air-stack",installation=installation)))
+    launched=dispatcher("source",{"operation":"launch","policy_id":policy.policy_id,"installation_id":"air-install"})
+    redeemed=dispatcher("child",{"operation":"redeem"})
+    assert launched["child_pid"]==77 and calls==["air-install"]
+    assert redeemed["enterprise"] is True and redeemed["policy_id"]==policy.policy_id
 
 
 def test_wire_schema_has_explicit_success_and_denial():
