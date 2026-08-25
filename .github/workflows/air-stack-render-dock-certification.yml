@@ -1,0 +1,138 @@
+name: Air Stack Render Dock certification
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/air-stack-render-dock-certification.yml'
+      - 'src/bke_licensing_agent/execution/**'
+      - 'src/bke_licensing_agent/runtime.py'
+      - 'scripts/sign_bundle_policy.py'
+      - 'docs/enterprise-module-launch.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-contract:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      AIR_STACK_SHA: ba2c86c301a155c1cdbe283d055465cd575860dc
+      RENDER_DOCK_SHA: e6fa180a5b261af74ed57d1537c6dabd8d8a9d61
+    steps:
+      - name: Check out exact Agent candidate
+        uses: actions/checkout@v4
+        with:
+          path: agent
+
+      - name: Check out exact Air Stack candidate
+        uses: actions/checkout@v4
+        with:
+          repository: jan2xo/BKE_AIR_STACK
+          ref: ${{ env.AIR_STACK_SHA }}
+          path: air-stack
+
+      - name: Check out exact Render Dock candidate
+        uses: actions/checkout@v4
+        with:
+          repository: jan2xo/BKE_RENDER_DOCK
+          ref: ${{ env.RENDER_DOCK_SHA }}
+          path: render-dock
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Install Agent test runtime
+        working-directory: agent
+        run: python -m pip install -e ".[test]"
+
+      - name: Build exact Air Stack candidate
+        run: dotnet build "air-stack/BKE AirStack/BKE AirStack.csproj" -c Release
+
+      - name: Build and test exact Render Dock candidate
+        shell: pwsh
+        run: |
+          dotnet build "render-dock/BKE_RENDER_DOCK/RENDER DOCK.csproj" -c Release
+          dotnet test "render-dock/RenderDock.Tests/RenderDock.Tests.csproj" -c Release
+
+      - name: Publish exact product binaries
+        shell: pwsh
+        run: |
+          dotnet publish "air-stack/BKE AirStack/BKE AirStack.csproj" -c Release -r win-x64 --self-contained true -p:SignManifests=false -o air-publish
+          & "render-dock/packaging/windows/publish.ps1"
+          Copy-Item "render-dock/artifacts/publish/win-x64" "render-publish" -Recurse
+
+      - name: Generate disposable certification signing key
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          key = Ed25519PrivateKey.generate()
+          Path('bundle-private.pem').write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+          Path('bundle-public.pem').write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+          '@ | python -
+
+      - name: Sign exact disposable bundle policy
+        shell: pwsh
+        run: |
+          python agent/scripts/sign_bundle_policy.py `
+            --policy-id air-stack-render-dock-v1 `
+            --source-product-id bke-air-stack `
+            --source-version 1.0.0 `
+            --source-entry-point "BKE AirStack.exe" `
+            --source-binary "air-publish/BKE AirStack.exe" `
+            --target-product-id bke-render-dock `
+            --target-version 1.0.0 `
+            --target-entry-point "RENDER DOCK.exe" `
+            --target-binary "render-publish/RENDER DOCK.exe" `
+            --key-id certification `
+            --private-key bundle-private.pem `
+            --output air-stack-render-dock.bundle-policy.json
+
+      - name: Verify signed policy and cross-repository contract
+        shell: pwsh
+        env:
+          PYTHONPATH: agent/src
+        run: |
+          @'
+          import hashlib, json
+          from pathlib import Path
+          from bke_licensing_agent.execution.module_launch import SignedBundlePolicyVerifier
+          envelope = json.loads(Path('air-stack-render-dock.bundle-policy.json').read_text())
+          policy = SignedBundlePolicyVerifier({'certification': Path('bundle-public.pem').read_text()}).verify(envelope)
+          assert policy.policy_id == 'air-stack-render-dock-v1'
+          assert policy.source.product_id == 'bke-air-stack'
+          assert policy.source.entry_point == 'BKE AirStack.exe'
+          assert policy.source.sha256 == hashlib.sha256(Path('air-publish/BKE AirStack.exe').read_bytes()).hexdigest()
+          assert policy.target.product_id == 'bke-render-dock'
+          assert policy.target.entry_point == 'RENDER DOCK.exe'
+          assert policy.target.sha256 == hashlib.sha256(Path('render-publish/RENDER DOCK.exe').read_bytes()).hexdigest()
+          '@ | python -
+
+          $air = Get-Content "air-stack/BKE AirStack/Licensing/ModuleLaunchClient.cs" -Raw
+          $dock = Get-Content "render-dock/BKE_RENDER_DOCK/Licensing/EnterpriseSessionClient.cs" -Raw
+          if ($air -notmatch 'bke.module-ipc.v1' -or $air -notmatch 'air-stack-render-dock-v1' -or $air -notmatch 'operation = "launch"') { throw 'Air Stack wire contract mismatch' }
+          if ($dock -notmatch 'bke.module-ipc.v1' -or $dock -notmatch 'operation = "redeem"') { throw 'Render Dock wire contract mismatch' }
+          if (($air + $dock) -match '--air-stack|--enterprise|Environment.GetCommandLineArgs') { throw 'Forbidden CLI authority detected' }
+
+      - name: Exercise Agent native IPC security tests
+        working-directory: agent
+        run: python -m pytest -q tests/windows tests/unit/test_module_launch.py
+
+      - name: Record exact pins
+        shell: pwsh
+        run: |
+          if ((git -C air-stack rev-parse HEAD).Trim() -ne $env:AIR_STACK_SHA) { throw 'Air Stack SHA drift' }
+          if ((git -C render-dock rev-parse HEAD).Trim() -ne $env:RENDER_DOCK_SHA) { throw 'Render Dock SHA drift' }
+          git -C agent rev-parse HEAD
+          git -C air-stack rev-parse HEAD
+          git -C render-dock rev-parse HEAD

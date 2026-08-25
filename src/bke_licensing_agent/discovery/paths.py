@@ -1,12 +1,24 @@
 import os
 from pathlib import Path
-from typing import Sequence
 
-DEFAULT_DISCOVERY_PATHS = [
-    Path.home() / "Applications" / "BKE",
-    Path("/Applications/BKE"),
-    Path.home() / ".local" / "share" / "BKE",
-]
+
+def _default_discovery_paths() -> list[Path]:
+    if os.name == "nt":
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        return [
+            program_files / "BKE AirStack",
+            program_files / "BKE Digital Solutions",
+            Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+            / "Programs" / "BKE Digital Solutions",
+        ]
+    return [
+        Path.home() / "Applications" / "BKE",
+        Path("/Applications/BKE"),
+        Path.home() / ".local" / "share" / "BKE",
+    ]
+
+
+DEFAULT_DISCOVERY_PATHS = _default_discovery_paths()
 
 
 def parse_discovery_paths(paths: str | None = None) -> list[Path]:
@@ -16,7 +28,7 @@ def parse_discovery_paths(paths: str | None = None) -> list[Path]:
     separator = ";" if os.name == "nt" else ":"
     candidates = [entry.strip() for entry in paths.split(separator) if entry.strip()]
     if not candidates:
-        return [path for path in DEFAULT_DISCOVERY_PATHS]
+        return list(DEFAULT_DISCOVERY_PATHS)
 
     return [Path(os.path.expanduser(candidate)) for candidate in candidates]
 

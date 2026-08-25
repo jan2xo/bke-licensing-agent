@@ -21,16 +21,19 @@ class LocalAuthorizationServer:
         self,
         authorize: Callable[[dict[str, str]], dict[str, object]],
         activate: Callable[[dict[str, str]], dict[str, object]] | None = None,
+        open_license_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
         port: int = 0,
     ):
         self._authorize = authorize
         self._activate = activate
+        self._open_license_center = open_license_center
         self._server = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
         self._thread: Thread | None = None
 
     def _handler(self):
         authorize = self._authorize
         activate = self._activate
+        open_license_center = self._open_license_center
 
         class Handler(BaseHTTPRequestHandler):
             def _json(self, status: int, body: dict[str, object]) -> None:
@@ -89,6 +92,21 @@ class LocalAuthorizationServer:
                             raise ValueError("invalid activation request")
                         result = activate(body)
                         self._json(200, {"authorized": bool(result.get("authorized")), "reason": str(result.get("reason", ""))})
+                        return
+                    if self.path == "/v1/license-center/open":
+                        if open_license_center is None:
+                            self._json(503, {"outcome": "agent_unavailable", "reason": "native_license_center_unavailable"})
+                            return
+                        required = ("product_id", "version", "installation_id", "correlation_id")
+                        if not all(isinstance(body.get(k), str) and body[k].strip() for k in required):
+                            raise ValueError("invalid License Center request")
+                        result = open_license_center(body)
+                        self._json(200, {
+                            "outcome": str(result.get("outcome", "failed")),
+                            "reason": str(result.get("reason", "")),
+                            "authorization_changed": bool(result.get("authorization_changed")),
+                            "correlation_id": str(result.get("correlation_id", body["correlation_id"])),
+                        })
                         return
                     self.send_error(404)
                 except Exception:
