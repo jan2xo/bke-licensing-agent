@@ -43,13 +43,18 @@ def test_versioned_pipe_server_end_to_end_and_explicit_denial():
             raise ModuleLaunchDenied("unsupported_operation")
         return {"child_pid": 123, "policy_id": request["policy_id"]}
     server=ModuleLaunchPipeServer(dispatch, io_timeout=2); server.start()
-    deadline=time.time()+5
-    while True:
-        try:
-            win32pipe.WaitNamedPipe(per_user_pipe_name(),200); break
-        except Exception:
-            if time.time()>=deadline: raise
+    def wait_for_pipe():
+        deadline=time.time()+5
+        while True:
+            try:
+                win32pipe.WaitNamedPipe(per_user_pipe_name(),200); return
+            except Exception:
+                if time.time()>=deadline: raise
     def request(value):
+        # The server deliberately owns one connection at a time and recreates its
+        # pipe instance after each request. Real clients therefore wait for the
+        # next instance instead of assuming the name is continuously connectable.
+        wait_for_pipe()
         handle=win32file.CreateFile(per_user_pipe_name(),win32con.GENERIC_READ|win32con.GENERIC_WRITE,0,None,win32con.OPEN_EXISTING,0,None)
         try:
             payload=json.dumps(value,separators=(",", ":")).encode(); win32file.WriteFile(handle,struct.pack("!I",len(payload))+payload)
