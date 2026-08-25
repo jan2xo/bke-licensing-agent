@@ -6,7 +6,7 @@ import json
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping
 
 from cryptography.hazmat.primitives import serialization
@@ -25,7 +25,7 @@ class ModuleLaunchDenied(Exception):
 class BinaryIdentity:
     product_id: str
     version: str
-    path: str
+    entry_point: str
     sha256: str
 
 
@@ -83,13 +83,15 @@ class SignedBundlePolicyVerifier:
 
     @staticmethod
     def _binary(value: object) -> BinaryIdentity:
-        if not isinstance(value, dict) or set(value) != {"product_id", "version", "path", "sha256"}:
+        if not isinstance(value, dict) or set(value) != {"product_id", "version", "entry_point", "sha256"}:
             raise ValueError("binary identity")
         digest = str(value["sha256"]).lower()
-        path = str(value["path"])
-        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) or not Path(path).is_absolute():
+        entry_point = str(value["entry_point"]).replace("\\", "/")
+        portable = PurePosixPath(entry_point)
+        if (len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) or
+                portable.is_absolute() or ".." in portable.parts or not entry_point):
             raise ValueError("binary identity")
-        return BinaryIdentity(str(value["product_id"]), str(value["version"]), path, digest)
+        return BinaryIdentity(str(value["product_id"]), str(value["version"]), entry_point, digest)
 
 
 class EnterpriseModuleLaunchService:
@@ -107,20 +109,23 @@ class EnterpriseModuleLaunchService:
         self._pending: dict[int, PendingSession] = {}
 
     @staticmethod
-    def _matches(peer: PeerIdentity, binary: BinaryIdentity) -> bool:
-        return (Path(peer.path).resolve() == Path(binary.path).resolve() and
-                peer.sha256.lower() == binary.sha256.lower())
+    def _matches(peer: PeerIdentity, expected_path: Path, expected_sha256: str) -> bool:
+        return (Path(peer.path).resolve() == expected_path.resolve() and
+                peer.sha256.lower() == expected_sha256.lower())
 
     def launch(self, policy: BundlePolicy, source_pipe: object,
-               source_decision: AuthorizationDecision, target_manifest: Manifest,
-               target_root: Path, target_artifact: ArtifactMetadata) -> int:
+               source_decision: AuthorizationDecision, source_path: Path,
+               target_manifest: Manifest, target_root: Path,
+               target_artifact: ArtifactMetadata) -> int:
         source_peer = self._peer_from_pipe(source_pipe)
         if (source_decision.product_id != policy.source.product_id or not source_decision.allowed or
-                not self._matches(source_peer, policy.source)):
+                not self._matches(source_peer, source_path, policy.source.sha256)):
             raise ModuleLaunchDenied("source_identity_denied")
+        target_path = (Path(target_root).resolve() / target_manifest.entryPoint).resolve()
         if (target_manifest.productId != policy.target.product_id or target_manifest.version != policy.target.version or
-                Path(policy.target.path).resolve() != (Path(target_root).resolve() / target_manifest.entryPoint).resolve() or
-                target_artifact.sha256.lower() != policy.target.sha256):
+                target_manifest.entryPoint.replace("\\", "/") != policy.target.entry_point or
+                target_artifact.sha256.lower() != policy.target.sha256 or
+                Path(source_path).name != Path(policy.source.entry_point).name):
             raise ModuleLaunchDenied("target_policy_mismatch")
         target_decision = replace(source_decision, product_id=policy.target.product_id,
                                   product_version=policy.target.version)
@@ -128,7 +133,7 @@ class EnterpriseModuleLaunchService:
         if result.state is not ExecutionState.LAUNCHED or result.pid is None:
             raise ModuleLaunchDenied(f"target_launch_{result.state.value}")
         child = self._process_identity(result.pid)
-        if not self._matches(child, policy.target):
+        if not self._matches(child, target_path, policy.target.sha256):
             self._execution.terminate(target_manifest.productId)
             raise ModuleLaunchDenied("launched_child_identity_mismatch")
         pending = PendingSession(policy.policy_id, child.pid, child.creation_time, child.path, child.sha256,
@@ -138,12 +143,7 @@ class EnterpriseModuleLaunchService:
         return child.pid
 
     def redeem(self, target_pipe: object) -> PendingSession:
-        """Consume the one-time enterprise session for the exact Agent-launched child process.
-
-        No source installation/device value is echoed by Render Dock. Those bindings are
-        already proven when the Agent freshly authorizes Air Stack before launch; the child
-        rendezvous is authenticated by kernel peer PID plus creation time/path/hash.
-        """
+        """Consume the one-time enterprise session for the exact Agent-launched child process."""
         peer = self._peer_from_pipe(target_pipe)
         with self._lock:
             pending = self._pending.pop(peer.pid, None)
