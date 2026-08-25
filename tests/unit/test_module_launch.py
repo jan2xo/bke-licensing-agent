@@ -62,7 +62,7 @@ def test_exact_child_single_use_and_offline_decision(tmp_path):
     process=Process(); execution=LaunchExecutionService(popen=lambda *a,**k:process)
     peers={"source":source,"child":child}
     service=EnterpriseModuleLaunchService(execution, lambda pid: child, lambda handle:peers[handle], clock=lambda:NOW)
-    assert service.launch(policy,"source",decision("bke-air-stack"),manifest,root,decision("bke-render-dock"),artifact)==77
+    assert service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)==77
     session=service.redeem("child","installation","device")
     assert session.pid==77
     with pytest.raises(ModuleLaunchDenied, match="unknown_or_used"): service.redeem("child","installation","device")
@@ -76,9 +76,9 @@ def test_spoofed_source_or_child_binding_denied(tmp_path, change):
     if change=="source":
         source=PeerIdentity(source.pid,source.path,"0"*64,source.creation_time)
         peers["source"]=source
-        with pytest.raises(ModuleLaunchDenied, match="source_identity"): service.launch(policy,"source",decision("bke-air-stack"),manifest,root,decision("bke-render-dock"),artifact)
+        with pytest.raises(ModuleLaunchDenied, match="source_identity"): service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)
         return
-    service.launch(policy,"source",decision("bke-air-stack"),manifest,root,decision("bke-render-dock"),artifact)
+    service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)
     if change=="child": peers["child"]=PeerIdentity(child.pid,child.path,child.sha256,999)
     installation="wrong" if change=="installation" else "installation"
     device="wrong" if change=="device" else "device"
@@ -90,5 +90,5 @@ def test_expired_session_denied(tmp_path):
     times=iter([NOW,NOW+timedelta(minutes=1)])
     peers={"source":source,"child":child}
     service=EnterpriseModuleLaunchService(LaunchExecutionService(popen=lambda *a,**k:Process()),lambda pid:child,lambda handle:peers[handle],clock=lambda:next(times),ttl=timedelta(seconds=5))
-    service.launch(policy,"source",decision("bke-air-stack"),manifest,root,decision("bke-render-dock"),artifact)
+    service.launch(policy,"source",decision("bke-air-stack"),manifest,root,artifact)
     with pytest.raises(ModuleLaunchDenied, match="expired"): service.redeem("child","installation","device")

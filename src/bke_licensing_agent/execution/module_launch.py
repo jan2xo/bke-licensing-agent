@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping
@@ -115,8 +115,7 @@ class EnterpriseModuleLaunchService:
 
     def launch(self, policy: BundlePolicy, source_pipe: object,
                source_decision: AuthorizationDecision, target_manifest: Manifest,
-               target_root: Path, target_decision: AuthorizationDecision,
-               target_artifact: ArtifactMetadata) -> int:
+               target_root: Path, target_artifact: ArtifactMetadata) -> int:
         source_peer = self._peer_from_pipe(source_pipe)
         if (source_decision.product_id != policy.source.product_id or not source_decision.allowed or
                 not self._matches(source_peer, policy.source)):
@@ -125,6 +124,8 @@ class EnterpriseModuleLaunchService:
                 Path(policy.target.path).resolve() != (Path(target_root).resolve() / target_manifest.entryPoint).resolve() or
                 target_artifact.sha256.lower() != policy.target.sha256):
             raise ModuleLaunchDenied("target_policy_mismatch")
+        target_decision = replace(source_decision, product_id=policy.target.product_id,
+                                  product_version=policy.target.version)
         result = self._execution.launch(target_manifest, target_root, target_decision, target_artifact)
         if result.state is not ExecutionState.LAUNCHED or result.pid is None:
             raise ModuleLaunchDenied(f"target_launch_{result.state.value}")
