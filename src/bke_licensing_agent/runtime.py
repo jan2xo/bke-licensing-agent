@@ -3,15 +3,37 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from pathlib import Path
 
 from .api.client import LicensingPlatformClient
 from .api.config import ApiConfig
-from .config import get_agent_port, get_platform_base_url, get_trusted_keys_dir
+from .config import (
+    get_agent_port,
+    get_bundle_policies_dir,
+    get_platform_base_url,
+    get_trusted_keys_dir,
+)
 from .devices.fingerprint import DeviceFingerprint
+from .execution.module_launch import (
+    BundlePolicy,
+    EnterpriseModuleLaunchService,
+    ModuleLaunchDenied,
+    SignedBundlePolicyVerifier,
+)
+from .execution.module_pipe import (
+    EnterpriseModulePipeDispatcher,
+    ModuleLaunchContext,
+    ModuleLaunchPipeServer,
+)
+from .execution.service import ArtifactMetadata, LaunchExecutionService
 from .licensing.authorization import AuthorizationService
+from .licensing.launch_authorization import (
+    AuthorizationDecision as LaunchAuthorizationDecision,
+    AuthorizationReason as LaunchAuthorizationReason,
+)
 from .licensing.lease import LeaseVerifier
 from .licensing.license_repository import VerifiedLicenseRepository
 from .licensing.service import LicensingService
@@ -20,7 +42,6 @@ from .license_center.native_launcher import NativeLicenseCenterLauncher
 from .license_center.service import LicenseCenterAction, LicenseCenterService, OpenLicenseCenterRequest
 from .manifest.validator import validate_manifest
 from .storage.database import Database
-from .execution.module_pipe import ModuleLaunchPipeServer
 
 
 def _load_trusted_keys(directory: Path) -> dict[str, str]:
@@ -60,8 +81,10 @@ class InstalledAgentRuntime:
         self.port = port if port is not None else get_agent_port()
         self._server: LocalAuthorizationServer | None = None
         self._module_server = module_server
+        if self._module_server is None and os.name == "nt":
+            self._module_server = self._build_module_server()
 
-    def _validated_product(self, product_id: str, version: str):
+    def _validated_product_record(self, product_id: str, version: str):
         matching = [
             record for record in self.database.list_discovered_products()
             if record.product_id == product_id and record.version == version
@@ -75,7 +98,43 @@ class InstalledAgentRuntime:
             return None
         if manifest.productId != product_id or manifest.version != version:
             return None
-        return manifest
+        return record, manifest
+
+    def _validated_product(self, product_id: str, version: str):
+        resolved = self._validated_product_record(product_id, version)
+        return resolved[1] if resolved is not None else None
+
+    def _verified_local_authorization(self, product_id: str, version: str,
+                                      installation_id: str):
+        manifest = self._validated_product(product_id, version)
+        if manifest is None:
+            return manifest, None
+        binding = self.repository.active(product_id, installation_id, self.device_id)
+        if binding is None:
+            return manifest, None
+        keys = _load_trusted_keys(get_trusted_keys_dir())
+        if not keys:
+            return manifest, None
+        try:
+            verifier = LeaseVerifier(keys)
+            lease = self.repository.verify_signed_lease(
+                binding.active_lease_id,
+                verifier,
+                product_id=product_id,
+                installation_id=installation_id,
+                device_id=self.device_id,
+                version=version,
+            )
+            decision = AuthorizationService().authorize_from_active_binding(
+                manifest,
+                installation_id,
+                self.device_id,
+                self.repository,
+                lambda lease_id: lease if lease_id == lease.lease_id else None,
+            )
+            return manifest, decision
+        except Exception:
+            return manifest, None
 
     def authorize(self, request: dict[str, str]) -> dict[str, object]:
         product_id = request["product_id"]
@@ -116,6 +175,71 @@ class InstalledAgentRuntime:
             return {"authorized": decision.authorized, "reason": decision.reason or decision.state.value}
         except Exception:
             return {"authorized": False, "reason": "unverifiable_signed_lease"}
+
+    def _authorize_bundle_source(self, policy: BundlePolicy,
+                                 installation_id: str) -> LaunchAuthorizationDecision:
+        """Freshly re-evaluate the signed local Air Stack lease for each module launch."""
+        manifest, decision = self._verified_local_authorization(
+            policy.source.product_id, policy.source.version, installation_id)
+        if manifest is None or decision is None or not decision.authorized:
+            return LaunchAuthorizationDecision(
+                False, LaunchAuthorizationReason.AUTHORIZATION_DENIED,
+                policy.source.product_id,
+                installation_id=installation_id,
+                device_id=self.device_id,
+                product_version=policy.source.version,
+            )
+        return LaunchAuthorizationDecision(
+            True, LaunchAuthorizationReason.AUTHORIZED_OFFLINE,
+            policy.source.product_id,
+            expires_at=decision.expires_at,
+            installation_id=installation_id,
+            device_id=self.device_id,
+            product_version=policy.source.version,
+        )
+
+    def _build_module_server(self) -> ModuleLaunchPipeServer | None:
+        """Build Windows IPC only from Agent-verified signed bundle policies and discovered products."""
+        if os.name != "nt":
+            return None
+        keys = _load_trusted_keys(get_trusted_keys_dir())
+        if not keys:
+            return None
+        verifier = SignedBundlePolicyVerifier(keys)
+        contexts: dict[str, ModuleLaunchContext] = {}
+        for path in sorted(get_bundle_policies_dir().glob("*.json")):
+            try:
+                envelope = json.loads(path.read_text())
+                policy = verifier.verify(envelope)
+                source_resolved = self._validated_product_record(policy.source.product_id, policy.source.version)
+                target_resolved = self._validated_product_record(policy.target.product_id, policy.target.version)
+                if source_resolved is None or target_resolved is None:
+                    continue
+                source_record, _ = source_resolved
+                target_record, target_manifest = target_resolved
+                if Path(source_record.entry_point_path).resolve() != Path(policy.source.path).resolve():
+                    continue
+                if Path(target_record.entry_point_path).resolve() != Path(policy.target.path).resolve():
+                    continue
+                target_root = Path(target_record.product_root).resolve()
+                artifact = ArtifactMetadata(
+                    policy.target.product_id,
+                    policy.target.version,
+                    target_manifest.entryPoint,
+                    policy.target.sha256,
+                )
+                contexts[policy.policy_id] = ModuleLaunchContext(
+                    policy, target_manifest, target_root, artifact)
+            except (OSError, ValueError, json.JSONDecodeError, ModuleLaunchDenied):
+                continue
+        if not contexts:
+            return None
+        from .execution.windows_ipc import process_identity_from_pid
+        service = EnterpriseModuleLaunchService(
+            LaunchExecutionService(), process_identity_from_pid)
+        dispatcher = EnterpriseModulePipeDispatcher(
+            service, contexts, self._authorize_bundle_source)
+        return ModuleLaunchPipeServer(dispatcher)
 
     def activate(self, request: dict[str, str]) -> dict[str, object]:
         product_id = request["product_id"]
