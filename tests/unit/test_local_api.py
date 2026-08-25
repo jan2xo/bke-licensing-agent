@@ -55,3 +55,37 @@ def test_activation_rejects_missing_license_key():
         )
         with pytest.raises(Exception):
             urlopen(request)
+
+
+def test_native_license_center_open_returns_typed_terminal_outcome():
+    seen = []
+    with LocalAuthorizationServer(
+        lambda _request: {"authorized": False},
+        open_license_center=lambda value: seen.append(value) or {
+            "outcome": "cancelled", "reason": "", "correlation_id": value["correlation_id"],
+        },
+    ) as server:
+        request = Request(
+            f"{server.url}/v1/license-center/open",
+            data=json.dumps({"product_id": "p", "version": "1", "installation_id": "i",
+                             "correlation_id": "corr-1"}).encode(),
+            headers={"content-type": "application/json"}, method="POST",
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())
+    assert result == {"outcome": "cancelled", "reason": "", "authorization_changed": False,
+                      "correlation_id": "corr-1"}
+    assert seen == [{"product_id": "p", "version": "1", "installation_id": "i",
+                     "correlation_id": "corr-1"}]
+
+
+def test_native_license_center_open_rejects_incomplete_context():
+    with LocalAuthorizationServer(lambda _request: {"authorized": False},
+                                  open_license_center=lambda _request: {"outcome": "completed"}) as server:
+        request = Request(
+            f"{server.url}/v1/license-center/open",
+            data=json.dumps({"product_id": "p"}).encode(),
+            headers={"content-type": "application/json"}, method="POST",
+        )
+        with pytest.raises(Exception):
+            urlopen(request)
