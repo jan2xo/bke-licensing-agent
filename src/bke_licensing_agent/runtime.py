@@ -199,7 +199,7 @@ class InstalledAgentRuntime:
         )
 
     def _build_module_server(self) -> ModuleLaunchPipeServer | None:
-        """Build Windows IPC only from Agent-verified signed bundle policies and discovered products."""
+        """Build Windows IPC only from Agent-verified signed policies and discovery state."""
         if os.name != "nt":
             return None
         keys = _load_trusted_keys(get_trusted_keys_dir())
@@ -215,12 +215,13 @@ class InstalledAgentRuntime:
                 target_resolved = self._validated_product_record(policy.target.product_id, policy.target.version)
                 if source_resolved is None or target_resolved is None:
                     continue
-                source_record, _ = source_resolved
+                source_record, source_manifest = source_resolved
                 target_record, target_manifest = target_resolved
-                if Path(source_record.entry_point_path).resolve() != Path(policy.source.path).resolve():
+                if source_manifest.entryPoint.replace("\\", "/") != policy.source.entry_point:
                     continue
-                if Path(target_record.entry_point_path).resolve() != Path(policy.target.path).resolve():
+                if target_manifest.entryPoint.replace("\\", "/") != policy.target.entry_point:
                     continue
+                source_path = Path(source_record.entry_point_path).resolve()
                 target_root = Path(target_record.product_root).resolve()
                 artifact = ArtifactMetadata(
                     policy.target.product_id,
@@ -229,7 +230,7 @@ class InstalledAgentRuntime:
                     policy.target.sha256,
                 )
                 contexts[policy.policy_id] = ModuleLaunchContext(
-                    policy, target_manifest, target_root, artifact)
+                    policy, source_path, target_manifest, target_root, artifact)
             except (OSError, ValueError, json.JSONDecodeError, ModuleLaunchDenied):
                 continue
         if not contexts:
@@ -266,6 +267,10 @@ class InstalledAgentRuntime:
                 fingerprint=self.fingerprint,
             )
             decision = service.activate(manifest, license_key, LeaseVerifier(trusted_keys), self.repository)
+            if decision.authorized and self._module_server is None and os.name == "nt":
+                self._module_server = self._build_module_server()
+                if self._module_server is not None and self._server is not None:
+                    self._module_server.start()
             return {"authorized": decision.authorized, "reason": decision.reason or decision.state.value}
         except Exception:
             return {"authorized": False, "reason": "activation_failed"}
