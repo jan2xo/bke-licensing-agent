@@ -51,8 +51,6 @@ class PendingSession:
     creation_time: int
     path: str
     sha256: str
-    installation_id: str
-    device_id: str
     expires_at: datetime
 
 
@@ -95,7 +93,7 @@ class SignedBundlePolicyVerifier:
 
 
 class EnterpriseModuleLaunchService:
-    """Authenticates the source peer, launches the target, and binds one redemption to that child."""
+    """Authenticates the source peer, launches the target, and binds one redemption to that exact child."""
 
     def __init__(self, execution: LaunchExecutionService, process_identity: Callable[[int], PeerIdentity],
                  peer_from_pipe: Callable[[object], PeerIdentity] | None = None,
@@ -133,16 +131,19 @@ class EnterpriseModuleLaunchService:
         if not self._matches(child, policy.target):
             self._execution.terminate(target_manifest.productId)
             raise ModuleLaunchDenied("launched_child_identity_mismatch")
-        if not target_decision.installation_id or not target_decision.device_id:
-            self._execution.terminate(target_manifest.productId)
-            raise ModuleLaunchDenied("target_binding_missing")
         pending = PendingSession(policy.policy_id, child.pid, child.creation_time, child.path, child.sha256,
-                                 target_decision.installation_id, target_decision.device_id, self._clock() + self._ttl)
+                                 self._clock() + self._ttl)
         with self._lock:
             self._pending[child.pid] = pending
         return child.pid
 
-    def redeem(self, target_pipe: object, installation_id: str, device_id: str) -> PendingSession:
+    def redeem(self, target_pipe: object) -> PendingSession:
+        """Consume the one-time enterprise session for the exact Agent-launched child process.
+
+        No source installation/device value is echoed by Render Dock. Those bindings are
+        already proven when the Agent freshly authorizes Air Stack before launch; the child
+        rendezvous is authenticated by kernel peer PID plus creation time/path/hash.
+        """
         peer = self._peer_from_pipe(target_pipe)
         with self._lock:
             pending = self._pending.pop(peer.pid, None)
@@ -151,7 +152,6 @@ class EnterpriseModuleLaunchService:
         if self._clock() >= pending.expires_at:
             raise ModuleLaunchDenied("session_expired")
         if (peer.creation_time != pending.creation_time or Path(peer.path).resolve() != Path(pending.path).resolve() or
-                peer.sha256.lower() != pending.sha256.lower() or installation_id != pending.installation_id or
-                device_id != pending.device_id):
+                peer.sha256.lower() != pending.sha256.lower()):
             raise ModuleLaunchDenied("child_binding_mismatch")
         return pending
