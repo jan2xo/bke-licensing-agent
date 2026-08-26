@@ -52,6 +52,19 @@ def test_verified_update_is_cached_and_reported(tmp_path):
         status="update_available", policy=_signed_policy(private), download_url="https://example.invalid/grant")
     assert coordinator.refresh("p", "1.0.0")["state"] == "update_available"
     assert coordinator.status("p", "1.0.0")["latest_version"] == "2.0.0"
+    assert coordinator.refresh("p", "1.0.0")["state"] == "update_available"
+
+
+def test_same_revision_with_changed_policy_is_rejected(tmp_path):
+    coordinator, private = _fixture(tmp_path, UpdateDiscoveryResponse(status="up_to_date"))
+    policy = _signed_policy(private)
+    coordinator.client.check_update = lambda _request: UpdateDiscoveryResponse(
+        status="update_available", policy=policy, download_url="https://example.invalid/grant")
+    assert coordinator.refresh("p", "1.0.0")["state"] == "update_available"
+    changed = {**policy, "issued_at": "2026-08-21T00:00:00Z"}
+    coordinator.client.check_update = lambda _request: UpdateDiscoveryResponse(
+        status="update_available", policy=changed, download_url="https://example.invalid/grant")
+    assert coordinator.refresh("p", "1.0.0")["state"] == "refresh_failed"
 
 
 def test_malformed_or_offline_refresh_never_becomes_no_update(tmp_path):

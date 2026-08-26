@@ -110,7 +110,16 @@ class UpdateDiscoveryCoordinator:
                     raise ValueError("update response omitted signed policy or grant")
                 core_manifest = self._manifest(record, manifest)
                 orchestrator = UpdateOrchestrator(raw_update_keys(self.trusted_keys()), self.state_root / "core")
-                verified = orchestrator.verify_policy(response.policy, core_manifest)
+                cached = orchestrator.load_cached(policy_path)
+                cached_policy = cached.get("policy") if cached else None
+                incoming_revision = response.policy.get("revision")
+                cached_revision = cached_policy.get("revision") if isinstance(cached_policy, dict) else None
+                if incoming_revision == cached_revision:
+                    if response.policy != cached_policy:
+                        raise ValueError("policy changed without a revision increase")
+                    verified = orchestrator.verify_policy(response.policy, core_manifest, last_revision=incoming_revision - 1)
+                else:
+                    verified = orchestrator.verify_policy(response.policy, core_manifest)
                 if orchestrator.decide(core_manifest, verified) not in {Decision.UPDATE_AVAILABLE, Decision.UPDATE_REQUIRED}:
                     raise ValueError("signed policy does not describe an update")
                 orchestrator.cache_verified(policy_path, verified, _iso(attempted), core_manifest)
