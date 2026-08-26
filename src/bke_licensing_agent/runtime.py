@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+import threading
 from pathlib import Path
 
 from .api.client import LicensingPlatformClient
@@ -44,6 +45,7 @@ from .license_center.service import LicenseCenterAction, LicenseCenterService, O
 from .manifest.validator import validate_manifest
 from .storage.database import Database
 from .storage.models import DiscoveredProductRecord
+from .updates.discovery import UpdateDiscoveryCoordinator
 
 
 def _load_trusted_keys(directory: Path) -> dict[str, str]:
@@ -83,9 +85,64 @@ class InstalledAgentRuntime:
         self.port = port if port is not None else get_agent_port()
         self._server: LocalAuthorizationServer | None = None
         self._module_server = module_server
+        self._update_stop = threading.Event()
+        self._update_thread: threading.Thread | None = None
+        self.update_discovery = UpdateDiscoveryCoordinator(
+            state_root=self.database.path.parent / "updates",
+            platform_client=LicensingPlatformClient(ApiConfig(base_url=get_platform_base_url())),
+            trusted_keys=lambda: _load_trusted_keys(get_trusted_keys_dir()),
+            resolve_product=lambda product_id, version: self._validated_product_record(product_id, version),
+            resolve_lease=self._update_lease,
+        )
         if self._module_server is None and os.name == "nt":
             self._refresh_discovery()
             self._module_server = self._build_module_server()
+
+    def _update_lease(self, product_id: str, version: str):
+        for record in self.repository.list_for_product(product_id):
+            if (record.product_version == version and record.status == "ACTIVE" and
+                    record.signed_payload and record.signed_signature and record.signed_algorithm):
+                return record
+        return None
+
+    def _refresh_updates_background(self) -> None:
+        if self._update_stop.wait(self.update_discovery.policy.initial_delay_seconds):
+            return
+        while not self._update_stop.is_set():
+            for record in self.database.list_discovered_products():
+                if self._update_stop.is_set(): return
+                if self.update_discovery.refresh_due(record.product_id, record.version):
+                    self.update_discovery.refresh(record.product_id, record.version)
+            self._update_stop.wait(self.update_discovery.next_delay())
+
+    def request_update_refresh(self, product_id: str, version: str) -> dict[str, object]:
+        if self._validated_product_record(product_id, version) is None:
+            return {"state": "refresh_failed", "product_id": product_id, "current_version": version}
+        threading.Thread(target=self.update_discovery.refresh, args=(product_id, version), daemon=True,
+                         name=f"bke-update-{product_id}").start()
+        return {"state": "refresh_queued", "product_id": product_id, "current_version": version}
+
+    def product_update_status(self, product_id: str, version: str = "") -> dict[str, object]:
+        candidates = [record for record in self.database.list_discovered_products()
+                      if record.product_id == product_id and (not version or record.version == version)]
+        if not candidates:
+            result: dict[str, object] = {"state": "never_checked", "product_id": product_id}
+            if version: result["current_version"] = version
+            return result
+        selected = sorted(candidates, key=lambda item: item.discovered_at, reverse=True)[0]
+        return self.update_discovery.status(selected.product_id, selected.version)
+
+    def open_update_center(self, request: dict[str, str]) -> dict[str, object]:
+        product_id, version = request["product_id"], request["version"]
+        status = self.update_discovery.status(product_id, version)
+        correlation_id = request.get("correlation_id") or str(uuid.uuid4())
+        if status.get("state") not in {"update_available", "stale_update"}:
+            return {"outcome": "no_update", "reason": str(status.get("state", "never_checked")),
+                    "correlation_id": correlation_id}
+        # Execution remains deliberately behind the Agent-owned native surface.
+        # Candidate installers are not yet a verified full-tree Updater Core staging format.
+        return {"outcome": "update_ready", "reason": f"{status.get('latest_version')} is ready for Agent confirmation",
+                "correlation_id": correlation_id}
 
     def _refresh_discovery(self) -> None:
         """Refresh trusted discovery metadata from configured install roots.
@@ -355,7 +412,16 @@ class InstalledAgentRuntime:
     def serve_forever(self) -> None:
         if self._module_server is not None:
             self._module_server.start()
-        with LocalAuthorizationServer(self.authorize, self.activate, self.open_license_center, port=self.port) as server:
+        self._update_stop.clear()
+        self._update_thread = threading.Thread(target=self._refresh_updates_background, daemon=True, name="bke-update-refresh")
+        self._update_thread.start()
+        with LocalAuthorizationServer(
+            self.authorize, self.activate, self.open_license_center,
+            update_status=self.product_update_status,
+            refresh_update=self.request_update_refresh,
+            open_update_center=self.open_update_center,
+            port=self.port,
+        ) as server:
             self._server = server
             try:
                 while True:
@@ -363,11 +429,13 @@ class InstalledAgentRuntime:
             except KeyboardInterrupt:
                 return
             finally:
+                self._update_stop.set()
                 self._server = None
                 if self._module_server is not None:
                     self._module_server.stop()
 
     def close(self) -> None:
+        self._update_stop.set()
         if self._server is not None:
             self._server.close()
             self._server = None

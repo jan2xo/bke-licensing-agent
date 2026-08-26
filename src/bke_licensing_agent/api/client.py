@@ -9,7 +9,7 @@ import requests
 from pydantic import BaseModel, ValidationError
 
 from .config import ApiConfig
-from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT, LOGIN, REFRESH, LOGOUT, SESSION, LICENSES, ENTITLEMENT, DEVICE_STATUS, ACTIVATE, LEGACY_ACTIVATE, VERIFY_ACTIVATION, DEACTIVATE, LEASE, TRUSTED_KEYS
+from .endpoints import DEVICES, HEALTH, LICENSE_STATUS, LICENSE_VERIFY, PRODUCT, LOGIN, REFRESH, LOGOUT, SESSION, LICENSES, ENTITLEMENT, DEVICE_STATUS, ACTIVATE, LEGACY_ACTIVATE, VERIFY_ACTIVATION, DEACTIVATE, LEASE, TRUSTED_KEYS, UPDATE_CHECK
 from .errors import (
     ApiError, AuthenticationExpiredError, AuthenticationRequiredError,
     AuthorizationDeniedError, ConflictError, ConnectionTimeoutError,
@@ -22,6 +22,7 @@ from .models import (
     LicenseStatusResponse, LicenseVerificationRequest, LicenseVerificationResponse,
     ProductResponse,
     PlatformLeaseActivationRequest, PlatformLeaseResponse,
+    UpdateDiscoveryRequest, UpdateDiscoveryResponse,
 )
 from ..auth.models import (AuthenticationState, LoginRequest, LoginResponse, LogoutRequest,
     LogoutResponse, RefreshRequest, RefreshResponse, SessionInfo, ValidationResponse)
@@ -96,6 +97,14 @@ class LicensingPlatformClient:
 
     def retrieve_key_metadata(self, access_token: str) -> TrustedKeyMetadataResponse:
         return self._request("GET", TRUSTED_KEYS, TrustedKeyMetadataResponse, access_token=access_token)
+
+    def check_update(self, request: UpdateDiscoveryRequest) -> UpdateDiscoveryResponse:
+        """Run the idempotent Agent update-discovery query over verified HTTPS."""
+        return self._request(
+            "POST", UPDATE_CHECK, UpdateDiscoveryResponse,
+            request.model_dump(exclude_none=True), idempotent=True,
+            protocol_version="bke.licensing.v3",
+        )
 
     def _request(self, method: str, path: str, model: type[T], payload: dict[str, Any] | None = None,
                  *, idempotent: bool = True, access_token: str | None = None, protocol_version: str | None = None) -> T:

@@ -59,7 +59,7 @@ def test_verified_policy_decision_and_cache(manifest: ProductManifest, tmp_path:
     policy = agent.verify_policy(_policy(private_key), manifest)
     assert agent.decide(manifest, policy) is Decision.UPDATE_AVAILABLE
     cache = tmp_path / "policy.json"
-    agent.cache_verified(cache, policy, "2026-08-20T00:00:00Z")
+    agent.cache_verified(cache, policy, "2026-08-20T00:00:00Z", manifest)
     assert agent.offline_decision(manifest, agent.load_cached(cache)) is Decision.UPDATE_AVAILABLE
 
 
