@@ -1,8 +1,8 @@
-"""Loopback-only product-to-Agent authorization and activation boundary.
+"""Loopback-only product-to-Agent authorization, activation, and update-status boundary.
 
-Products receive authorization decisions and an Agent-owned License Center URL.
-License keys are submitted only to the loopback Agent; products never receive
-leases, signing keys, platform credentials, or Agent storage.
+Products receive authorization decisions and secret-free update status. License keys
+are submitted only to the loopback Agent; products never receive leases, signing
+keys, platform credentials, update policies, download grants, or Agent storage.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ class LocalAuthorizationServer:
         open_license_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
         update_status: Callable[[str, str], dict[str, object]] | None = None,
         refresh_update: Callable[[str, str], dict[str, object]] | None = None,
+        dismiss_update: Callable[[str, str, str], dict[str, object]] | None = None,
         open_update_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
         port: int = 0,
     ):
@@ -32,6 +33,7 @@ class LocalAuthorizationServer:
         self._open_license_center = open_license_center
         self._update_status = update_status
         self._refresh_update = refresh_update
+        self._dismiss_update = dismiss_update
         self._open_update_center = open_update_center
         self._server = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
         self._thread: Thread | None = None
@@ -42,6 +44,7 @@ class LocalAuthorizationServer:
         open_license_center = self._open_license_center
         update_status = self._update_status
         refresh_update = self._refresh_update
+        dismiss_update = self._dismiss_update
         open_update_center = self._open_update_center
 
         class Handler(BaseHTTPRequestHandler):
@@ -146,6 +149,15 @@ class LocalAuthorizationServer:
                         if not all(isinstance(body.get(k), str) and body[k].strip() for k in required):
                             raise ValueError("invalid refresh request")
                         self._json(202, refresh_update(body["product_id"], body["version"]))
+                        return
+                    if self.path == "/v1/updates/dismiss":
+                        if dismiss_update is None:
+                            self._json(503, {"state": "dismiss_failed"})
+                            return
+                        required = ("product_id", "version", "latest_version")
+                        if not all(isinstance(body.get(k), str) and body[k].strip() for k in required):
+                            raise ValueError("invalid dismiss request")
+                        self._json(200, dismiss_update(body["product_id"], body["version"], body["latest_version"]))
                         return
                     if self.path == "/v1/update-center/open":
                         if open_update_center is None:

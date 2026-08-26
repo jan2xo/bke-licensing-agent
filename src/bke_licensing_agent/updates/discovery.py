@@ -1,4 +1,4 @@
-"""Agent-owned remote update discovery, verified cache, and secret-free status."""
+"""Agent-owned remote update discovery, verified cache, suppression, and secret-free status."""
 from __future__ import annotations
 
 import json
@@ -17,6 +17,8 @@ from bke_updater_core.models import Decision, ProductManifest
 
 from ..api.models import UpdateDiscoveryRequest
 from .orchestrator import UpdateOrchestrator
+
+UPDATE_PACKAGE_CONTENT_TYPE = "application/vnd.bke.update-package+zip"
 
 
 def _now() -> datetime:
@@ -46,6 +48,8 @@ class RefreshPolicy:
     stale_after: timedelta = timedelta(hours=24)
     initial_delay_seconds: float = 5.0
     maximum_backoff: timedelta = timedelta(hours=6)
+    initial_backoff: timedelta = timedelta(minutes=1)
+    remind_after: timedelta = timedelta(hours=24)
 
 
 class UpdateDiscoveryCoordinator:
@@ -61,10 +65,16 @@ class UpdateDiscoveryCoordinator:
         self.policy = policy or RefreshPolicy()
         self.clock = clock
         self._lock = threading.RLock()
+        self._inflight_lock = threading.Lock()
+        self._inflight: set[tuple[str, str]] = set()
+        self._consecutive_failures = 0
 
     def _paths(self, product_id: str, version: str) -> tuple[Path, Path]:
         root = self.state_root / _safe(product_id) / _safe(version)
         return root / "policy.json", root / "status.json"
+
+    def _suppression_path(self, product_id: str, version: str) -> Path:
+        return self.state_root / _safe(product_id) / _safe(version) / "suppression.json"
 
     @staticmethod
     def _manifest(record, manifest) -> ProductManifest:
@@ -75,11 +85,35 @@ class UpdateDiscoveryCoordinator:
 
     def _write_status(self, path: Path, document: dict[str, object]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
+        tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")))
-        try: os.chmod(tmp, 0o600)
-        except OSError: pass
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
         tmp.replace(path)
+
+    def _mark_result(self, failed: bool) -> None:
+        with self._inflight_lock:
+            self._consecutive_failures = min(self._consecutive_failures + 1, 16) if failed else 0
+
+    def queue_refresh(self, product_id: str, version: str) -> bool:
+        """Start at most one concurrent refresh for a product/version pair."""
+        key = (product_id, version)
+        with self._inflight_lock:
+            if key in self._inflight:
+                return False
+            self._inflight.add(key)
+
+        def run() -> None:
+            try:
+                self.refresh(product_id, version)
+            finally:
+                with self._inflight_lock:
+                    self._inflight.discard(key)
+
+        threading.Thread(target=run, daemon=True, name=f"bke-update-{_safe(product_id)}").start()
+        return True
 
     def refresh(self, product_id: str, version: str) -> dict[str, object]:
         with self._lock:
@@ -91,6 +125,7 @@ class UpdateDiscoveryCoordinator:
                 document = {"state": "refresh_failed", "product_id": product_id, "current_version": version,
                             "last_attempt_at": _iso(attempted), "error": "product_or_entitlement_unavailable"}
                 self._write_status(status_path, document)
+                self._mark_result(True)
                 return document
             record, manifest = resolved
             envelope = {"payload": lease.signed_payload, "signature": lease.signed_signature,
@@ -105,6 +140,7 @@ class UpdateDiscoveryCoordinator:
                     document = {"state": "up_to_date", "product_id": product_id, "current_version": version,
                                 "verified_at": _iso(attempted), "last_attempt_at": _iso(attempted)}
                     self._write_status(status_path, document)
+                    self._mark_result(False)
                     return document
                 if response.policy is None or response.download_url is None:
                     raise ValueError("update response omitted signed policy or grant")
@@ -120,6 +156,8 @@ class UpdateDiscoveryCoordinator:
                     verified = orchestrator.verify_policy(response.policy, core_manifest, last_revision=incoming_revision - 1)
                 else:
                     verified = orchestrator.verify_policy(response.policy, core_manifest)
+                if verified.content_type != UPDATE_PACKAGE_CONTENT_TYPE:
+                    raise ValueError("signed policy does not authorize a BKE updater package")
                 if orchestrator.decide(core_manifest, verified) not in {Decision.UPDATE_AVAILABLE, Decision.UPDATE_REQUIRED}:
                     raise ValueError("signed policy does not describe an update")
                 orchestrator.cache_verified(policy_path, verified, _iso(attempted), core_manifest)
@@ -128,6 +166,7 @@ class UpdateDiscoveryCoordinator:
                             "release_id": verified.release_id, "revision": verified.revision,
                             "verified_at": _iso(attempted), "last_attempt_at": _iso(attempted)}
                 self._write_status(status_path, document)
+                self._mark_result(False)
                 return document
             except Exception:
                 previous = self._read_status(status_path)
@@ -135,7 +174,19 @@ class UpdateDiscoveryCoordinator:
                             "current_version": version, "last_attempt_at": _iso(attempted),
                             "error": "remote_or_verification_failure"}
                 self._write_status(status_path, document)
+                self._mark_result(True)
                 return document
+
+    def dismiss(self, product_id: str, version: str, latest_version: str) -> dict[str, object]:
+        status = self.status(product_id, version, apply_suppression=False)
+        if status.get("state") not in {"update_available", "stale_update"} or status.get("latest_version") != latest_version:
+            return {"state": "dismiss_rejected", "product_id": product_id, "current_version": version}
+        now = self.clock()
+        until = now + self.policy.remind_after
+        document = {"latest_version": latest_version, "dismissed_at": _iso(now), "remind_after": _iso(until)}
+        self._write_status(self._suppression_path(product_id, version), document)
+        return {"state": "suppressed_update", "product_id": product_id, "current_version": version,
+                "latest_version": latest_version, "suppressed_until": _iso(until)}
 
     def _read_status(self, path: Path) -> dict[str, object] | None:
         try:
@@ -144,7 +195,7 @@ class UpdateDiscoveryCoordinator:
         except (OSError, ValueError):
             return None
 
-    def status(self, product_id: str, version: str) -> dict[str, object]:
+    def status(self, product_id: str, version: str, *, apply_suppression: bool = True) -> dict[str, object]:
         policy_path, status_path = self._paths(product_id, version)
         document = self._read_status(status_path)
         if document is None:
@@ -165,15 +216,34 @@ class UpdateDiscoveryCoordinator:
                 return {"state": "verification_failed", "product_id": product_id, "current_version": version}
             verified_at = datetime.fromisoformat(str(document["verified_at"]).replace("Z", "+00:00"))
             result["state"] = "stale_update" if self.clock() - verified_at > self.policy.stale_after else "update_available"
+            if apply_suppression:
+                suppression = self._read_status(self._suppression_path(product_id, version))
+                if suppression and suppression.get("latest_version") == result.get("latest_version"):
+                    try:
+                        until = datetime.fromisoformat(str(suppression["remind_after"]).replace("Z", "+00:00"))
+                        if self.clock() < until:
+                            result["state"] = "suppressed_update"
+                            result["suppressed_until"] = _iso(until)
+                    except (KeyError, TypeError, ValueError):
+                        pass
         return result
 
     def refresh_due(self, product_id: str, version: str) -> bool:
-        status = self.status(product_id, version)
+        status = self.status(product_id, version, apply_suppression=False)
         reference = status.get("last_attempt_at") or status.get("verified_at")
-        if not isinstance(reference, str): return True
-        try: last = datetime.fromisoformat(reference.replace("Z", "+00:00"))
-        except ValueError: return True
+        if not isinstance(reference, str):
+            return True
+        try:
+            last = datetime.fromisoformat(reference.replace("Z", "+00:00"))
+        except ValueError:
+            return True
         return self.clock() - last >= self.policy.interval
 
     def next_delay(self) -> float:
-        return max(1.0, self.policy.interval.total_seconds() * random.uniform(0.9, 1.1))
+        with self._inflight_lock:
+            failures = self._consecutive_failures
+        base = self.policy.interval.total_seconds()
+        if failures:
+            retry = self.policy.initial_backoff.total_seconds() * (2 ** (failures - 1))
+            base = min(retry, self.policy.maximum_backoff.total_seconds())
+        return max(1.0, base * random.uniform(0.9, 1.1))

@@ -103,3 +103,24 @@ def test_update_status_is_secret_free_and_browser_origins_are_rejected():
         request = Request(f"{server.url}/v1/updates/status?product_id=p&version=1.0.0",
                           headers={"origin": "https://attacker.invalid"})
         with pytest.raises(Exception): urlopen(request)
+
+
+def test_update_dismissal_is_agent_owned_and_secret_free():
+    seen = []
+    with LocalAuthorizationServer(
+        lambda _request: {"authorized": True},
+        dismiss_update=lambda product, version, latest: seen.append((product, version, latest)) or {
+            "state": "suppressed_update", "product_id": product, "current_version": version,
+            "latest_version": latest, "suppressed_until": "2026-08-27T00:00:00Z",
+        },
+    ) as server:
+        request = Request(
+            f"{server.url}/v1/updates/dismiss",
+            data=json.dumps({"product_id": "p", "version": "1.0.0", "latest_version": "2.0.0"}).encode(),
+            headers={"content-type": "application/json"}, method="POST",
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())
+    assert result["state"] == "suppressed_update"
+    assert seen == [("p", "1.0.0", "2.0.0")]
+    assert not any(key in result for key in ("download_url", "policy", "lease", "path"))

@@ -110,7 +110,8 @@ class InstalledAgentRuntime:
             return
         while not self._update_stop.is_set():
             for record in self.database.list_discovered_products():
-                if self._update_stop.is_set(): return
+                if self._update_stop.is_set():
+                    return
                 if self.update_discovery.refresh_due(record.product_id, record.version):
                     self.update_discovery.refresh(record.product_id, record.version)
             self._update_stop.wait(self.update_discovery.next_delay())
@@ -118,29 +119,36 @@ class InstalledAgentRuntime:
     def request_update_refresh(self, product_id: str, version: str) -> dict[str, object]:
         if self._validated_product_record(product_id, version) is None:
             return {"state": "refresh_failed", "product_id": product_id, "current_version": version}
-        threading.Thread(target=self.update_discovery.refresh, args=(product_id, version), daemon=True,
-                         name=f"bke-update-{product_id}").start()
-        return {"state": "refresh_queued", "product_id": product_id, "current_version": version}
+        queued = self.update_discovery.queue_refresh(product_id, version)
+        return {"state": "refresh_queued" if queued else "refresh_already_queued",
+                "product_id": product_id, "current_version": version}
+
+    def dismiss_update(self, product_id: str, version: str, latest_version: str) -> dict[str, object]:
+        if self._validated_product_record(product_id, version) is None:
+            return {"state": "dismiss_rejected", "product_id": product_id, "current_version": version}
+        return self.update_discovery.dismiss(product_id, version, latest_version)
 
     def product_update_status(self, product_id: str, version: str = "") -> dict[str, object]:
         candidates = [record for record in self.database.list_discovered_products()
                       if record.product_id == product_id and (not version or record.version == version)]
         if not candidates:
             result: dict[str, object] = {"state": "never_checked", "product_id": product_id}
-            if version: result["current_version"] = version
+            if version:
+                result["current_version"] = version
             return result
         selected = sorted(candidates, key=lambda item: item.discovered_at, reverse=True)[0]
         return self.update_discovery.status(selected.product_id, selected.version)
 
     def open_update_center(self, request: dict[str, str]) -> dict[str, object]:
         product_id, version = request["product_id"], request["version"]
-        status = self.update_discovery.status(product_id, version)
+        status = self.update_discovery.status(product_id, version, apply_suppression=False)
         correlation_id = request.get("correlation_id") or str(uuid.uuid4())
         if status.get("state") not in {"update_available", "stale_update"}:
             return {"outcome": "no_update", "reason": str(status.get("state", "never_checked")),
                     "correlation_id": correlation_id}
         # Execution remains deliberately behind the Agent-owned native surface.
-        # Candidate installers are not yet a verified full-tree Updater Core staging format.
+        # Staged-tree packaging is now available, but Windows elevation/helper authenticity
+        # must be certified before this boundary is permitted to execute replacement.
         return {"outcome": "update_ready", "reason": f"{status.get('latest_version')} is ready for Agent confirmation",
                 "correlation_id": correlation_id}
 
@@ -419,6 +427,7 @@ class InstalledAgentRuntime:
             self.authorize, self.activate, self.open_license_center,
             update_status=self.product_update_status,
             refresh_update=self.request_update_refresh,
+            dismiss_update=self.dismiss_update,
             open_update_center=self.open_update_center,
             port=self.port,
         ) as server:
