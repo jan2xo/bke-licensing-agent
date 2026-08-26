@@ -18,21 +18,29 @@ class CachedPolicy:
 class UpdateOrchestrator:
     def __init__(self, trusted_keys: dict[str, bytes], state_root: Path):
         self.verifier=PolicyVerifier(trusted_keys); self.state=TransactionStore(state_root)
-        self._revision_path=state_root / "highest-policy-revision.json"
+        self._revision_root=state_root / "policy-revisions"
     def validate_product(self, manifest: ProductManifest): return validate_manifest_paths(manifest.install_root, manifest.executable)
-    def _highest_revision(self) -> int|None:
-        if not self._revision_path.exists(): return None
-        value=json.loads(self._revision_path.read_text()).get("revision")
+    @staticmethod
+    def _scope(manifest: ProductManifest) -> str:
+        return re.sub(r"[^A-Za-z0-9_.-]", "-", f"{manifest.product_id}-{manifest.platform}-{manifest.architecture}-{manifest.update_channel}")[:180]
+    def _revision_path(self, manifest: ProductManifest) -> Path:
+        return self._revision_root / f"{self._scope(manifest)}.json"
+    def _highest_revision(self, manifest: ProductManifest) -> int|None:
+        path=self._revision_path(manifest)
+        if not path.exists(): return None
+        value=json.loads(path.read_text()).get("revision")
         return value if isinstance(value,int) else None
-    def _accept_revision(self, revision:int) -> None:
-        current=self._highest_revision()
+    def _accept_revision(self, manifest: ProductManifest, revision:int) -> None:
+        path=self._revision_path(manifest); current=self._highest_revision(manifest)
         if current is not None and revision < current: raise ValueError("policy revision rollback")
-        self._revision_path.parent.mkdir(parents=True,exist_ok=True); self._revision_path.write_text(json.dumps({"revision":revision},sort_keys=True))
+        path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"revision":revision},sort_keys=True)); tmp.replace(path)
     def verify_policy(self, policy: dict, manifest: ProductManifest, last_revision: int|None=None) -> SignedUpdatePolicy:
-        return self.verifier.verify(policy,product_id=manifest.product_id,platform=manifest.platform,architecture=manifest.architecture,channel=manifest.update_channel,last_revision=self._highest_revision() if last_revision is None else last_revision)
+        return self.verifier.verify(policy,product_id=manifest.product_id,platform=manifest.platform,architecture=manifest.architecture,channel=manifest.update_channel,last_revision=self._highest_revision(manifest) if last_revision is None else last_revision)
     def decide(self, manifest: ProductManifest, policy: SignedUpdatePolicy) -> Decision: return decide_update(manifest.version,policy.latest_version,policy.minimum_supported_version)
-    def cache_verified(self,path:Path,policy:SignedUpdatePolicy,verified_at:str)->None:
-        self._accept_revision(policy.revision); path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp")
+    def cache_verified(self,path:Path,policy:SignedUpdatePolicy,verified_at:str,manifest:ProductManifest|None=None)->None:
+        if manifest is None: raise ValueError("manifest is required for scoped policy cache")
+        self._accept_revision(manifest,policy.revision); path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp")
         tmp.write_text(json.dumps({"policy":policy.raw,"verified_at":verified_at},sort_keys=True)); tmp.replace(path)
     def load_cached(self,path:Path)->dict|None:
         if not path.exists(): return None
@@ -88,7 +96,7 @@ class UpdateOrchestrator:
         return TransactionState.WAITING_FOR_EXIT
     def offline_decision(self,manifest:ProductManifest,cached:dict|None)->Decision:
         if cached is None: return Decision.UNSUPPORTED
-        current=self._highest_revision()
+        current=self._highest_revision(manifest)
         verified=self.verify_policy(cached["policy"],manifest,last_revision=(current-1 if current is not None else None))
-        self._accept_revision(verified.revision)
+        self._accept_revision(manifest,verified.revision)
         return self.decide(manifest,verified)

@@ -22,11 +22,17 @@ class LocalAuthorizationServer:
         authorize: Callable[[dict[str, str]], dict[str, object]],
         activate: Callable[[dict[str, str]], dict[str, object]] | None = None,
         open_license_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
+        update_status: Callable[[str, str], dict[str, object]] | None = None,
+        refresh_update: Callable[[str, str], dict[str, object]] | None = None,
+        open_update_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
         port: int = 0,
     ):
         self._authorize = authorize
         self._activate = activate
         self._open_license_center = open_license_center
+        self._update_status = update_status
+        self._refresh_update = refresh_update
+        self._open_update_center = open_update_center
         self._server = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
         self._thread: Thread | None = None
 
@@ -34,6 +40,9 @@ class LocalAuthorizationServer:
         authorize = self._authorize
         activate = self._activate
         open_license_center = self._open_license_center
+        update_status = self._update_status
+        refresh_update = self._refresh_update
+        open_update_center = self._open_update_center
 
         class Handler(BaseHTTPRequestHandler):
             def _json(self, status: int, body: dict[str, object]) -> None:
@@ -47,6 +56,18 @@ class LocalAuthorizationServer:
 
             def do_GET(self):  # noqa: N802
                 parsed = urlparse(self.path)
+                if parsed.path == "/v1/updates/status":
+                    if self.headers.get("origin") is not None or update_status is None:
+                        self.send_error(403 if self.headers.get("origin") is not None else 503)
+                        return
+                    query = parse_qs(parsed.query)
+                    product_id = query.get("product_id", [""])[0]
+                    version = query.get("version", [""])[0]
+                    if not product_id or len(product_id) > 128 or len(version) > 64:
+                        self.send_error(400)
+                        return
+                    self._json(200, update_status(product_id, version))
+                    return
                 if parsed.path != "/license-center":
                     self.send_error(404)
                     return
@@ -70,6 +91,15 @@ class LocalAuthorizationServer:
             def do_POST(self):  # noqa: N802
                 try:
                     length = int(self.headers.get("content-length", "0"))
+                    if length < 0 or length > 32_768:
+                        self._json(413, {"outcome": "failed", "reason": "payload_too_large"})
+                        return
+                    if self.headers.get("origin") is not None:
+                        self._json(403, {"outcome": "failed", "reason": "browser_origin_rejected"})
+                        return
+                    if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+                        self._json(415, {"outcome": "failed", "reason": "invalid_content_type"})
+                        return
                     body = json.loads(self.rfile.read(length))
                     if not isinstance(body, dict):
                         raise ValueError("request must be an object")
@@ -107,6 +137,27 @@ class LocalAuthorizationServer:
                             "authorization_changed": bool(result.get("authorization_changed")),
                             "correlation_id": str(result.get("correlation_id", body["correlation_id"])),
                         })
+                        return
+                    if self.path == "/v1/updates/refresh":
+                        if refresh_update is None:
+                            self._json(503, {"state": "refresh_failed"})
+                            return
+                        required = ("product_id", "version")
+                        if not all(isinstance(body.get(k), str) and body[k].strip() for k in required):
+                            raise ValueError("invalid refresh request")
+                        self._json(202, refresh_update(body["product_id"], body["version"]))
+                        return
+                    if self.path == "/v1/update-center/open":
+                        if open_update_center is None:
+                            self._json(503, {"outcome": "agent_unavailable"})
+                            return
+                        required = ("product_id", "version", "correlation_id")
+                        if not all(isinstance(body.get(k), str) and body[k].strip() for k in required):
+                            raise ValueError("invalid update center request")
+                        result = open_update_center(body)
+                        self._json(200, {"outcome": str(result.get("outcome", "failed")),
+                                         "reason": str(result.get("reason", "")),
+                                         "correlation_id": str(result.get("correlation_id", body["correlation_id"]))})
                         return
                     self.send_error(404)
                 except Exception:

@@ -89,3 +89,17 @@ def test_native_license_center_open_rejects_incomplete_context():
         )
         with pytest.raises(Exception):
             urlopen(request)
+
+
+def test_update_status_is_secret_free_and_browser_origins_are_rejected():
+    with LocalAuthorizationServer(lambda _request: {"authorized": True},
+                                  update_status=lambda product, version: {
+                                      "state": "update_available", "product_id": product,
+                                      "current_version": version, "latest_version": "2.0.0"}) as server:
+        with urlopen(f"{server.url}/v1/updates/status?product_id=p&version=1.0.0") as response:
+            result = json.loads(response.read())
+        assert result == {"state": "update_available", "product_id": "p", "current_version": "1.0.0", "latest_version": "2.0.0"}
+        assert not any(key in result for key in ("download_url", "policy", "lease", "path"))
+        request = Request(f"{server.url}/v1/updates/status?product_id=p&version=1.0.0",
+                          headers={"origin": "https://attacker.invalid"})
+        with pytest.raises(Exception): urlopen(request)
