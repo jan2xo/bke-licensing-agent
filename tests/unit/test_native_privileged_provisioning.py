@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -25,18 +26,22 @@ def _payload(root: Path) -> tuple[Path, Path]:
         serialization.PublicFormat.SubjectPublicKeyInfo,
     )
     (keys / "bke-target-v1.pem").write_bytes(public)
-    (policies / "target.json").write_text(json.dumps({
-        "schema": "bke.target-install-policy.v1",
+    unsigned = {
+        "schema": "bke.install-target-policy.v1",
+        "policy_id": "fixture-target-policy-v1",
+        "revision": 1,
         "product_id": "fixture-product",
         "platform": "windows",
         "architecture": "x86_64",
         "install_root": r"C:\\Program Files\\BKE Digital Solutions\\Fixture",
         "entry_point": "fixture.exe",
-        "revision": 1,
-        "key_id": "bke-target-v1",
+        "signing_key_id": "bke-target-v1",
         "algorithm": "Ed25519",
-        "signature": "fixture-signature",
-    }), encoding="utf-8")
+    }
+    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    document = dict(unsigned)
+    document["signature"] = base64.b64encode(private.sign(canonical)).decode("ascii")
+    (policies / "target.json").write_text(json.dumps(document), encoding="utf-8")
     return keys, policies
 
 
@@ -108,5 +113,17 @@ def test_empty_or_non_ed25519_target_trust_fails_closed(tmp_path: Path):
     layout = _layout(tmp_path)
     (keys / "bke-target-v1.pem").write_text("invalid")
     with pytest.raises(NativeProvisioningError, match="invalid BKE target public key"):
+        provision_privileged_runtime(layout, target_keys_source=keys, target_policies_source=policies)
+    assert not layout.config_path.exists()
+
+
+def test_tampered_target_policy_is_rejected_before_machine_state_changes(tmp_path: Path):
+    keys, policies = _payload(tmp_path)
+    layout = _layout(tmp_path)
+    path = policies / "target.json"
+    document = json.loads(path.read_text())
+    document["entry_point"] = "evil.exe"
+    path.write_text(json.dumps(document))
+    with pytest.raises(NativeProvisioningError, match="invalid target policy signature"):
         provision_privileged_runtime(layout, target_keys_source=keys, target_policies_source=policies)
     assert not layout.config_path.exists()
