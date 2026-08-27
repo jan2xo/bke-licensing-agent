@@ -1,14 +1,19 @@
 """Agent-owned orchestration boundary for bke-updater-core."""
 from __future__ import annotations
 import json, re, os, shutil, subprocess, sys
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, replace
+from pathlib import Path, PureWindowsPath
 from typing import Callable
 from bke_updater_core import PolicyVerifier, decide_update, replace_transaction
 from bke_updater_core.models import Decision, ProductManifest, SignedUpdatePolicy, UpdatePlan, TransactionState
 from bke_updater_core.paths import validate_manifest_paths
 from bke_updater_core.state import TransactionStore
 from .acquisition import acquire_artifact
+from .privileged_runtime import (
+    AgentPrivilegedRuntimeConfig,
+    invoke_privileged_self_update,
+    prepare_privileged_self_update,
+)
 
 @dataclass(frozen=True)
 class CachedPolicy:
@@ -69,29 +74,62 @@ class UpdateOrchestrator:
         self.validate_product(manifest); self._record(transaction_id,TransactionState.VERIFIED,artifact=str(staged),artifact_id=policy.artifact_id)
         plan=UpdatePlan(manifest.product_id,manifest.install_root,manifest.version,policy.latest_version,Path(staged),backup_root,manifest.install_root/manifest.executable,health_check=manifest.health_check,expected_sha256=policy.artifact_sha256,expected_size=policy.artifact_size)
         result=replace_transaction(plan,health_probe=health_probe); self._record(transaction_id,result,artifact=str(staged),target_version=policy.latest_version); return result
-    def execute_self_update(self,manifest:ProductManifest,policy:SignedUpdatePolicy,artifact:Path|None,backup_root:Path,**kwargs)->TransactionState:
-        """Hand self replacement to the installed external helper; never replace in-process."""
+    def execute_self_update(
+        self,
+        manifest: ProductManifest,
+        policy: SignedUpdatePolicy,
+        artifact: Path | None,
+        backup_root: Path,
+        *,
+        privileged_config: AgentPrivilegedRuntimeConfig | None = None,
+        target_policy: dict[str, object] | None = None,
+        elevate=None,
+        exit_process=os._exit,
+    )->TransactionState:
+        """Compose and hand self-replacement to the signed privileged updater boundary."""
         if artifact is None: raise ValueError("self-update requires a verified artifact")
+        if privileged_config is None or target_policy is None:
+            raise ValueError("self-update requires privileged runtime config and signed target policy")
         decision=self.decide(manifest,policy)
         if decision not in {Decision.UPDATE_AVAILABLE,Decision.UPDATE_REQUIRED}: return TransactionState.FAILED
         self.validate_product(manifest)
         transaction_id=self._transaction_id(manifest,policy)
         self._record(transaction_id,TransactionState.CREATED,product_id=manifest.product_id,target_version=policy.latest_version,self_update=True)
-        stage_root=manifest.install_root.parent / (".bke-self-update-"+transaction_id)
+
+        runtime_root=privileged_config.runtime_root.resolve()
+        stage_root=runtime_root/"stage"/transaction_id
         stage_root.mkdir(parents=True,exist_ok=True)
-        relative=Path(manifest.executable)
+        entry_value=target_policy.get("entry_point")
+        if not isinstance(entry_value,str) or not entry_value:
+            raise ValueError("signed target policy is missing entry_point")
+        relative=Path(*PureWindowsPath(entry_value).parts)
         staged_executable=stage_root/relative
         staged_executable.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copy2(artifact,staged_executable); os.chmod(staged_executable,0o755)
-        self._record(transaction_id,TransactionState.VERIFIED,artifact=str(staged_executable),self_update=True)
-        command=[sys.executable,"-m","bke_updater_core.helper.main","--install-root",str(manifest.install_root),"--staged-root",str(stage_root),"--backup-root",str(backup_root),"--executable",str(manifest.install_root/relative),"--wait-pid",str(os.getpid()),"--transaction-root",str(self.state.root),"--transaction-id",transaction_id]
-        readiness=manifest.health_check
-        if readiness:
-            command.extend(["--ready-marker", readiness])
-        launcher=kwargs.pop("launch_helper",subprocess.Popen)
-        launcher(command,close_fds=True)
-        self._record(transaction_id,TransactionState.WAITING_FOR_EXIT,self_update=True,helper="bke_updater_core.helper.main",ready_marker=readiness)
-        exit_process=kwargs.pop("exit_process",os._exit)
+        shutil.copy2(artifact,staged_executable)
+        if os.name != "nt": os.chmod(staged_executable,0o755)
+
+        privileged_backup=runtime_root/"backup"/transaction_id
+        privileged_backup.parent.mkdir(parents=True,exist_ok=True)
+        prepared=prepare_privileged_self_update(
+            privileged_config,
+            update_policy=policy.raw,
+            target_policy=target_policy,
+            artifact=artifact,
+            staged_root=stage_root,
+            backup_root=privileged_backup,
+            transaction_id=transaction_id,
+            wait_pid=os.getpid(),
+        )
+        command=list(prepared.command)
+        if manifest.health_check:
+            command.extend(("--ready-marker",manifest.health_check))
+        prepared=replace(prepared,command=tuple(command))
+        self._record(transaction_id,TransactionState.VERIFIED,artifact=str(prepared.artifact_path),self_update=True)
+        if elevate is None:
+            invoke_privileged_self_update(prepared)
+        else:
+            invoke_privileged_self_update(prepared,elevate=elevate)
+        self._record(transaction_id,TransactionState.WAITING_FOR_EXIT,self_update=True,helper=str(privileged_config.helper_executable),ready_marker=manifest.health_check)
         exit_process(0)
         return TransactionState.WAITING_FOR_EXIT
     def offline_decision(self,manifest:ProductManifest,cached:dict|None)->Decision:
