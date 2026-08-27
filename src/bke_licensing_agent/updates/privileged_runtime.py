@@ -5,7 +5,6 @@ import base64
 import hashlib
 import json
 import os
-import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -93,7 +92,7 @@ def _encoded_keys(keys: Mapping[str, bytes], field: str) -> dict[str, str]:
     return encoded
 
 
-def prepare_privileged_self_update(
+def prepare_privileged_update(
     config: AgentPrivilegedRuntimeConfig,
     *,
     update_policy: Mapping[str, object],
@@ -102,18 +101,18 @@ def prepare_privileged_self_update(
     staged_root: Path,
     backup_root: Path,
     transaction_id: str,
-    wait_pid: int,
+    wait_pid: int | None = None,
     now: datetime | None = None,
 ) -> PreparedPrivilegedInvocation:
-    """Persist trusted runtime inputs and sign the one-shot Agent request.
+    """Persist trusted runtime inputs and sign one bounded privileged update request.
 
     Product identity, versions, platform, architecture, install root and entry point
-    are derived from signed authority documents. They are never accepted as free
-    caller-selected helper authority.
+    are derived from signed authority documents. The optional wait PID is helper
+    lifecycle coordination only; it is never update authority.
     """
     if not transaction_id:
         raise PrivilegedRuntimeCompositionError("transaction_id is required")
-    if wait_pid <= 0:
+    if wait_pid is not None and wait_pid <= 0:
         raise PrivilegedRuntimeCompositionError("wait_pid must be positive")
     if not 1 <= config.request_lifetime_seconds <= 300:
         raise PrivilegedRuntimeCompositionError("request lifetime must be between 1 and 300 seconds")
@@ -233,6 +232,32 @@ def prepare_privileged_self_update(
         backup_root=backup,
         transaction_root=transaction_root,
         command=command,
+    )
+
+
+def prepare_privileged_self_update(
+    config: AgentPrivilegedRuntimeConfig,
+    *,
+    update_policy: Mapping[str, object],
+    target_policy: Mapping[str, object],
+    artifact: Path,
+    staged_root: Path,
+    backup_root: Path,
+    transaction_id: str,
+    wait_pid: int,
+    now: datetime | None = None,
+) -> PreparedPrivilegedInvocation:
+    """Compose a privileged update that waits for the Agent process to exit."""
+    return prepare_privileged_update(
+        config,
+        update_policy=update_policy,
+        target_policy=target_policy,
+        artifact=artifact,
+        staged_root=staged_root,
+        backup_root=backup_root,
+        transaction_id=transaction_id,
+        wait_pid=wait_pid,
+        now=now,
     )
 
 
