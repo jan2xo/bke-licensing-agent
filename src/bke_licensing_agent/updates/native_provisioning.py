@@ -6,6 +6,7 @@ holding the OS privilege needed to protect the resulting directories.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -39,10 +40,11 @@ class PrivilegedProvisioningLayout:
         return self.data_root / "privileged-update.json"
 
 
-def _validate_public_keys(directory: Path) -> None:
+def _validate_public_keys(directory: Path) -> dict[str, Ed25519PublicKey]:
     paths = sorted(directory.glob("*.pem"))
     if not paths:
         raise NativeProvisioningError("at least one BKE target public key is required")
+    keys: dict[str, Ed25519PublicKey] = {}
     for path in paths:
         try:
             key = serialization.load_pem_public_key(path.read_bytes())
@@ -50,20 +52,40 @@ def _validate_public_keys(directory: Path) -> None:
             raise NativeProvisioningError(f"invalid BKE target public key: {path.name}") from exc
         if not isinstance(key, Ed25519PublicKey):
             raise NativeProvisioningError(f"BKE target key must be Ed25519: {path.name}")
+        keys[path.stem] = key
+    return keys
 
 
-def _validate_policies(directory: Path) -> None:
+def _validate_policies(directory: Path, keys: dict[str, Ed25519PublicKey]) -> None:
     paths = sorted(directory.glob("*.json"))
     if not paths:
         raise NativeProvisioningError("at least one signed BKE target policy is required")
+    required = {
+        "schema", "policy_id", "revision", "product_id", "platform", "architecture",
+        "install_root", "entry_point", "signing_key_id", "algorithm", "signature",
+    }
     for path in paths:
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
             raise NativeProvisioningError(f"invalid target policy document: {path.name}") from exc
-        required = {"schema", "product_id", "platform", "architecture", "install_root", "entry_point", "revision", "key_id", "algorithm", "signature"}
-        if not required.issubset(document):
-            raise NativeProvisioningError(f"incomplete target policy document: {path.name}")
+        if set(document) != required:
+            raise NativeProvisioningError(f"unsupported target policy contract: {path.name}")
+        if document.get("schema") != "bke.install-target-policy.v1" or document.get("algorithm") != "Ed25519":
+            raise NativeProvisioningError(f"unsupported target policy contract: {path.name}")
+        key_id = document.get("signing_key_id")
+        key = keys.get(key_id) if isinstance(key_id, str) else None
+        if key is None:
+            raise NativeProvisioningError(f"unknown BKE target signing key: {path.name}")
+        signature = document.get("signature")
+        if not isinstance(signature, str):
+            raise NativeProvisioningError(f"invalid target policy signature: {path.name}")
+        unsigned = {name: value for name, value in document.items() if name != "signature"}
+        canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        try:
+            key.verify(base64.b64decode(signature, validate=True), canonical)
+        except Exception as exc:
+            raise NativeProvisioningError(f"invalid target policy signature: {path.name}") from exc
 
 
 def _ensure_machine_signing_key(path: Path) -> None:
@@ -151,8 +173,8 @@ def provision_privileged_runtime(
     if layout.expected_channel not in {"stable", "beta"}:
         raise NativeProvisioningError("unsupported privileged update channel")
 
-    _validate_public_keys(target_keys_source)
-    _validate_policies(target_policies_source)
+    keys = _validate_public_keys(target_keys_source)
+    _validate_policies(target_policies_source, keys)
     layout.data_root.mkdir(parents=True, exist_ok=True)
     layout.runtime_root.mkdir(parents=True, exist_ok=True)
     _ensure_machine_signing_key(layout.signing_private_key)
