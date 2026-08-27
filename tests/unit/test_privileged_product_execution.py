@@ -122,7 +122,7 @@ def test_product_update_hands_off_signed_privileged_command_without_agent_exit(t
 
     transaction = json.loads((tmp_path / "state" / "bke-air-stack-air-stack-2-2" / "state.json").read_text())
     assert transaction["state"] == "STAGED"
-    assert transaction["payload"]["privileged"] is True
+    assert transaction["privileged"] is True
 
 
 def test_product_update_rejects_manifest_that_does_not_match_signed_update_policy(tmp_path: Path):
