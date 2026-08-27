@@ -1,102 +1,116 @@
+import hashlib
+import json
+from pathlib import Path
+
 import pytest
-import hashlib, json, subprocess, sys, time
-from pathlib import Path
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-def executable(path:Path, code:int, pid_file:Path, marker:Path):
-    body = [
-        "#!/usr/bin/env python3",
-        "import os, sys, time",
-        f"from pathlib import Path",
-        f"Path({str(pid_file)!r}).write_text(str(os.getpid()))",
-        f"Path({str(marker)!r}).write_text('BKE_AGENT_READY')",
-        "print('BKE_AGENT_READY', flush=True)",
-    ]
-    if code:
-        body.append(f"raise SystemExit({code})")
-    else:
-        body.append("time.sleep(60)")
-    path.write_text("\n".join(body)+"\n")
-    path.chmod(0o755)
-
-def _run_agent(install:Path, artifact:Path, backup:Path, state:Path, marker:Path):
-    script = """
-import sys, hashlib
-from pathlib import Path
-from bke_updater_core.models import ProductManifest, SignedUpdatePolicy
+from bke_updater_core.models import ProductManifest, SignedUpdatePolicy, TransactionState
 from bke_licensing_agent.updates.orchestrator import UpdateOrchestrator
-install, artifact, backup, state, marker = map(Path, sys.argv[1:6])
-policy = SignedUpdatePolicy("bke.update-policy.v1","agent","1.0.0","2.0.0","1.0.0","stable","linux","x86_64","agent-release-2","agent-artifact-2",hashlib.sha256(artifact.read_bytes()).hexdigest(),artifact.stat().st_size,"application/octet-stream","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z",2,"ci","Ed25519","",{})
-manifest = ProductManifest("agent","1.0.0","linux","x86_64","agent",install,health_check="BKE_AGENT_READY")
-UpdateOrchestrator({}, state).execute_self_update(manifest, policy, artifact, backup)
-"""
-    return subprocess.Popen([sys.executable,"-c",script,str(install),str(artifact),str(backup),str(state),str(marker)])
-
-def _wait_terminal(state:Path, timeout=15):
-    deadline=time.time()+timeout
-    record=state/"agent-agent-release-2-2"/"state.json"
-    while time.time()<deadline:
-        if record.exists():
-            value=json.loads(record.read_text())["state"]
-            if value in {"COMMITTED","ROLLED_BACK","FAILED"}: return value
-        time.sleep(.1)
-    raise AssertionError("durable terminal state not reached")
-
-def _stop_pid(pid_file:Path):
-    if pid_file.exists():
-        pid=int(pid_file.read_text())
-        try: subprocess.run(["kill",str(pid)],check=False)
-        except ValueError: pass
-
-def test_real_broken_agent_external_helper_relaunches_restored_agent_and_reconciles(tmp_path):
-    install, artifact, backup, state = tmp_path/"agent", tmp_path/"broken-agent-b", tmp_path/"backup", tmp_path/"state"
-    marker, pid_file = tmp_path/"ready", tmp_path/"agent.pid"
-    install.mkdir()
-    executable(install/"agent",0,pid_file,marker); original=(install/"agent").read_bytes()
-    executable(artifact,1,pid_file,marker)
-    agent=_run_agent(install,artifact,backup,state,marker)
-    try:
-        assert _wait_terminal(state)=="ROLLED_BACK"
-        agent.wait(timeout=5)
-        assert (install/"agent").read_bytes()==original
-        assert marker.read_text()=="BKE_AGENT_READY"
-        restored_pid=int(pid_file.read_text())
-        assert restored_pid != agent.pid
-        assert Path(f"/proc/{restored_pid}").exists()
-        record=json.loads((state/"agent-agent-release-2-2"/"state.json").read_text())
-        assert record["state"]=="ROLLED_BACK"
-    finally:
-        _stop_pid(pid_file)
+from bke_licensing_agent.updates.privileged_runtime import AgentPrivilegedRuntimeConfig
 
 
-def test_execute_self_update_passes_configured_readiness_to_external_helper(tmp_path):
-    install, artifact, backup, state = tmp_path/"agent", tmp_path/"agent-b", tmp_path/"backup", tmp_path/"state"
-    install.mkdir()
-    executable(install/"agent", 0, tmp_path/"a.pid", tmp_path/"a.ready")
-    executable(artifact, 0, tmp_path/"b.pid", tmp_path/"b.ready")
-    captured = {}
-    def launcher(command, close_fds=True):
-        captured["command"] = command
-        return object()
-    def exited(code):
-        raise SystemExit(code)
-    script = """
-import sys
-from pathlib import Path
-from bke_updater_core.models import ProductManifest, SignedUpdatePolicy
-from bke_licensing_agent.updates.orchestrator import UpdateOrchestrator
-install, artifact, backup, state = map(Path, sys.argv[1:5])
-policy = SignedUpdatePolicy("bke.update-policy.v1","agent","1.0.0","2.0.0","1.0.0","stable","linux","x86_64","release","artifact", "0"*64, artifact.stat().st_size, "application/octet-stream", "2026-01-01T00:00:00Z","2026-01-01T00:00:00Z",2,"ci","Ed25519","",{})
-manifest = ProductManifest("agent","1.0.0","linux","x86_64","agent",install,health_check="BKE_AGENT_READY")
-UpdateOrchestrator({}, state).execute_self_update(manifest, policy, artifact, backup)
-"""
-    import sys
-    import subprocess
+def _raw_private(key: Ed25519PrivateKey) -> bytes:
+    return key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+
+
+def _raw_public(key: Ed25519PrivateKey) -> bytes:
+    return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+
+def _runtime(tmp_path: Path) -> AgentPrivilegedRuntimeConfig:
+    helper = tmp_path / "BKE Updater Helper.exe"
+    helper.write_bytes(b"helper")
+    agent = Ed25519PrivateKey.generate(); digital = Ed25519PrivateKey.generate(); bke = Ed25519PrivateKey.generate()
+    return AgentPrivilegedRuntimeConfig(
+        runtime_root=tmp_path / "runtime",
+        helper_executable=helper,
+        signing_key_id="agent-local-1",
+        signing_private_key=_raw_private(agent),
+        trusted_digital_keys={"digital-1": _raw_public(digital)},
+        trusted_bke_keys={"bke-1": _raw_public(bke)},
+        approved_install_roots=(r"C:\Program Files\BKE Digital Solutions",),
+        expected_channel="stable",
+    )
+
+
+def _authority(artifact: Path):
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    raw = {
+        "schema": "bke.update-policy.v1", "product_id": "agent", "current_version": "1.0.0",
+        "latest_version": "2.0.0", "minimum_supported_version": "1.0.0", "channel": "stable",
+        "platform": "windows", "architecture": "x86_64", "release_id": "agent-release-2",
+        "artifact_id": "agent-artifact-2", "artifact_sha256": digest, "artifact_size": artifact.stat().st_size,
+        "artifact_content_type": "application/octet-stream", "published_at": "2026-08-27T00:00:00Z",
+        "issued_at": "2026-08-27T00:00:00Z", "revision": 2, "signing_key_id": "digital-1",
+        "algorithm": "Ed25519", "signature": "placeholder", "metadata": {},
+    }
+    policy = SignedUpdatePolicy(
+        "bke.update-policy.v1", "agent", "1.0.0", "2.0.0", "1.0.0", "stable", "windows", "x86_64",
+        "agent-release-2", "agent-artifact-2", digest, artifact.stat().st_size, "application/octet-stream",
+        "2026-08-27T00:00:00Z", "2026-08-27T00:00:00Z", 2, "digital-1", "Ed25519", "placeholder", raw,
+    )
+    target = {
+        "schema": "bke.install-target-policy.v1", "policy_id": "agent-windows", "revision": 3,
+        "product_id": "agent", "platform": "windows", "architecture": "x86_64",
+        "install_root": r"C:\Program Files\BKE Digital Solutions\BKE Licensing Agent",
+        "entry_point": "BKE Licensing Agent.exe", "signing_key_id": "bke-1", "algorithm": "Ed25519",
+        "signature": "placeholder",
+    }
+    return policy, target
+
+
+def _manifest(install: Path, *, health_check: str | None = None) -> ProductManifest:
+    executable = install / "agent"
+    executable.write_text("agent", encoding="utf-8")
+    executable.chmod(0o755)
+    return ProductManifest("agent", "1.0.0", "windows", "x86_64", "agent", install, health_check=health_check)
+
+
+def test_privileged_self_update_persists_durable_waiting_state_and_transaction_identity(tmp_path):
+    install = tmp_path / "agent"; install.mkdir()
+    artifact = tmp_path / "agent-b.exe"; artifact.write_bytes(b"new-agent")
+    policy, target = _authority(artifact)
+    orchestrator = UpdateOrchestrator({}, tmp_path / "state")
+    captured = []
+
     with pytest.raises(SystemExit):
-        namespace = {"__name__":"__main__"}
-        # Execute through the production method with injected launcher/exit boundary.
-        exec(compile("from pathlib import Path\nfrom bke_updater_core.models import ProductManifest, SignedUpdatePolicy\nfrom bke_licensing_agent.updates.orchestrator import UpdateOrchestrator\n", "<test>", "exec"), namespace)
-        manifest = namespace["ProductManifest"]("agent","1.0.0","linux","x86_64","agent",install,health_check="BKE_AGENT_READY")
-        policy = namespace["SignedUpdatePolicy"]("bke.update-policy.v1","agent","1.0.0","2.0.0","1.0.0","stable","linux","x86_64","release","artifact","0"*64,artifact.stat().st_size,"application/octet-stream","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z",2,"ci","Ed25519","",{})
-        namespace["UpdateOrchestrator"]({},state).execute_self_update(manifest,policy,artifact,backup,launch_helper=launcher,exit_process=exited)
-    assert "--ready-marker" in captured["command"]
-    assert captured["command"][captured["command"].index("--ready-marker")+1] == "BKE_AGENT_READY"
+        orchestrator.execute_self_update(
+            _manifest(install), policy, artifact, tmp_path / "legacy-backup",
+            privileged_config=_runtime(tmp_path), target_policy=target,
+            elevate=lambda command: captured.append(tuple(command)),
+            exit_process=lambda code: (_ for _ in ()).throw(SystemExit(code)),
+        )
+
+    transaction_id = "agent-agent-release-2-2"
+    record = orchestrator.read_transaction(transaction_id)
+    assert record["state"] == TransactionState.WAITING_FOR_EXIT.value
+    command = captured[0]
+    assert command[command.index("--transaction-id") + 1] == transaction_id
+    assert "--transaction-root" in command
+    transaction_root = Path(command[command.index("--transaction-root") + 1])
+    assert transaction_root.is_relative_to((tmp_path / "runtime").resolve())
+    assert (tmp_path / "runtime" / "request.json").exists()
+    assert (tmp_path / "runtime" / "trust.json").exists()
+
+
+def test_execute_self_update_passes_configured_readiness_to_privileged_helper(tmp_path):
+    install = tmp_path / "agent"; install.mkdir()
+    artifact = tmp_path / "agent-b.exe"; artifact.write_bytes(b"new-agent")
+    policy, target = _authority(artifact)
+    captured = []
+
+    with pytest.raises(SystemExit):
+        UpdateOrchestrator({}, tmp_path / "state").execute_self_update(
+            _manifest(install, health_check="BKE_AGENT_READY"), policy, artifact, tmp_path / "legacy-backup",
+            privileged_config=_runtime(tmp_path), target_policy=target,
+            elevate=lambda command: captured.append(tuple(command)),
+            exit_process=lambda code: (_ for _ in ()).throw(SystemExit(code)),
+        )
+
+    command = captured[0]
+    assert "--ready-marker" in command
+    assert command[command.index("--ready-marker") + 1] == "BKE_AGENT_READY"
+    assert "--install-root" not in command
+    assert "--executable" not in command
