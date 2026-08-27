@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
+
+import pytest
+
+
+pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows ACL certification requires Windows")
 
 
 def _provisioner_module():
