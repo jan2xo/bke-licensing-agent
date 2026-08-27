@@ -128,14 +128,20 @@ def _activation_window(product_id: str, version: str, installation_id: str) -> i
 
 
 def main() -> int:
-    """Start the standalone desktop shell."""
+    """Start the standalone desktop shell or run a non-interactive package smoke check."""
     parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--product-id")
     parser.add_argument("--product-version")
     parser.add_argument("--installation-id")
     parser.add_argument("--correlation-id")
     parser.add_argument("--action")
     args, _unknown = parser.parse_known_args()
+
+    if args.smoke:
+        print("BKE License Center smoke: import and entrypoint OK")
+        return 0
+
     context = (args.product_id, args.product_version, args.installation_id, args.correlation_id)
     if any(context):
         if not all(context) or args.action != "activation_required":
