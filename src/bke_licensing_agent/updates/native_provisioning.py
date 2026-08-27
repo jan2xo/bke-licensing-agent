@@ -177,6 +177,12 @@ def provision_privileged_runtime(
     _validate_policies(target_policies_source, keys)
     layout.data_root.mkdir(parents=True, exist_ok=True)
     layout.runtime_root.mkdir(parents=True, exist_ok=True)
+
+    # On Windows the native installer locks the machine directories before any
+    # private signing material is generated, eliminating an avoidable ACL window.
+    if protect is not None:
+        protect((layout.data_root, layout.runtime_root))
+
     _ensure_machine_signing_key(layout.signing_private_key)
     _replace_directory(target_keys_source, layout.target_keys_dir, suffix=".staging")
     _replace_directory(target_policies_source, layout.target_policies_dir, suffix=".staging")
