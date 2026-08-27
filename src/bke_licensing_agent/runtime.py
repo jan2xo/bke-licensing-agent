@@ -152,7 +152,7 @@ class InstalledAgentRuntime:
         except Exception:
             return {"outcome": "update_failed", "reason": "privileged_update_verification_or_handoff_failed",
                     "correlation_id": correlation_id}
-        return {"outcome": "update_started", "reason": state.value, "correlation_id": correlation_id}
+        return {"outcome": "update_started", "reason": state.value.lower(), "correlation_id": correlation_id}
 
     def _refresh_discovery(self) -> None:
         """Refresh trusted discovery metadata from configured install roots.
