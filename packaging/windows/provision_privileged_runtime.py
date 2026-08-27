@@ -39,10 +39,13 @@ def _layout() -> tuple[PrivilegedProvisioningLayout, Path, Path]:
 
 
 def _protect_windows(paths) -> None:
-    """Remove inherited write authority and grant only SYSTEM/Admin full control."""
-    for path in paths:
+    """Remove inherited ACLs and grant only SYSTEM/Administrators full control."""
+    for item in paths:
+        path = Path(item)
+        system_rights = "SYSTEM:(OI)(CI)F" if path.is_dir() else "SYSTEM:F"
+        admin_rights = "*S-1-5-32-544:(OI)(CI)F" if path.is_dir() else "*S-1-5-32-544:F"
         subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", "SYSTEM:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"],
+            ["icacls", str(path), "/inheritance:r", "/grant:r", system_rights, admin_rights],
             check=True,
             capture_output=True,
             text=True,
