@@ -1,6 +1,6 @@
 """Agent-owned orchestration boundary for bke-updater-core."""
 from __future__ import annotations
-import json, re, os, shutil, subprocess, sys
+import json, re, os, shutil
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 from typing import Callable
@@ -13,6 +13,7 @@ from .privileged_runtime import (
     AgentPrivilegedRuntimeConfig,
     invoke_privileged_self_update,
     prepare_privileged_self_update,
+    prepare_privileged_update,
 )
 
 @dataclass(frozen=True)
@@ -74,6 +75,82 @@ class UpdateOrchestrator:
         self.validate_product(manifest); self._record(transaction_id,TransactionState.VERIFIED,artifact=str(staged),artifact_id=policy.artifact_id)
         plan=UpdatePlan(manifest.product_id,manifest.install_root,manifest.version,policy.latest_version,Path(staged),backup_root,manifest.install_root/manifest.executable,health_check=manifest.health_check,expected_sha256=policy.artifact_sha256,expected_size=policy.artifact_size)
         result=replace_transaction(plan,health_probe=health_probe); self._record(transaction_id,result,artifact=str(staged),target_version=policy.latest_version); return result
+
+    def _prepare_privileged_handoff(
+        self,
+        manifest: ProductManifest,
+        policy: SignedUpdatePolicy,
+        artifact: Path,
+        privileged_config: AgentPrivilegedRuntimeConfig,
+        target_policy: dict[str, object],
+        *,
+        wait_pid: int | None,
+    ):
+        self.validate_product(manifest)
+        if policy.product_id != manifest.product_id or policy.current_version != manifest.version:
+            raise ValueError("signed update policy does not match installed product")
+        if policy.platform != manifest.platform or policy.architecture != manifest.architecture or policy.channel != manifest.update_channel:
+            raise ValueError("signed update policy does not match installed product context")
+        transaction_id=self._transaction_id(manifest,policy)
+        runtime_root=privileged_config.runtime_root.resolve()
+        stage_root=runtime_root/"stage"/transaction_id
+        stage_root.mkdir(parents=True,exist_ok=True)
+        entry_value=target_policy.get("entry_point")
+        if not isinstance(entry_value,str) or not entry_value:
+            raise ValueError("signed target policy is missing entry_point")
+        relative=Path(*PureWindowsPath(entry_value).parts)
+        staged_executable=stage_root/relative
+        staged_executable.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(artifact,staged_executable)
+        if os.name != "nt": os.chmod(staged_executable,0o755)
+        privileged_backup=runtime_root/"backup"/transaction_id
+        privileged_backup.parent.mkdir(parents=True,exist_ok=True)
+        prepare = prepare_privileged_self_update if wait_pid is not None else prepare_privileged_update
+        kwargs = dict(
+            update_policy=policy.raw,
+            target_policy=target_policy,
+            artifact=artifact,
+            staged_root=stage_root,
+            backup_root=privileged_backup,
+            transaction_id=transaction_id,
+        )
+        if wait_pid is not None:
+            kwargs["wait_pid"] = wait_pid
+        prepared=prepare(privileged_config,**kwargs)
+        command=list(prepared.command)
+        if manifest.health_check:
+            command.extend(("--ready-marker",manifest.health_check))
+        return transaction_id, replace(prepared,command=tuple(command))
+
+    def execute_privileged_update(
+        self,
+        manifest: ProductManifest,
+        policy: SignedUpdatePolicy,
+        artifact: Path | None,
+        *,
+        privileged_config: AgentPrivilegedRuntimeConfig | None = None,
+        target_policy: dict[str, object] | None = None,
+        elevate=None,
+    )->TransactionState:
+        """Hand a normal product update to the signed elevated helper without exiting the Agent."""
+        if artifact is None: raise ValueError("privileged update requires a verified artifact")
+        if privileged_config is None or target_policy is None:
+            raise ValueError("privileged update requires runtime config and signed target policy")
+        decision=self.decide(manifest,policy)
+        if decision not in {Decision.UPDATE_AVAILABLE,Decision.UPDATE_REQUIRED}: return TransactionState.FAILED
+        transaction_id=self._transaction_id(manifest,policy)
+        self._record(transaction_id,TransactionState.CREATED,product_id=manifest.product_id,target_version=policy.latest_version,privileged=True)
+        transaction_id, prepared=self._prepare_privileged_handoff(
+            manifest,policy,artifact,privileged_config,target_policy,wait_pid=None
+        )
+        self._record(transaction_id,TransactionState.VERIFIED,artifact=str(prepared.artifact_path),privileged=True)
+        if elevate is None:
+            invoke_privileged_self_update(prepared)
+        else:
+            invoke_privileged_self_update(prepared,elevate=elevate)
+        self._record(transaction_id,TransactionState.STAGED,privileged=True,helper=str(privileged_config.helper_executable),ready_marker=manifest.health_check)
+        return TransactionState.STAGED
+
     def execute_self_update(
         self,
         manifest: ProductManifest,
@@ -92,38 +169,11 @@ class UpdateOrchestrator:
             raise ValueError("self-update requires privileged runtime config and signed target policy")
         decision=self.decide(manifest,policy)
         if decision not in {Decision.UPDATE_AVAILABLE,Decision.UPDATE_REQUIRED}: return TransactionState.FAILED
-        self.validate_product(manifest)
         transaction_id=self._transaction_id(manifest,policy)
         self._record(transaction_id,TransactionState.CREATED,product_id=manifest.product_id,target_version=policy.latest_version,self_update=True)
-
-        runtime_root=privileged_config.runtime_root.resolve()
-        stage_root=runtime_root/"stage"/transaction_id
-        stage_root.mkdir(parents=True,exist_ok=True)
-        entry_value=target_policy.get("entry_point")
-        if not isinstance(entry_value,str) or not entry_value:
-            raise ValueError("signed target policy is missing entry_point")
-        relative=Path(*PureWindowsPath(entry_value).parts)
-        staged_executable=stage_root/relative
-        staged_executable.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copy2(artifact,staged_executable)
-        if os.name != "nt": os.chmod(staged_executable,0o755)
-
-        privileged_backup=runtime_root/"backup"/transaction_id
-        privileged_backup.parent.mkdir(parents=True,exist_ok=True)
-        prepared=prepare_privileged_self_update(
-            privileged_config,
-            update_policy=policy.raw,
-            target_policy=target_policy,
-            artifact=artifact,
-            staged_root=stage_root,
-            backup_root=privileged_backup,
-            transaction_id=transaction_id,
-            wait_pid=os.getpid(),
+        transaction_id, prepared=self._prepare_privileged_handoff(
+            manifest,policy,artifact,privileged_config,target_policy,wait_pid=os.getpid()
         )
-        command=list(prepared.command)
-        if manifest.health_check:
-            command.extend(("--ready-marker",manifest.health_check))
-        prepared=replace(prepared,command=tuple(command))
         self._record(transaction_id,TransactionState.VERIFIED,artifact=str(prepared.artifact_path),self_update=True)
         if elevate is None:
             invoke_privileged_self_update(prepared)
