@@ -1,0 +1,142 @@
+name: Publish Windows RC4
+
+on:
+  push:
+    branches:
+      - release/v1.0.0-rc.4
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-windows-v1.0.0-rc.4
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v1.0.0-rc.4
+  CERTIFIED_SOURCE_SHA: a8e11e77b4333d7cf9367f03093de085409e65b9
+  CERTIFIED_WINDOWS_RUN: "33183301784"
+  CERTIFIED_UPGRADE_RUN: "33183301741"
+  EXPECTED_INSTALLER_SHA256: abcd95b2d742cc8259662a0d2ccbe9450db0884218e5a5cb2bb5180cf0b47e16
+  ARTIFACT_NAME: BKE-Licensing-Agent-1.0.0-Windows-x64-RC
+
+jobs:
+  publish:
+    runs-on: ubuntu-26.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout publication source
+        uses: actions/checkout@v4
+
+      - name: Download exact certified Windows artifact
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh run download "$CERTIFIED_WINDOWS_RUN" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" \
+            --dir release-assets
+
+      - name: Verify certified evidence and exact bytes
+        run: |
+          set -euo pipefail
+          installer="release-assets/BKE-Licensing-Agent-1.0.0-Windows-x64.exe"
+          test -f "$installer"
+          test -f release-assets/SHA256SUMS.txt
+          test -f release-assets/SOURCE.txt
+          test -f release-assets/DEFENDER-SCAN.txt
+          test -f release-assets/SIGNATURE.txt
+          test -f release-assets/LICENSE.txt
+
+          actual="$(sha256sum "$installer" | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_INSTALLER_SHA256"
+          grep -F "source=$CERTIFIED_SOURCE_SHA" release-assets/SOURCE.txt
+          grep -F "${EXPECTED_INSTALLER_SHA256}  BKE-Licensing-Agent-1.0.0-Windows-x64.exe" release-assets/SHA256SUMS.txt
+          grep -F 'payload_scan_exit_code=0' release-assets/DEFENDER-SCAN.txt
+          grep -F 'installer_scan_exit_code=0' release-assets/DEFENDER-SCAN.txt
+          grep -F 'result=clean' release-assets/DEFENDER-SCAN.txt
+          grep -F 'status=NotSigned' release-assets/SIGNATURE.txt
+          grep -F 'BKE LICENSING AGENT PROPRIETARY SOFTWARE LICENSE' release-assets/LICENSE.txt
+          grep -F 'All rights reserved' release-assets/LICENSE.txt
+
+      - name: Verify exact certification runs are green
+        run: |
+          set -euo pipefail
+          windows_conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CERTIFIED_WINDOWS_RUN" --jq .conclusion)"
+          upgrade_conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CERTIFIED_UPGRADE_RUN" --jq .conclusion)"
+          test "$windows_conclusion" = success
+          test "$upgrade_conclusion" = success
+
+      - name: Write RC4 release notes
+        run: |
+          cat > release-assets/RELEASE-NOTES.md <<EOF
+          # BKE Licensing Agent 1.0.0 RC4 — Windows x64
+
+          Windows-only certification release.
+
+          Certified source:
+          - \`${CERTIFIED_SOURCE_SHA}\`
+
+          Exact Windows release-candidate run:
+          - \`${CERTIFIED_WINDOWS_RUN}\` — GREEN
+
+          Exact Windows in-place-upgrade run:
+          - \`${CERTIFIED_UPGRADE_RUN}\` — GREEN
+
+          Installer SHA-256:
+          - \`${EXPECTED_INSTALLER_SHA256}\`
+
+          Certification evidence shipped with this release:
+          - \`SHA256SUMS.txt\`
+          - \`SOURCE.txt\`
+          - \`DEFENDER-SCAN.txt\`
+          - \`SIGNATURE.txt\`
+          - \`LICENSE.txt\`
+
+          Security evidence:
+          - Microsoft Defender frozen-payload scan: CLEAN
+          - Microsoft Defender final-installer scan: CLEAN
+          - RC3 -> RC4 candidate in-place upgrade: PASS
+          - candidate -> candidate graceful in-place upgrade: PASS
+          - GitHub build-provenance attestation exists for the exact installer artifact
+
+          Licensing:
+          - BKE Licensing Agent is proprietary software.
+          - Copyright (c) 2026 BKES Information Technology Solutions, operating under the BKE Digital Solutions brand. All rights reserved.
+          - No MIT grant applies to this candidate.
+
+          Important customer-distribution boundary:
+          - Authenticode status for this RC is \`NotSigned\`.
+          - Therefore RC4 is approved for BKE engineering, controlled installation, and integration testing only.
+          - Do not represent RC4 as a Windows publisher-trusted production installer.
+          - Customer production publication requires a valid approved BKE Authenticode signature and persistent BKE production updater trust.
+
+          Linux is not included in RC4 and remains NOT LIVE-CERTIFIED.
+          EOF
+
+      - name: Publish or refresh Windows RC4 prerelease
+        run: |
+          set -euo pipefail
+          cd release-assets
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              BKE-Licensing-Agent-1.0.0-Windows-x64.exe \
+              SHA256SUMS.txt SOURCE.txt DEFENDER-SCAN.txt SIGNATURE.txt LICENSE.txt RELEASE-NOTES.md \
+              --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" \
+              --title "BKE Licensing Agent 1.0.0 RC4 — Windows x64" \
+              --notes-file RELEASE-NOTES.md \
+              --prerelease \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" \
+              BKE-Licensing-Agent-1.0.0-Windows-x64.exe \
+              SHA256SUMS.txt SOURCE.txt DEFENDER-SCAN.txt SIGNATURE.txt LICENSE.txt RELEASE-NOTES.md \
+              --target "$CERTIFIED_SOURCE_SHA" \
+              --title "BKE Licensing Agent 1.0.0 RC4 — Windows x64" \
+              --notes-file RELEASE-NOTES.md \
+              --prerelease \
+              --repo "$GITHUB_REPOSITORY"
+          fi
