@@ -1,0 +1,126 @@
+name: macOS in-place upgrade certification
+
+on:
+  pull_request:
+    paths:
+      - "packaging/macos/**"
+      - ".github/workflows/macos-in-place-upgrade.yml"
+      - "src/**"
+      - "pyproject.toml"
+      - "bke-licensing-agent.spec"
+      - "bke-license-center.spec"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_VERSION: "1.0.0"
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  LABEL: com.bkedigitalsolutions.licensing-agent
+  DATA_DIR: /Library/Application Support/BKE Digital Solutions/Licensing Agent Data
+
+jobs:
+  certify-upgrade:
+    name: Install and upgrade in place
+    runs-on: macos-26
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify Apple Silicon runner
+        run: |
+          test "$(uname -m)" = "arm64"
+          sw_vers
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+
+      - name: Run macOS test suite
+        run: python -m pytest -q
+
+      - name: Freeze and sign native runtime
+        run: |
+          pyinstaller --clean --noconfirm bke-licensing-agent.spec
+          mv dist/bke-licensing-agent dist-agent
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          mv dist-agent dist/bke-licensing-agent
+          codesign --force --deep --sign - dist/bke-licensing-agent/bke-licensing-agent
+          codesign --force --deep --sign - dist/bke-license-center/bke-license-center
+          codesign --verify --deep --strict --verbose=2 dist/bke-licensing-agent/bke-licensing-agent
+          codesign --verify --deep --strict --verbose=2 dist/bke-license-center/bke-license-center
+
+      - name: Build macOS installer
+        run: bash packaging/macos/build-pkg.sh "$RELEASE_VERSION"
+
+      - name: First install
+        run: |
+          set -euo pipefail
+          PKG="dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}.pkg"
+          sudo installer -pkg "$PKG" -target /
+
+          sudo launchctl print "system/${LABEL}" >/tmp/bke-launchd-first.txt
+          FIRST_PID="$(awk '/pid =/ {print $3; exit}' /tmp/bke-launchd-first.txt)"
+          test -n "$FIRST_PID"
+          echo "FIRST_PID=$FIRST_PID" >> "$GITHUB_ENV"
+
+          for _ in $(seq 1 40); do
+            if lsof -nP -iTCP:43873 -sTCP:LISTEN >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+          lsof -nP -iTCP:43873 -sTCP:LISTEN
+
+          sudo mkdir -p "$DATA_DIR"
+          printf 'preserve-across-upgrade\n' | sudo tee "$DATA_DIR/upgrade-certification.marker" >/dev/null
+
+      - name: In-place reinstall upgrade
+        run: |
+          set -euo pipefail
+          PKG="dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}.pkg"
+          sudo installer -pkg "$PKG" -target /
+
+          sudo launchctl print "system/${LABEL}" >/tmp/bke-launchd-second.txt
+          SECOND_PID="$(awk '/pid =/ {print $3; exit}' /tmp/bke-launchd-second.txt)"
+          test -n "$SECOND_PID"
+          test "$SECOND_PID" != "$FIRST_PID"
+
+          for _ in $(seq 1 40); do
+            if lsof -nP -iTCP:43873 -sTCP:LISTEN >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+          lsof -nP -iTCP:43873 -sTCP:LISTEN
+
+          test "$(sudo cat "$DATA_DIR/upgrade-certification.marker")" = "preserve-across-upgrade"
+          pkgutil --pkg-info "$LABEL"
+
+          echo "In-place upgrade certified: daemon restarted and persistent state survived."
+
+      - name: Collect installer diagnostics on failure
+        if: failure()
+        run: |
+          sudo tail -n 250 /var/log/install.log || true
+          sudo launchctl print "system/${LABEL}" || true
+          lsof -nP -iTCP:43873 -sTCP:LISTEN || true
+
+      - name: Cleanup runner installation
+        if: always()
+        run: |
+          sudo launchctl bootout "system/${LABEL}" >/dev/null 2>&1 || true
+          sudo rm -f "/Library/LaunchDaemons/${LABEL}.plist"
+          sudo rm -rf "/Library/Application Support/BKE Digital Solutions/Licensing Agent"
+          sudo rm -rf "$DATA_DIR"
+          sudo rm -rf "/Applications/Utilities/BKE Digital Solutions"
+          sudo pkgutil --forget "$LABEL" >/dev/null 2>&1 || true
