@@ -42,7 +42,7 @@ jobs:
 
       - name: Run Windows native tests
         shell: pwsh
-        run: python -m pytest -q tests/windows tests/unit/test_module_launch.py tests/unit/test_native_privileged_provisioning.py tests/unit/test_windows_privileged_packaging.py
+        run: python -m pytest -q tests/windows tests/unit/test_module_launch.py tests/unit/test_native_license_center_launcher.py tests/unit/test_native_privileged_provisioning.py tests/unit/test_windows_privileged_packaging.py
 
       - name: Freeze Windows service and License Center
         shell: pwsh
