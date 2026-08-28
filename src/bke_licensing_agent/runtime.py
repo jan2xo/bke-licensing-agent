@@ -46,6 +46,7 @@ from .manifest.validator import validate_manifest
 from .storage.database import Database
 from .storage.models import DiscoveredProductRecord
 from .updates.discovery import UpdateDiscoveryCoordinator
+from .updates.installed_privileged import execute_installed_product_update
 
 
 def _load_trusted_keys(directory: Path) -> dict[str, str]:
@@ -146,11 +147,12 @@ class InstalledAgentRuntime:
         if status.get("state") not in {"update_available", "stale_update"}:
             return {"outcome": "no_update", "reason": str(status.get("state", "never_checked")),
                     "correlation_id": correlation_id}
-        # Execution remains deliberately behind the Agent-owned native surface.
-        # Staged-tree packaging is now available, but Windows elevation/helper authenticity
-        # must be certified before this boundary is permitted to execute replacement.
-        return {"outcome": "update_ready", "reason": f"{status.get('latest_version')} is ready for Agent confirmation",
-                "correlation_id": correlation_id}
+        try:
+            state = execute_installed_product_update(self, product_id, version)
+        except Exception:
+            return {"outcome": "update_failed", "reason": "privileged_update_verification_or_handoff_failed",
+                    "correlation_id": correlation_id}
+        return {"outcome": "update_started", "reason": state.value.lower(), "correlation_id": correlation_id}
 
     def _refresh_discovery(self) -> None:
         """Refresh trusted discovery metadata from configured install roots.

@@ -1,0 +1,66 @@
+"""Windows Service entry point for the persistent Agent runtime."""
+
+from __future__ import annotations
+
+import servicemanager
+import sys
+import win32event
+import win32service
+import win32serviceutil
+import win32timezone
+
+from bke_licensing_agent.runtime import InstalledAgentRuntime
+
+
+class LicensingAgentService(win32serviceutil.ServiceFramework):
+    _svc_name_ = "BKE-Licensing-Agent"
+    _svc_display_name_ = "BKE Licensing Agent"
+    _svc_description_ = "Loopback-only BKE licensing authority."
+
+    def __init__(self, args):
+        super().__init__(args)
+        self.stop_event = win32event.CreateEvent(None, 0, 0, None)
+        self.runtime: InstalledAgentRuntime | None = None
+
+    def SvcStop(self):  # noqa: N802
+        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        if self.runtime is not None:
+            self.runtime.close()
+        win32event.SetEvent(self.stop_event)
+
+    def SvcDoRun(self):  # noqa: N802
+        servicemanager.LogInfoMsg("BKE Licensing Agent service starting")
+        self.runtime = InstalledAgentRuntime()
+        try:
+            self.runtime.serve_forever()
+        finally:
+            self.runtime.close()
+
+
+def _run_service_host() -> None:
+    servicemanager.Initialize()
+    servicemanager.PrepareToHostSingle(LicensingAgentService)
+    servicemanager.StartServiceCtrlDispatcher()
+
+
+if __name__ == "__main__":
+    if "--service-smoke" in sys.argv[1:]:
+        service_class = win32serviceutil.GetServiceClassString(LicensingAgentService)
+        if not service_class.endswith(".LicensingAgentService"):
+            raise RuntimeError("could not resolve frozen Windows service class")
+        print(f"BKE Licensing Agent Windows service dependency smoke: win32timezone and {service_class} OK")
+    elif "--service-host-smoke" in sys.argv[1:]:
+        required = (
+            servicemanager.Initialize,
+            servicemanager.PrepareToHostSingle,
+            servicemanager.StartServiceCtrlDispatcher,
+        )
+        if not all(callable(item) for item in required):
+            raise RuntimeError("Windows service host functions are unavailable")
+        print("BKE Licensing Agent Windows service host smoke: SCM host functions OK")
+    elif "--smoke" in sys.argv[1:]:
+        print("BKE Licensing Agent Windows service smoke: import and entrypoint OK")
+    elif len(sys.argv) == 1:
+        _run_service_host()
+    else:
+        win32serviceutil.HandleCommandLine(LicensingAgentService)

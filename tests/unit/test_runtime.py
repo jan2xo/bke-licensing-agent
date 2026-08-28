@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from bke_updater_core.models import TransactionState
 from bke_licensing_agent.config import DEFAULT_AGENT_PORT, get_agent_port
 from bke_licensing_agent.runtime import InstalledAgentRuntime, _load_trusted_keys
 from bke_licensing_agent.storage.database import Database
@@ -31,6 +32,40 @@ def test_installed_runtime_rejects_native_center_for_unknown_product(tmp_path: P
             "outcome": "invalid_product_context", "reason": "invalid product context",
             "correlation_id": "corr-1", "authorization_changed": False,
         }
+    finally:
+        runtime.close()
+
+
+def test_update_center_hands_verified_available_update_to_privileged_execution(tmp_path: Path, monkeypatch):
+    database = Database(tmp_path / "agent.db")
+    runtime = InstalledAgentRuntime(database=database, port=0)
+    calls = []
+    monkeypatch.setattr(runtime.update_discovery, "status", lambda *_args, **_kwargs: {
+        "state": "update_available", "latest_version": "2.0.0",
+    })
+    monkeypatch.setattr("bke_licensing_agent.runtime.execute_installed_product_update",
+                        lambda owner, product_id, version: calls.append((owner, product_id, version)) or TransactionState.STAGED)
+    try:
+        result = runtime.open_update_center({"product_id": "bke-demo", "version": "1.0.0", "correlation_id": "corr-2"})
+        assert result == {"outcome": "update_started", "reason": "staged", "correlation_id": "corr-2"}
+        assert calls == [(runtime, "bke-demo", "1.0.0")]
+    finally:
+        runtime.close()
+
+
+def test_update_center_fails_closed_when_privileged_handoff_rejects(tmp_path: Path, monkeypatch):
+    database = Database(tmp_path / "agent.db")
+    runtime = InstalledAgentRuntime(database=database, port=0)
+    monkeypatch.setattr(runtime.update_discovery, "status", lambda *_args, **_kwargs: {
+        "state": "update_available", "latest_version": "2.0.0",
+    })
+    def reject(*_args):
+        raise ValueError("no trusted target")
+    monkeypatch.setattr("bke_licensing_agent.runtime.execute_installed_product_update", reject)
+    try:
+        result = runtime.open_update_center({"product_id": "bke-demo", "version": "1.0.0", "correlation_id": "corr-3"})
+        assert result == {"outcome": "update_failed", "reason": "privileged_update_verification_or_handoff_failed",
+                          "correlation_id": "corr-3"}
     finally:
         runtime.close()
 

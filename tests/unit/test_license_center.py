@@ -1,4 +1,7 @@
+import sys
+
 from bke_licensing_agent.license_center import LicenseCenterController, Screen
+from bke_licensing_agent.license_center import entrypoint
 
 
 class Agent:
@@ -39,3 +42,15 @@ def test_license_center_delegates_refresh_and_deactivation():
     controller.connect(); controller.select_product("demo")
     assert controller.refresh_license().screen is Screen.STATUS
     assert controller.deactivate_device().screen is Screen.STATUS
+
+
+def test_license_center_smoke_exits_without_starting_tk(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["bke-license-center", "--smoke"])
+
+    def fail_if_gui_starts():
+        raise AssertionError("smoke mode must not create a Tk window")
+
+    monkeypatch.setattr(entrypoint.tk, "Tk", fail_if_gui_starts)
+
+    assert entrypoint.main() == 0
+    assert "smoke: import and entrypoint OK" in capsys.readouterr().out
