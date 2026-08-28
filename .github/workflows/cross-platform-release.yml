@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - release/v1.0.0-rc.1
+      - release/v1.0.0-rc.2
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ concurrency:
 
 env:
   RELEASE_VERSION: "1.0.0"
-  RELEASE_TAG: "v1.0.0-rc.1"
+  RELEASE_TAG: "v1.0.0-rc.2"
   SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
@@ -276,7 +276,7 @@ jobs:
 
   publish:
     name: Publish GitHub prerelease
-    if: github.event_name == 'push' && github.ref == 'refs/heads/release/v1.0.0-rc.1'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release/v1.0.0-rc.2'
     needs: [linux, macos, windows]
     runs-on: ubuntu-26.04
     env:
@@ -303,7 +303,7 @@ jobs:
       - name: Write prerelease notes
         run: |
           cat > release-assets/RELEASE-NOTES.md <<EOF
-          # BKE Licensing Agent 1.0.0 RC1
+          # BKE Licensing Agent 1.0.0 RC2
 
           Cross-platform certification release built from source commit \`${GITHUB_SHA}\`.
 
@@ -311,6 +311,8 @@ jobs:
           - Windows x64 Inno Setup installer
           - macOS arm64 .pkg installer
           - Linux x64 Debian .deb installer
+
+          RC2 repairs the macOS in-place upgrade lifecycle discovered during real-machine certification. The installer now stops the existing LaunchDaemon before PackageKit replaces the runtime, then bootstraps and verifies the replacement runtime after installation.
 
           This is a **prerelease for BKE integration/certification**, including SDK → Agent testing.
 
@@ -339,7 +341,7 @@ jobs:
               BKE-Licensing-Agent-1.0.0-Linux-x64.deb \
               SHA256SUMS.txt SOURCE.txt RELEASE-NOTES.md \
               --target "$GITHUB_SHA" \
-              --title "BKE Licensing Agent 1.0.0 RC1" \
+              --title "BKE Licensing Agent 1.0.0 RC2" \
               --notes-file RELEASE-NOTES.md \
               --prerelease \
               --repo "$GITHUB_REPOSITORY"
