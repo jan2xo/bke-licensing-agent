@@ -1,0 +1,48 @@
+BKE LICENSING AGENT PROPRIETARY SOFTWARE LICENSE
+
+Copyright (c) 2026 BKES Information Technology Solutions, operating under the BKE Digital Solutions brand. All rights reserved.
+
+1. OWNERSHIP
+
+The BKE Licensing Agent software, including its BKE-authored source code, binaries, documentation, designs, protocols, packaging, and related materials (the "Software"), is proprietary to BKES Information Technology Solutions, operating under the BKE Digital Solutions brand ("BKE"). The Software is licensed, not sold. No ownership rights are transferred to any user, customer, distributor, integrator, or other party.
+
+2. LIMITED CUSTOMER LICENSE
+
+A customer with a valid authorization from BKE is granted a limited, non-exclusive, non-transferable, non-sublicensable license to install and use the Software solely for the customer's authorized internal use and only in accordance with the applicable BKE commercial terms, order, subscription, entitlement, or written agreement.
+
+3. RESTRICTIONS
+
+Except with BKE's prior written permission, or to the limited extent a restriction is prohibited by applicable law, you may not:
+
+- copy, reproduce, republish, distribute, transmit, disclose, sell, rent, lease, sublicense, assign, or otherwise transfer the Software or any substantial portion of it;
+- modify, adapt, translate, create derivative works from, or incorporate the Software into another product or service;
+- reverse engineer, decompile, disassemble, decode, extract, or attempt to discover source code, private keys, signing material, protected protocols, or implementation details from the Software;
+- remove, alter, conceal, or bypass copyright, proprietary, licensing, integrity, security, or attribution notices or controls;
+- use the Software to create, train, benchmark, or assist a competing licensing, entitlement, update-authority, or application-management product without BKE's prior written permission;
+- make the Software available to any third party except as expressly authorized by BKE in writing.
+
+4. COPYING FOR INSTALLATION OR BACKUP
+
+No general right to copy the Software is granted. An authorized customer may make only those temporary or backup copies that are strictly necessary to install, operate, restore, or update an authorized installation, and those copies remain subject to this License.
+
+5. THIRD-PARTY MATERIALS
+
+The Software may include or depend on third-party components. Those third-party materials remain subject to their respective licenses and notices. This License applies only to BKE's proprietary rights and does not replace, restrict, or relicense third-party rights that BKE does not own.
+
+6. SECURITY AND INTEGRITY
+
+You may not tamper with, forge, substitute, bypass, or misuse BKE signatures, hashes, certificates, trust stores, update policies, license records, entitlement records, or other integrity mechanisms. BKE may refuse to run, authorize, activate, or update Software whose integrity or authorization cannot be verified.
+
+7. TERMINATION
+
+This License terminates automatically if you materially violate its terms. Upon termination, you must stop using the Software and delete unauthorized copies, except where retention is required by law.
+
+8. NO IMPLIED RIGHTS
+
+All rights not expressly granted are reserved by BKE. Public availability of source code or release artifacts, if any, does not grant permission to copy, modify, redistribute, sublicense, or create derivative works beyond the limited rights expressly stated in this License.
+
+9. DISCLAIMER
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTIES EXCEPT THOSE EXPRESSLY PROVIDED IN A SEPARATE WRITTEN AGREEMENT WITH BKE.
+
+For licensing permissions or a separate written license, contact BKE Digital Solutions through its official support channel.
