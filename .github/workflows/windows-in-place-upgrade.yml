@@ -32,9 +32,9 @@ jobs:
           python -m pip install -e ".[test]"
           choco install innosetup -y --no-progress
 
-      - name: Run Windows packaging tests
+      - name: Run Windows packaging and shutdown tests
         shell: pwsh
-        run: python -m pytest -q tests/windows tests/unit/test_windows_privileged_packaging.py
+        run: python -m pytest -q tests/windows tests/unit/test_windows_privileged_packaging.py tests/unit/test_runtime.py
 
       - name: Freeze candidate Windows runtime
         shell: pwsh
@@ -138,7 +138,7 @@ jobs:
           if (!(Test-Path $db)) { throw 'RC3 baseline did not create machine Agent database' }
           Set-Content -LiteralPath (Join-Path $dataDir 'upgrade-state-marker.txt') -Value 'preserve-across-upgrade' -Encoding ascii
 
-      - name: Upgrade RC3 in place to candidate
+      - name: Upgrade broken-shutdown RC3 in place to candidate
         shell: pwsh
         run: |
           $candidate = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
@@ -153,7 +153,7 @@ jobs:
             throw "candidate in-place upgrade failed with exit code $($process.ExitCode)"
           }
 
-      - name: Verify service, protocol, and machine state after upgrade
+      - name: Verify legacy recovery, protocol, and machine state
         shell: pwsh
         run: |
           $service = Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction Stop
@@ -179,6 +179,10 @@ jobs:
           }
           if (-not $ready) { throw 'upgraded Agent never became protocol-ready' }
 
+          if (!(Select-String -LiteralPath $env:CANDIDATE_UPGRADE_LOG -SimpleMatch 'Legacy BKE Licensing Agent service required exact SCM PID termination before payload replacement.')) {
+            Get-Content $env:CANDIDATE_UPGRADE_LOG
+            throw 'RC3 migration did not exercise the exact-service legacy recovery path'
+          }
           if (!(Select-String -LiteralPath $env:CANDIDATE_UPGRADE_LOG -SimpleMatch 'Existing BKE Licensing Agent service stopped before payload replacement.')) {
             Get-Content $env:CANDIDATE_UPGRADE_LOG
             throw 'installer did not record a completed pre-replacement service stop'
@@ -188,16 +192,71 @@ jobs:
             throw 'installer did not record a completed post-replacement service start'
           }
 
-          Write-Host 'RC3 -> candidate in-place upgrade preserved state and restored protocol readiness.'
+      - name: Reinstall candidate in place through graceful shutdown path
+        shell: pwsh
+        run: |
+          $candidate = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP "candidate-graceful-reinstall.log"
+          "CANDIDATE_GRACEFUL_LOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $process = Start-Process -FilePath $candidate -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "candidate graceful reinstall failed with exit code $($process.ExitCode)"
+          }
+
+          if (!(Select-String -LiteralPath $log -SimpleMatch 'Existing BKE Licensing Agent service stopped gracefully before payload replacement.')) {
+            Get-Content $log
+            throw 'fixed candidate did not stop gracefully during the next in-place replacement'
+          }
+          if (Select-String -LiteralPath $log -SimpleMatch 'exact SCM PID termination') {
+            Get-Content $log
+            throw 'fixed candidate unexpectedly required legacy forced-service recovery'
+          }
+
+      - name: Verify future graceful upgrade state and protocol
+        shell: pwsh
+        run: |
+          $service = Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          $service.Refresh()
+          if ($service.Status -ne 'Running') { throw 'Agent service is not running after graceful replacement' }
+
+          $dataDir = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+          $marker = Join-Path $dataDir 'upgrade-state-marker.txt'
+          $db = Join-Path $dataDir 'agent.db'
+          if (!(Test-Path $marker) -or (Get-Content $marker -Raw).Trim() -ne 'preserve-across-upgrade') {
+            throw 'machine state was not preserved through the graceful replacement path'
+          }
+          if (!(Test-Path $db)) { throw 'Agent database was lost during graceful replacement' }
+
+          $body = '{"product_id":"ci-upgrade-product","version":"1.0.0","installation_id":"00000000-0000-0000-0000-000000000001"}'
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:43873/v1/authorize' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw 'gracefully replaced Agent never became protocol-ready' }
+
+          Write-Host 'RC3 -> candidate recovery and candidate -> candidate graceful replacement both passed.'
 
       - name: Show installer diagnostics on failure
         if: failure()
         shell: pwsh
         run: |
           Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction SilentlyContinue | Format-List *
-          if ($env:CANDIDATE_UPGRADE_LOG -and (Test-Path $env:CANDIDATE_UPGRADE_LOG)) {
-            Get-Content $env:CANDIDATE_UPGRADE_LOG
+          foreach ($log in @($env:CANDIDATE_UPGRADE_LOG, $env:CANDIDATE_GRACEFUL_LOG)) {
+            if ($log -and (Test-Path $log)) {
+              Write-Host "===== $log ====="
+              Get-Content $log
+            }
           }
+          Get-CimInstance Win32_Service -Filter "Name='BKE-Licensing-Agent'" -ErrorAction SilentlyContinue | Format-List *
           Get-Process bke-licensing-agent-service -ErrorAction SilentlyContinue | Format-List *
 
       - name: Upload upgrade candidate and logs
@@ -208,4 +267,5 @@ jobs:
           path: |
             dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
             ${{ runner.temp }}/candidate-upgrade.log
+            ${{ runner.temp }}/candidate-graceful-reinstall.log
           if-no-files-found: warn
