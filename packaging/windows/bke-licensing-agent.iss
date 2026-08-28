@@ -90,6 +90,30 @@ begin
     RaiseException(Format('%s did not reach %s within 30 seconds.', [Description, DesiredStatus]));
 end;
 
+function CompleteServiceStopForUpgrade: Integer;
+var
+  ResultCode: Integer;
+  PowerShell: String;
+  Parameters: String;
+begin
+  PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
+    '$service=Get-Service -Name ''{#ServiceName}'' -ErrorAction SilentlyContinue; ' +
+    'if ($null -eq $service) { exit 0 }; ' +
+    '$deadline=[DateTime]::UtcNow.AddSeconds(10); ' +
+    'while ([DateTime]::UtcNow -lt $deadline) { $service.Refresh(); if ($service.Status -eq ''Stopped'') { exit 0 }; Start-Sleep -Milliseconds 250 }; ' +
+    '$legacy=Get-CimInstance -ClassName Win32_Service -ErrorAction Stop | Where-Object Name -EQ ''{#ServiceName}'' | Select-Object -First 1; ' +
+    'if ($null -eq $legacy) { exit 1 }; $servicePid=[int]$legacy.ProcessId; if ($servicePid -le 0) { exit 1 }; ' +
+    'Stop-Process -Id $servicePid -Force -ErrorAction Stop; ' +
+    '$deadline=[DateTime]::UtcNow.AddSeconds(20); ' +
+    'while ([DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 250; $service=Get-Service -Name ''{#ServiceName}'' -ErrorAction SilentlyContinue; ' +
+    'if ($null -eq $service) { exit 10 }; $service.Refresh(); if ($service.Status -eq ''Stopped'') { exit 10 } }; exit 1"';
+
+  if not Exec(PowerShell, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    RaiseException(Format('BKE Licensing Agent upgrade stop helper could not execute (system error %d).', [ResultCode]));
+  Result := ResultCode;
+end;
+
 procedure StopExistingLicenseCenter;
 var
   ResultCode: Integer;
@@ -103,15 +127,25 @@ end;
 procedure StopExistingService;
 var
   ResultCode: Integer;
+  StopResult: Integer;
 begin
   if not ServiceExists then
     Exit;
 
-  // sc.exe only requests a stop; it can return while SCM still reports STOP_PENDING.
-  // Never replace the frozen service payload until the service is fully stopped.
+  // Request a normal SCM stop first. RC3 contains a service-host shutdown defect
+  // that can leave it permanently STOP_PENDING, so bounded legacy recovery is
+  // permitted only after the graceful window expires. Recovery resolves the PID
+  // from the exact SCM service record and never kills by executable/process name.
   Exec(ExpandConstant('{sys}\sc.exe'), 'stop {#ServiceName}', '', SW_HIDE,
     ewWaitUntilTerminated, ResultCode);
-  WaitForServiceStatus('Stopped', 'Existing BKE Licensing Agent service');
+  StopResult := CompleteServiceStopForUpgrade;
+  if StopResult = 0 then
+    Log('Existing BKE Licensing Agent service stopped gracefully before payload replacement.')
+  else if StopResult = 10 then
+    Log('Legacy BKE Licensing Agent service required exact SCM PID termination before payload replacement.')
+  else
+    RaiseException('Existing BKE Licensing Agent service could not be stopped safely before payload replacement.');
+
   Sleep(500);
   Log('Existing BKE Licensing Agent service stopped before payload replacement.');
 end;
@@ -132,8 +166,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    StopExistingService;
     StopExistingLicenseCenter;
+    StopExistingService;
   end;
 
   if CurStep = ssPostInstall then
