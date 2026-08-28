@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - release/v1.0.0-rc.1
+      - release/v1.0.0-rc.3
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ concurrency:
 
 env:
   RELEASE_VERSION: "1.0.0"
-  RELEASE_TAG: "v1.0.0-rc.1"
+  RELEASE_TAG: "v1.0.0-rc.3"
   SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
@@ -276,7 +276,7 @@ jobs:
 
   publish:
     name: Publish GitHub prerelease
-    if: github.event_name == 'push' && github.ref == 'refs/heads/release/v1.0.0-rc.1'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release/v1.0.0-rc.3'
     needs: [linux, macos, windows]
     runs-on: ubuntu-26.04
     env:
@@ -303,7 +303,7 @@ jobs:
       - name: Write prerelease notes
         run: |
           cat > release-assets/RELEASE-NOTES.md <<EOF
-          # BKE Licensing Agent 1.0.0 RC1
+          # BKE Licensing Agent 1.0.0 RC3
 
           Cross-platform certification release built from source commit \`${GITHUB_SHA}\`.
 
@@ -311,6 +311,8 @@ jobs:
           - Windows x64 Inno Setup installer
           - macOS arm64 .pkg installer
           - Linux x64 Debian .deb installer
+
+          RC3 repairs the loopback HTTP/1.1 JSON framing used by BKE.Desktop.Client: bounded `Transfer-Encoding: chunked` request bodies are now accepted and decoded while ambiguous, unsupported, malformed, and oversized framing is rejected. It preserves RC2's macOS restart-safe in-place-upgrade lifecycle repair.
 
           This is a **prerelease for BKE integration/certification**, including SDK → Agent testing.
 
@@ -339,7 +341,7 @@ jobs:
               BKE-Licensing-Agent-1.0.0-Linux-x64.deb \
               SHA256SUMS.txt SOURCE.txt RELEASE-NOTES.md \
               --target "$GITHUB_SHA" \
-              --title "BKE Licensing Agent 1.0.0 RC1" \
+              --title "BKE Licensing Agent 1.0.0 RC3" \
               --notes-file RELEASE-NOTES.md \
               --prerelease \
               --repo "$GITHUB_REPOSITORY"
