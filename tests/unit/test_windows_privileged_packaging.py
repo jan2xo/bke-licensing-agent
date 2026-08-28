@@ -50,3 +50,15 @@ def test_windows_installer_embeds_bke_proprietary_license():
     assert 'Source: "..\\..\\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"' in source
     assert "VersionInfoCompany={#AppPublisher}" in source
     assert "VersionInfoCopyright={#AppCopyright}" in source
+
+
+def test_windows_license_center_installer_layout_matches_runtime_locator():
+    root = Path(__file__).parents[2]
+    installer = (root / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
+    launcher = (root / "src" / "bke_licensing_agent" / "license_center" / "native_launcher.py").read_text(encoding="utf-8")
+
+    assert 'Source: "..\\..\\dist\\windows\\bke-license-center\\*"; DestDir: "{app}\\license-center"' in installer
+    assert 'agent_dir.parent / "license-center" / name' in launcher
+    assert 'startup.lpDesktop = "winsta0\\\\default"' in launcher
+    assert "CreateProcessAsUserW" in launcher
+    assert "Session 0" in launcher
