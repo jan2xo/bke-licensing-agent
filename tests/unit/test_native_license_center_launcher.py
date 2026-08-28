@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import bke_licensing_agent.license_center.native_launcher as native_launcher
 from bke_licensing_agent.license_center.native_launcher import NativeLicenseCenterLauncher
 from bke_licensing_agent.license_center.service import (
     LicenseCenterAction, LicenseCenterOutcome, OpenLicenseCenterRequest,
@@ -46,3 +47,61 @@ def test_launcher_maps_cancel_and_missing_binary(tmp_path: Path):
         executable, runner=lambda *_args, **_kwargs: SimpleNamespace(returncode=2),
     )(_request())
     assert result.outcome is LicenseCenterOutcome.CANCELLED
+
+
+def test_default_windows_path_matches_installer_layout(tmp_path: Path, monkeypatch):
+    app_dir = tmp_path / "Licensing Agent"
+    service_dir = app_dir / "service"
+    center_dir = app_dir / "license-center"
+    service_dir.mkdir(parents=True)
+    center_dir.mkdir(parents=True)
+    service_executable = service_dir / "bke-licensing-agent-service.exe"
+    license_center = center_dir / "bke-license-center.exe"
+    service_executable.touch()
+    license_center.touch()
+
+    monkeypatch.setattr(native_launcher.sys, "platform", "win32")
+    monkeypatch.setattr(native_launcher.sys, "executable", str(service_executable))
+
+    assert NativeLicenseCenterLauncher._default_executable() == license_center.resolve()
+
+
+def test_windows_default_runner_uses_interactive_session_handoff(tmp_path: Path, monkeypatch):
+    executable = tmp_path / "bke-license-center.exe"
+    executable.touch()
+    seen = []
+
+    def interactive_runner(args, **kwargs):
+        seen.append((tuple(args), kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(native_launcher.sys, "platform", "win32")
+    monkeypatch.setattr(native_launcher, "_run_windows_interactive", interactive_runner)
+    monkeypatch.setattr(
+        native_launcher.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Session 0 fallback is forbidden")),
+    )
+
+    result = NativeLicenseCenterLauncher(executable)(_request())
+
+    assert result.outcome is LicenseCenterOutcome.AUTHORIZATION_REFRESHED
+    assert len(seen) == 1
+    assert seen[0][1] == {"shell": False, "check": False}
+
+
+def test_windows_interactive_launch_failure_is_fail_closed(tmp_path: Path, monkeypatch):
+    executable = tmp_path / "bke-license-center.exe"
+    executable.touch()
+
+    monkeypatch.setattr(native_launcher.sys, "platform", "win32")
+    monkeypatch.setattr(
+        native_launcher,
+        "_run_windows_interactive",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("no active desktop")),
+    )
+
+    result = NativeLicenseCenterLauncher(executable)(_request())
+
+    assert result.outcome is LicenseCenterOutcome.FAILED
+    assert result.authorization_changed is False
