@@ -18,10 +18,22 @@ def test_windows_installer_owns_privileged_runtime_inputs():
 def test_windows_installer_stops_before_replace_and_waits_for_restart():
     source = (Path(__file__).parents[2] / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
 
-    assert "WaitForServiceStatus('Stopped'" in source
     assert "WaitForServiceStatus('Running'" in source
-    assert "StopExistingLicenseCenter" in source
+    assert "CompleteServiceStopForUpgrade" in source
+    assert "Get-CimInstance -ClassName Win32_Service" in source
+    assert "Where-Object Name -EQ ''{#ServiceName}''" in source
+    assert "Stop-Process -Id $servicePid -Force" in source
+    assert "taskkill.exe" in source
+    assert "/IM bke-license-center.exe" in source
     assert "CloseApplications=yes" in source
     assert "RestartApplications=no" in source
     assert "stopped before payload replacement" in source
     assert "running after payload replacement" in source
+
+
+def test_windows_legacy_recovery_never_kills_agent_by_process_name():
+    source = (Path(__file__).parents[2] / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
+
+    assert "exact SCM PID termination" in source
+    assert "Stop-Process -Name" not in source
+    assert "/IM bke-licensing-agent-service.exe" not in source
