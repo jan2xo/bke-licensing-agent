@@ -94,8 +94,8 @@ procedure StopExistingLicenseCenter;
 var
   ResultCode: Integer;
 begin
-  ; A running License Center can keep frozen payload files open. taskkill returns
-  ; non-zero when no process exists, which is an acceptable no-op during upgrade.
+  // A running License Center can keep frozen payload files open. taskkill returns
+  // non-zero when no process exists, which is an acceptable no-op during upgrade.
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM bke-license-center.exe /T /F', '', SW_HIDE,
     ewWaitUntilTerminated, ResultCode);
 end;
@@ -107,8 +107,8 @@ begin
   if not ServiceExists then
     Exit;
 
-  ; sc.exe only requests a stop; it can return while SCM still reports STOP_PENDING.
-  ; Never replace the frozen service payload until the service is fully stopped.
+  // sc.exe only requests a stop; it can return while SCM still reports STOP_PENDING.
+  // Never replace the frozen service payload until the service is fully stopped.
   Exec(ExpandConstant('{sys}\sc.exe'), 'stop {#ServiceName}', '', SW_HIDE,
     ewWaitUntilTerminated, ResultCode);
   WaitForServiceStatus('Stopped', 'Existing BKE Licensing Agent service');
