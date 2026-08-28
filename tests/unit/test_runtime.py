@@ -1,5 +1,6 @@
 from pathlib import Path
 from threading import Thread
+from types import SimpleNamespace
 import time
 
 from bke_updater_core.models import TransactionState
@@ -18,6 +19,28 @@ def test_installed_runtime_denies_unknown_product(tmp_path: Path):
             "installation_id": "installation-1",
         })
         assert result == {"authorized": False, "reason": "unknown_product_or_version"}
+    finally:
+        runtime.close()
+
+
+def test_update_discovery_resolves_verified_signed_lease(tmp_path: Path, monkeypatch):
+    database = Database(tmp_path / "agent.db")
+    runtime = InstalledAgentRuntime(database=database, port=0)
+    lease = SimpleNamespace(
+        product_version="1.0.0",
+        status="verified",
+        signed_payload="payload",
+        signed_signature="signature",
+        signed_algorithm="Ed25519",
+    )
+    monkeypatch.setattr(
+        runtime.repository,
+        "list_for_product",
+        lambda product_id: [lease] if product_id == "bke-render-dock" else [],
+    )
+    try:
+        assert runtime._update_lease("bke-render-dock", "1.0.0") is lease
+        assert runtime._update_lease("bke-render-dock", "2.0.0") is None
     finally:
         runtime.close()
 
