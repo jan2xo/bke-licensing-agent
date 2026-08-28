@@ -1,6 +1,7 @@
 #define AppName "BKE Licensing Agent"
 #define AppVersion "1.0.0"
 #define AppPublisher "BKE Digital Solutions"
+#define AppCopyright "Copyright (c) 2026 BKES Information Technology Solutions. All rights reserved."
 #define ServiceName "BKE-Licensing-Agent"
 #define InstallDir "{autopf}\BKE Digital Solutions\Licensing Agent"
 #define DataDir "{commonappdata}\BKE Digital Solutions\Licensing Agent"
@@ -10,6 +11,7 @@ AppId={{BKE-Licensing-Agent}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
+AppCopyright={#AppCopyright}
 DefaultDirName={#InstallDir}
 DefaultGroupName={#AppName}
 OutputDir=..\..\dist\installer
@@ -18,6 +20,11 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 UninstallDisplayName={#AppName}
+LicenseFile=..\..\LICENSE
+VersionInfoCompany={#AppPublisher}
+VersionInfoDescription={#AppName}
+VersionInfoProductName={#AppName}
+VersionInfoCopyright={#AppCopyright}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -34,6 +41,7 @@ Source: "..\..\dist\windows\bke-privileged-provisioner\bke-privileged-provisione
 ; Production builds must stage real BKE-signed trust payloads here.
 Source: "..\..\dist\windows\privileged-payload\target-keys\*.pem"; DestDir: "{app}\provisioning\target-keys"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-policies\*.json"; DestDir: "{app}\provisioning\target-policies"; Flags: ignoreversion
+Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Dirs]
 Name: "{#DataDir}"
