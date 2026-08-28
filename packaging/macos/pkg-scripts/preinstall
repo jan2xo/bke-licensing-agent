@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+LABEL="com.bkedigitalsolutions.licensing-agent"
+PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+
+if launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+    launchctl bootout "system/${LABEL}" >/dev/null 2>&1 || \
+        launchctl bootout system "$PLIST" >/dev/null 2>&1 || true
+
+    for _ in $(seq 1 40); do
+        if ! launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+            exit 0
+        fi
+        sleep 0.25
+    done
+
+    echo "Existing Licensing Agent LaunchDaemon did not fully stop before upgrade." >&2
+    launchctl print "system/${LABEL}" >&2 || true
+    exit 1
+fi
+
+exit 0

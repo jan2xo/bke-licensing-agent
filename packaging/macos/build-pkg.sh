@@ -34,7 +34,7 @@ cp "$ROOT_DIR/packaging/macos/uninstall.sh" "$PKGROOT/Applications/Utilities/BKE
 
 chmod 644 "$PKGROOT/Library/LaunchDaemons/${LABEL}.plist"
 chmod +x "$PKGROOT/Applications/Utilities/BKE Digital Solutions/Uninstall BKE Licensing Agent.command"
-chmod +x "$SCRIPTS/postinstall"
+chmod +x "$SCRIPTS/preinstall" "$SCRIPTS/postinstall"
 
 pkgbuild \
     --root "$PKGROOT" \
