@@ -1,0 +1,250 @@
+name: Render Dock updater proof installer
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/render-dock-updater-proof.yml'
+      - 'scripts/sign_install_target_policy.py'
+      - 'tests/unit/test_install_target_policy_signing.py'
+      - 'src/bke_licensing_agent/updates/**'
+      - 'packaging/windows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  windows-render-dock-proof:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      RELEASE_VERSION: '1.0.0'
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TARGET_KEY_ID: proof-render-dock-target-v1
+      TARGET_POLICY_ID: bke-render-dock-windows-x64-v1
+    steps:
+      - name: Checkout exact Agent candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+          choco install innosetup -y --no-progress
+
+      - name: Verify updater staging and target-policy tooling
+        shell: pwsh
+        run: |
+          python -m pytest -q `
+            tests/unit/test_install_target_policy_signing.py `
+            tests/unit/test_installed_privileged_update.py `
+            tests/unit/test_windows_privileged_packaging.py
+
+      - name: Freeze patched Windows Agent runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          pyinstaller --clean --noconfirm --hidden-import win32timezone --name bke-licensing-agent-service packaging/windows/service_entry.py
+          Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          Move-Item dist/bke-license-center dist/windows/bke-license-center
+          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
+          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
+          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
+          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
+          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
+          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
+
+      - name: Generate proof-only Render Dock target signing key
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
+          @'
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+          private = Ed25519PrivateKey.generate()
+          temp = Path(r'${{ runner.temp }}') / 'render-dock-target-private.pem'
+          temp.write_bytes(private.private_bytes(
+              serialization.Encoding.PEM,
+              serialization.PrivateFormat.PKCS8,
+              serialization.NoEncryption(),
+          ))
+          public_path = Path('dist/windows/privileged-payload/target-keys') / 'proof-render-dock-target-v1.pem'
+          public_path.write_bytes(private.public_key().public_bytes(
+              serialization.Encoding.PEM,
+              serialization.PublicFormat.SubjectPublicKeyInfo,
+          ))
+          '@ | python -
+
+      - name: Sign narrow Render Dock install-target policy
+        shell: pwsh
+        run: |
+          python scripts/sign_install_target_policy.py `
+            --policy-id $env:TARGET_POLICY_ID `
+            --revision 1 `
+            --product-id bke-render-dock `
+            --platform windows `
+            --architecture x64 `
+            --install-root 'C:\Program Files\BKE Digital Solutions\Render Dock' `
+            --entry-point 'RENDER DOCK.exe' `
+            --key-id $env:TARGET_KEY_ID `
+            --private-key '${{ runner.temp }}\render-dock-target-private.pem' `
+            --output 'dist/windows/privileged-payload/target-policies/render-dock-windows-x64-v1.json'
+
+          Remove-Item -LiteralPath '${{ runner.temp }}\render-dock-target-private.pem' -Force
+          if (Test-Path '${{ runner.temp }}\render-dock-target-private.pem') { throw 'proof target private key was not destroyed' }
+
+      - name: Verify exact target policy before packaging
+        shell: pwsh
+        run: |
+          @'
+          import json
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+          from bke_updater_core.target_policy import TargetInstallPolicyVerifier
+
+          key = serialization.load_pem_public_key(Path('dist/windows/privileged-payload/target-keys/proof-render-dock-target-v1.pem').read_bytes())
+          assert isinstance(key, Ed25519PublicKey)
+          raw = key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+          policy = json.loads(Path('dist/windows/privileged-payload/target-policies/render-dock-windows-x64-v1.json').read_text())
+          verified = TargetInstallPolicyVerifier(
+              {'proof-render-dock-target-v1': raw},
+              approved_roots=(r'C:\Program Files\BKE Digital Solutions',),
+          ).verify(policy)
+          assert verified.policy_id == 'bke-render-dock-windows-x64-v1'
+          assert verified.product_id == 'bke-render-dock'
+          assert verified.platform == 'windows'
+          assert verified.architecture == 'x64'
+          assert verified.install_root == r'C:\Program Files\BKE Digital Solutions\Render Dock'
+          assert verified.entry_point == 'RENDER DOCK.exe'
+          print('Render Dock install-target policy verified')
+          '@ | python -
+
+      - name: Build proof installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent.iss
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe"
+          if (!(Test-Path $installer)) { throw 'proof installer missing' }
+          Get-Item $installer | Select-Object Name,Length
+
+      - name: Install proof candidate on disposable Windows runner
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP 'render-dock-proof-install.log'
+          $process = Start-Process -FilePath $installer -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "proof installer failed with exit code $($process.ExitCode)"
+          }
+          $service = Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          $service.Refresh()
+          if ($service.Status -ne 'Running') { throw 'Agent service not running after proof install' }
+
+      - name: Verify installed Render Dock target trust
+        shell: pwsh
+        run: |
+          @'
+          import json, os
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+          from bke_updater_core.target_policy import TargetInstallPolicyVerifier
+
+          data = Path(os.environ['ProgramData']) / 'BKE Digital Solutions' / 'Licensing Agent'
+          keys = data / 'privileged' / 'target-keys'
+          policies = data / 'privileged' / 'target-policies'
+          policy_path = policies / 'render-dock-windows-x64-v1.json'
+          key_path = keys / 'proof-render-dock-target-v1.pem'
+          assert policy_path.is_file(), 'installed Render Dock policy missing'
+          assert key_path.is_file(), 'installed Render Dock public key missing'
+          key = serialization.load_pem_public_key(key_path.read_bytes())
+          assert isinstance(key, Ed25519PublicKey)
+          raw = key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+          verified = TargetInstallPolicyVerifier(
+              {'proof-render-dock-target-v1': raw},
+              approved_roots=(r'C:\Program Files\BKE Digital Solutions',),
+          ).verify(json.loads(policy_path.read_text()))
+          assert verified.product_id == 'bke-render-dock'
+          assert verified.architecture == 'x64'
+          assert verified.install_root == r'C:\Program Files\BKE Digital Solutions\Render Dock'
+          assert verified.entry_point == 'RENDER DOCK.exe'
+          print('Installed Render Dock privileged target trust GREEN')
+          '@ | python -
+
+      - name: Scan exact proof payload and installer with Microsoft Defender
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
+          $payload = (Resolve-Path 'dist/windows').Path
+          $platformRoot = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Platform'
+          $mpCmd = Get-ChildItem -Path $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $mpCmd) {
+            $fallback = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+            if (Test-Path $fallback) { $mpCmd = Get-Item $fallback }
+          }
+          if ($null -eq $mpCmd) { throw 'Microsoft Defender scanner unavailable' }
+          & $mpCmd.FullName -Scan -ScanType 3 -File $payload -DisableRemediation
+          if ($LASTEXITCODE -ne 0) { throw "Defender payload scan failed: $LASTEXITCODE" }
+          & $mpCmd.FullName -Scan -ScanType 3 -File $installer -DisableRemediation
+          if ($LASTEXITCODE -ne 0) { throw "Defender installer scan failed: $LASTEXITCODE" }
+          @(
+            'result=clean',
+            "source=${env:SOURCE_SHA}",
+            'target=bke-render-dock/windows/x64',
+            'trust=proof-only-ephemeral-signing-root'
+          ) | Set-Content -Encoding utf8 dist/installer/RENDER-DOCK-PROOF.txt
+
+      - name: Record exact installer hash and proof metadata
+        shell: pwsh
+        run: |
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+          "${hash}  BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe" | Set-Content -Encoding ascii dist/installer/SHA256SUMS.txt
+          "source=${env:SOURCE_SHA}" | Set-Content -Encoding ascii dist/installer/SOURCE.txt
+          @'
+          PURPOSE: Live Render Dock updater certification only.
+          AUTHORITY: bke-render-dock / windows / x64 / Program Files\BKE Digital Solutions\Render Dock / RENDER DOCK.exe
+          TRUST ROOT: Ephemeral proof-only Ed25519 target-signing key; private key destroyed during CI.
+          NOT A CUSTOMER PRODUCTION TRUST ROOT. Final customer packaging requires an owner-controlled persistent BKE target-signing key.
+          '@ | Set-Content -Encoding utf8 dist/installer/TRUST-NOTICE.txt
+          Get-Content dist/installer/SHA256SUMS.txt
+
+      - name: Attest proof installer provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
+
+      - name: Upload Render Dock updater proof installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-Windows-x64-Render-Dock-Updater-Proof
+          path: |
+            dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
+            dist/installer/SHA256SUMS.txt
+            dist/installer/SOURCE.txt
+            dist/installer/RENDER-DOCK-PROOF.txt
+            dist/installer/TRUST-NOTICE.txt
+            dist/windows/privileged-payload/target-keys/proof-render-dock-target-v1.pem
+            dist/windows/privileged-payload/target-policies/render-dock-windows-x64-v1.json
+          if-no-files-found: error
