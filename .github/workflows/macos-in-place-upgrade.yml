@@ -73,13 +73,20 @@ jobs:
           test -n "$FIRST_PID"
           echo "FIRST_PID=$FIRST_PID" >> "$GITHUB_ENV"
 
-          for _ in $(seq 1 40); do
-            if lsof -nP -iTCP:43873 -sTCP:LISTEN >/dev/null 2>&1; then
+          READY=false
+          for _ in $(seq 1 60); do
+            RESPONSE="$(curl -sS --max-time 2 \
+              -H 'Content-Type: application/json' \
+              --data '{"product_id":"bke-ci-probe","version":"0.0.0","installation_id":"ci-upgrade-probe"}' \
+              http://127.0.0.1:43873/v1/authorize 2>/dev/null || true)"
+            if [[ "$RESPONSE" == *'"reason":"unknown_product_or_version"'* ]]; then
+              echo "Agent protocol probe: $RESPONSE"
+              READY=true
               break
             fi
-            sleep 0.25
+            sleep 0.5
           done
-          lsof -nP -iTCP:43873 -sTCP:LISTEN
+          test "$READY" = "true"
 
           sudo mkdir -p "$DATA_DIR"
           printf 'preserve-across-upgrade\n' | sudo tee "$DATA_DIR/upgrade-certification.marker" >/dev/null
@@ -95,25 +102,36 @@ jobs:
           test -n "$SECOND_PID"
           test "$SECOND_PID" != "$FIRST_PID"
 
-          for _ in $(seq 1 40); do
-            if lsof -nP -iTCP:43873 -sTCP:LISTEN >/dev/null 2>&1; then
+          READY=false
+          for _ in $(seq 1 60); do
+            RESPONSE="$(curl -sS --max-time 2 \
+              -H 'Content-Type: application/json' \
+              --data '{"product_id":"bke-ci-probe","version":"0.0.0","installation_id":"ci-upgrade-probe"}' \
+              http://127.0.0.1:43873/v1/authorize 2>/dev/null || true)"
+            if [[ "$RESPONSE" == *'"reason":"unknown_product_or_version"'* ]]; then
+              echo "Agent protocol probe after upgrade: $RESPONSE"
+              READY=true
               break
             fi
-            sleep 0.25
+            sleep 0.5
           done
-          lsof -nP -iTCP:43873 -sTCP:LISTEN
+          test "$READY" = "true"
 
           test "$(sudo cat "$DATA_DIR/upgrade-certification.marker")" = "preserve-across-upgrade"
           pkgutil --pkg-info "$LABEL"
 
-          echo "In-place upgrade certified: daemon restarted and persistent state survived."
+          echo "In-place upgrade certified: daemon restarted, Agent protocol recovered, and persistent state survived."
 
       - name: Collect installer diagnostics on failure
         if: failure()
         run: |
           sudo tail -n 250 /var/log/install.log || true
           sudo launchctl print "system/${LABEL}" || true
-          lsof -nP -iTCP:43873 -sTCP:LISTEN || true
+          sudo lsof -nP -iTCP:43873 -sTCP:LISTEN || true
+          echo '===== AGENT STDOUT ====='
+          sudo cat "/Library/Logs/BKE Digital Solutions/licensing-agent.log" || true
+          echo '===== AGENT STDERR ====='
+          sudo cat "/Library/Logs/BKE Digital Solutions/licensing-agent-error.log" || true
 
       - name: Cleanup runner installation
         if: always()
