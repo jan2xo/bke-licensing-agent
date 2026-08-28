@@ -1,0 +1,346 @@
+name: Cross-platform release candidate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - release/v1.0.0-rc.1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: licensing-agent-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_VERSION: "1.0.0"
+  RELEASE_TAG: "v1.0.0-rc.1"
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  linux:
+    name: Linux x64 package
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+
+      - name: Verify canonical version
+        run: python -c "import importlib.metadata as m; assert m.version('bke-licensing-agent') == '${RELEASE_VERSION}'; print(m.version('bke-licensing-agent'))"
+
+      - name: Run Linux test suite
+        run: python -m pytest -q
+
+      - name: Freeze native Linux executables
+        run: |
+          pyinstaller --clean --noconfirm bke-licensing-agent.spec
+          mv dist/bke-licensing-agent dist-agent
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          mkdir -p dist/linux
+          mv dist-agent dist/linux/bke-licensing-agent
+          mv dist/bke-license-center dist/linux/bke-license-center
+
+      - name: Smoke frozen Linux runtime
+        run: |
+          dist/linux/bke-licensing-agent/bke-licensing-agent --help
+          dist/linux/bke-license-center/bke-license-center --smoke
+
+      - name: Build Debian installer
+        run: bash packaging/linux/build-deb.sh "$RELEASE_VERSION"
+
+      - name: Verify Linux installer
+        run: |
+          test -f "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}-Linux-x64.deb"
+          dpkg-deb --info "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}-Linux-x64.deb"
+          sha256sum "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}-Linux-x64.deb"
+
+      - name: Attest Linux installer
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/installer/BKE-Licensing-Agent-1.0.0-Linux-x64.deb
+
+      - name: Upload Linux installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-Linux-x64-RC
+          path: dist/installer/BKE-Licensing-Agent-1.0.0-Linux-x64.deb
+          if-no-files-found: error
+
+  macos:
+    name: macOS arm64 package
+    runs-on: macos-26
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify Apple Silicon runner
+        run: |
+          test "$(uname -m)" = "arm64"
+          sw_vers
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+
+      - name: Verify canonical version
+        run: python -c "import importlib.metadata as m; assert m.version('bke-licensing-agent') == '${RELEASE_VERSION}'; print(m.version('bke-licensing-agent'))"
+
+      - name: Run macOS test suite
+        run: python -m pytest -q
+
+      - name: Freeze native macOS executables
+        run: |
+          pyinstaller --clean --noconfirm bke-licensing-agent.spec
+          mv dist/bke-licensing-agent dist-agent
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          mv dist-agent dist/bke-licensing-agent
+
+      - name: Ad-hoc sign frozen runtime
+        run: |
+          codesign --force --deep --sign - dist/bke-licensing-agent/bke-licensing-agent
+          codesign --force --deep --sign - dist/bke-license-center/bke-license-center
+          codesign --verify --deep --strict --verbose=2 dist/bke-licensing-agent/bke-licensing-agent
+          codesign --verify --deep --strict --verbose=2 dist/bke-license-center/bke-license-center
+
+      - name: Smoke frozen macOS runtime
+        run: |
+          dist/bke-licensing-agent/bke-licensing-agent --help
+          dist/bke-license-center/bke-license-center --smoke
+
+      - name: Build macOS installer
+        run: bash packaging/macos/build-pkg.sh "$RELEASE_VERSION"
+
+      - name: Verify macOS installer
+        run: |
+          test -f "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}.pkg"
+          pkgutil --payload-files "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}.pkg" >/dev/null
+          shasum -a 256 "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}.pkg"
+          mv "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}.pkg" "dist/installer/BKE-Licensing-Agent-${RELEASE_VERSION}-macOS-arm64.pkg"
+
+      - name: Attest macOS installer
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/installer/BKE-Licensing-Agent-1.0.0-macOS-arm64.pkg
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-macOS-arm64-RC
+          path: dist/installer/BKE-Licensing-Agent-1.0.0-macOS-arm64.pkg
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 package
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+
+      - name: Verify canonical version
+        shell: pwsh
+        run: python -c "import importlib.metadata as m; assert m.version('bke-licensing-agent') == '${env:RELEASE_VERSION}'; print(m.version('bke-licensing-agent'))"
+
+      - name: Run Windows native tests
+        shell: pwsh
+        run: python -m pytest -q tests/windows tests/unit/test_module_launch.py tests/unit/test_native_privileged_provisioning.py tests/unit/test_windows_privileged_packaging.py
+
+      - name: Freeze Windows service and License Center
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          pyinstaller --clean --noconfirm --hidden-import win32timezone --name bke-licensing-agent-service packaging/windows/service_entry.py
+          Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          Move-Item dist/bke-license-center dist/windows/bke-license-center
+
+      - name: Freeze certified Updater Core and provisioner
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
+          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
+          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
+          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
+          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
+          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
+
+      - name: Smoke frozen Windows runtime
+        shell: pwsh
+        run: |
+          dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe --smoke
+          dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe --service-smoke
+          dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe --service-host-smoke
+          dist/windows/bke-license-center/bke-license-center.exe --smoke
+          dist/windows/bke-updater-core/bke-updater-core.exe --help
+
+      - name: Generate RC-only disposable target trust
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
+          @'
+          import base64, json
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+          root = Path('dist/windows/privileged-payload')
+          private = Ed25519PrivateKey.generate()
+          public = private.public_key()
+          key_id = 'rc-packaging-target-v1'
+          (root / 'target-keys' / f'{key_id}.pem').write_bytes(public.public_bytes(
+              serialization.Encoding.PEM,
+              serialization.PublicFormat.SubjectPublicKeyInfo,
+          ))
+          unsigned = {
+              'schema': 'bke.install-target-policy.v1',
+              'policy_id': 'rc-packaging-only',
+              'revision': 1,
+              'product_id': 'bke-certification-product',
+              'platform': 'windows',
+              'architecture': 'x86_64',
+              'install_root': r'C:\\Program Files\\BKE Digital Solutions\\Certification Product',
+              'entry_point': 'product.exe',
+              'signing_key_id': key_id,
+              'algorithm': 'Ed25519',
+          }
+          canonical = json.dumps(unsigned, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+          document = dict(unsigned)
+          document['signature'] = base64.b64encode(private.sign(canonical)).decode('ascii')
+          (root / 'target-policies' / 'rc-packaging-only.json').write_text(
+              json.dumps(document, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          print('RC-only target trust generated. It is not production update authority.')
+          '@ | python -
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent.iss
+
+      - name: Verify Windows installer
+        shell: pwsh
+        run: |
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe"
+          if (!(Test-Path $installer)) { throw "installer artifact missing" }
+          Get-FileHash -Algorithm SHA256 $installer
+
+      - name: Attest Windows installer
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-Windows-x64-RC
+          path: dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub prerelease
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release/v1.0.0-rc.1'
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-26.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download certified installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: BKE-Licensing-Agent-1.0.0-*-RC
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release set and generate checksums
+        run: |
+          set -euo pipefail
+          test -f release-assets/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
+          test -f release-assets/BKE-Licensing-Agent-1.0.0-macOS-arm64.pkg
+          test -f release-assets/BKE-Licensing-Agent-1.0.0-Linux-x64.deb
+          cd release-assets
+          sha256sum BKE-Licensing-Agent-1.0.0-Windows-x64.exe BKE-Licensing-Agent-1.0.0-macOS-arm64.pkg BKE-Licensing-Agent-1.0.0-Linux-x64.deb > SHA256SUMS.txt
+          printf 'source=%s\n' "$GITHUB_SHA" > SOURCE.txt
+          cat SHA256SUMS.txt
+
+      - name: Write prerelease notes
+        run: |
+          cat > release-assets/RELEASE-NOTES.md <<EOF
+          # BKE Licensing Agent 1.0.0 RC1
+
+          Cross-platform certification release built from source commit \`${GITHUB_SHA}\`.
+
+          Assets:
+          - Windows x64 Inno Setup installer
+          - macOS arm64 .pkg installer
+          - Linux x64 Debian .deb installer
+
+          This is a **prerelease for BKE integration/certification**, including SDK → Agent testing.
+
+          Important release boundary:
+          - Windows privileged-update trust in this RC is disposable certification trust, not production BKE update authority.
+          - Windows installer is not Authenticode-signed.
+          - macOS frozen executables are ad-hoc signed, but the .pkg is not Developer-ID signed/notarized.
+          - Production publication requires persistent BKE-signed target policy/trust and platform signing/notarization acceptance.
+          EOF
+
+      - name: Publish or refresh GitHub prerelease
+        run: |
+          set -euo pipefail
+          cd release-assets
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              BKE-Licensing-Agent-1.0.0-Windows-x64.exe \
+              BKE-Licensing-Agent-1.0.0-macOS-arm64.pkg \
+              BKE-Licensing-Agent-1.0.0-Linux-x64.deb \
+              SHA256SUMS.txt SOURCE.txt RELEASE-NOTES.md \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" \
+              BKE-Licensing-Agent-1.0.0-Windows-x64.exe \
+              BKE-Licensing-Agent-1.0.0-macOS-arm64.pkg \
+              BKE-Licensing-Agent-1.0.0-Linux-x64.deb \
+              SHA256SUMS.txt SOURCE.txt RELEASE-NOTES.md \
+              --target "$GITHUB_SHA" \
+              --title "BKE Licensing Agent 1.0.0 RC1" \
+              --notes-file RELEASE-NOTES.md \
+              --prerelease \
+              --repo "$GITHUB_REPOSITORY"
+          fi
