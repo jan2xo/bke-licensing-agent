@@ -1,8 +1,8 @@
 """Agent-owned orchestration boundary for bke-updater-core."""
 from __future__ import annotations
-import json, re, os, shutil
+import json, re, os, shutil, stat, zipfile
 from dataclasses import dataclass, replace
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 from bke_updater_core import PolicyVerifier, decide_update, replace_transaction
 from bke_updater_core.models import Decision, ProductManifest, SignedUpdatePolicy, UpdatePlan, TransactionState
@@ -16,10 +16,85 @@ from .privileged_runtime import (
     prepare_privileged_update,
 )
 
+UPDATE_PACKAGE_CONTENT_TYPE = "application/vnd.bke.update-package+zip"
+
+
 @dataclass(frozen=True)
 class CachedPolicy:
     policy: dict
     verified_at: str
+
+
+def _prepare_stage_root(stage_root: Path) -> None:
+    if stage_root.is_symlink():
+        raise ValueError("privileged stage root must not be a symlink")
+    if stage_root.exists():
+        shutil.rmtree(stage_root)
+    stage_root.mkdir(parents=True, exist_ok=False)
+
+
+def _safe_update_package_member(info: zipfile.ZipInfo) -> tuple[str, ...]:
+    name = info.filename
+    if not name or "\x00" in name or "\\" in name or name.startswith("/"):
+        raise ValueError("unsafe updater package path")
+    trimmed = name[:-1] if name.endswith("/") else name
+    if not trimmed:
+        raise ValueError("unsafe updater package path")
+    raw_parts = trimmed.split("/")
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        raise ValueError("unsafe updater package path")
+    pure = PurePosixPath(trimmed)
+    if pure.is_absolute() or any(part == ".." for part in pure.parts) or ":" in raw_parts[0]:
+        raise ValueError("unsafe updater package path")
+    mode = (info.external_attr >> 16) & 0xFFFF
+    if stat.S_ISLNK(mode):
+        raise ValueError("updater package symlinks are forbidden")
+    file_type = stat.S_IFMT(mode)
+    if file_type not in {0, stat.S_IFREG, stat.S_IFDIR}:
+        raise ValueError("unsupported updater package entry type")
+    return tuple(raw_parts)
+
+
+def _extract_update_package(artifact: Path, stage_root: Path, relative_entry: Path) -> Path:
+    _prepare_stage_root(stage_root)
+    stage = stage_root.resolve()
+    seen: set[str] = set()
+    try:
+        with zipfile.ZipFile(artifact, "r") as archive:
+            for info in archive.infolist():
+                parts = _safe_update_package_member(info)
+                collision_key = "/".join(part.casefold() for part in parts)
+                if collision_key in seen:
+                    raise ValueError("duplicate updater package path")
+                seen.add(collision_key)
+                destination = (stage / Path(*parts)).resolve()
+                try:
+                    if os.path.commonpath((str(stage), str(destination))) != str(stage):
+                        raise ValueError("unsafe updater package path")
+                except ValueError as exc:
+                    raise ValueError("unsafe updater package path") from exc
+                if info.is_dir():
+                    destination.mkdir(parents=True, exist_ok=False)
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(info, "r") as source, destination.open("xb") as output:
+                    shutil.copyfileobj(source, output)
+                mode = (info.external_attr >> 16) & 0o777
+                if mode and os.name != "nt":
+                    os.chmod(destination, mode)
+    except (zipfile.BadZipFile, RuntimeError) as exc:
+        raise ValueError("invalid updater package ZIP") from exc
+
+    staged_executable = (stage / relative_entry).resolve()
+    try:
+        if os.path.commonpath((str(stage), str(staged_executable))) != str(stage):
+            raise ValueError("staged entry point escapes stage root")
+    except ValueError as exc:
+        raise ValueError("staged entry point escapes stage root") from exc
+    if not staged_executable.exists() or not staged_executable.is_file():
+        raise ValueError("updater package is missing signed entry point")
+    return staged_executable
+
 
 class UpdateOrchestrator:
     def __init__(self, trusted_keys: dict[str, bytes], state_root: Path):
@@ -94,15 +169,20 @@ class UpdateOrchestrator:
         transaction_id=self._transaction_id(manifest,policy)
         runtime_root=privileged_config.runtime_root.resolve()
         stage_root=runtime_root/"stage"/transaction_id
-        stage_root.mkdir(parents=True,exist_ok=True)
         entry_value=target_policy.get("entry_point")
         if not isinstance(entry_value,str) or not entry_value:
             raise ValueError("signed target policy is missing entry_point")
         relative=Path(*PureWindowsPath(entry_value).parts)
-        staged_executable=stage_root/relative
-        staged_executable.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copy2(artifact,staged_executable)
-        if os.name != "nt": os.chmod(staged_executable,0o755)
+        if relative.is_absolute() or relative == Path(".") or ".." in relative.parts:
+            raise ValueError("signed target policy has invalid entry_point")
+        if policy.content_type == UPDATE_PACKAGE_CONTENT_TYPE:
+            staged_executable = _extract_update_package(artifact, stage_root, relative)
+        else:
+            _prepare_stage_root(stage_root)
+            staged_executable=stage_root/relative
+            staged_executable.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(artifact,staged_executable)
+            if os.name != "nt": os.chmod(staged_executable,0o755)
         privileged_backup=runtime_root/"backup"/transaction_id
         privileged_backup.parent.mkdir(parents=True,exist_ok=True)
         prepare = prepare_privileged_self_update if wait_pid is not None else prepare_privileged_update
