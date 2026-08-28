@@ -16,6 +16,10 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
+MAX_JSON_BODY_BYTES = 32_768
+MAX_CHUNK_LINE_BYTES = 8_192
+
+
 class LocalAuthorizationServer:
     def __init__(
         self,
@@ -57,6 +61,74 @@ class LocalAuthorizationServer:
                 self.end_headers()
                 self.wfile.write(payload)
 
+            def _read_request_body(self) -> bytes | None:
+                content_length = self.headers.get("content-length")
+                transfer_encoding = self.headers.get("transfer-encoding")
+
+                if content_length is not None and transfer_encoding is not None:
+                    self._json(400, {"outcome": "failed", "reason": "ambiguous_request_framing"})
+                    return None
+
+                if transfer_encoding is not None:
+                    codings = [value.strip().lower() for value in transfer_encoding.split(",") if value.strip()]
+                    if codings != ["chunked"]:
+                        self._json(400, {"outcome": "failed", "reason": "unsupported_transfer_encoding"})
+                        return None
+
+                    payload = bytearray()
+                    while True:
+                        size_line = self.rfile.readline(MAX_CHUNK_LINE_BYTES + 1)
+                        if (not size_line or len(size_line) > MAX_CHUNK_LINE_BYTES
+                                or not size_line.endswith(b"\r\n")):
+                            self._json(400, {"outcome": "failed", "reason": "invalid_chunked_encoding"})
+                            return None
+                        size_token = size_line[:-2].split(b";", 1)[0].strip()
+                        try:
+                            chunk_size = int(size_token, 16)
+                        except ValueError:
+                            self._json(400, {"outcome": "failed", "reason": "invalid_chunked_encoding"})
+                            return None
+
+                        if chunk_size == 0:
+                            while True:
+                                trailer = self.rfile.readline(MAX_CHUNK_LINE_BYTES + 1)
+                                if trailer == b"\r\n":
+                                    return bytes(payload)
+                                if (not trailer or len(trailer) > MAX_CHUNK_LINE_BYTES
+                                        or not trailer.endswith(b"\r\n")):
+                                    self._json(400, {"outcome": "failed", "reason": "invalid_chunked_encoding"})
+                                    return None
+
+                        if len(payload) + chunk_size > MAX_JSON_BODY_BYTES:
+                            self._json(413, {"outcome": "failed", "reason": "payload_too_large"})
+                            return None
+
+                        chunk = self.rfile.read(chunk_size)
+                        if len(chunk) != chunk_size or self.rfile.read(2) != b"\r\n":
+                            self._json(400, {"outcome": "failed", "reason": "invalid_chunked_encoding"})
+                            return None
+                        payload.extend(chunk)
+
+                if content_length is None:
+                    self._json(411, {"outcome": "failed", "reason": "content_length_required"})
+                    return None
+                try:
+                    length = int(content_length)
+                except ValueError:
+                    self._json(400, {"outcome": "failed", "reason": "invalid_content_length"})
+                    return None
+                if length < 0:
+                    self._json(400, {"outcome": "failed", "reason": "invalid_content_length"})
+                    return None
+                if length > MAX_JSON_BODY_BYTES:
+                    self._json(413, {"outcome": "failed", "reason": "payload_too_large"})
+                    return None
+                payload = self.rfile.read(length)
+                if len(payload) != length:
+                    self._json(400, {"outcome": "failed", "reason": "invalid_request_body"})
+                    return None
+                return payload
+
             def do_GET(self):  # noqa: N802
                 parsed = urlparse(self.path)
                 if parsed.path == "/v1/updates/status":
@@ -93,17 +165,16 @@ class LocalAuthorizationServer:
 
             def do_POST(self):  # noqa: N802
                 try:
-                    length = int(self.headers.get("content-length", "0"))
-                    if length < 0 or length > 32_768:
-                        self._json(413, {"outcome": "failed", "reason": "payload_too_large"})
-                        return
                     if self.headers.get("origin") is not None:
                         self._json(403, {"outcome": "failed", "reason": "browser_origin_rejected"})
                         return
                     if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                         self._json(415, {"outcome": "failed", "reason": "invalid_content_type"})
                         return
-                    body = json.loads(self.rfile.read(length))
+                    raw_body = self._read_request_body()
+                    if raw_body is None:
+                        return
+                    body = json.loads(raw_body)
                     if not isinstance(body, dict):
                         raise ValueError("request must be an object")
                     if self.path == "/v1/authorize":
