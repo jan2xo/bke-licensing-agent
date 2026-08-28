@@ -37,3 +37,16 @@ def test_windows_legacy_recovery_never_kills_agent_by_process_name():
     assert "exact SCM PID termination" in source
     assert "Stop-Process -Name" not in source
     assert "/IM bke-licensing-agent-service.exe" not in source
+
+
+def test_windows_installer_embeds_bke_proprietary_license():
+    root = Path(__file__).parents[2]
+    source = (root / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
+    license_text = (root / "LICENSE").read_text(encoding="utf-8")
+
+    assert "BKE LICENSING AGENT PROPRIETARY SOFTWARE LICENSE" in license_text
+    assert "All rights reserved" in license_text
+    assert "LicenseFile=..\\..\\LICENSE" in source
+    assert 'Source: "..\\..\\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"' in source
+    assert "VersionInfoCompany={#AppPublisher}" in source
+    assert "VersionInfoCopyright={#AppCopyright}" in source

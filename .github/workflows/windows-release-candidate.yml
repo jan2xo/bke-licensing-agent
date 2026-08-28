@@ -32,10 +32,13 @@ jobs:
           python -m pip install pyinstaller
           python -m pip install -e ".[test]"
 
-      - name: Verify canonical package version
+      - name: Verify canonical package version and proprietary license metadata
         shell: pwsh
         run: |
           python -c "import importlib.metadata as m; assert m.version('bke-licensing-agent') == '${env:RELEASE_VERSION}'; print(m.version('bke-licensing-agent'))"
+          if (!(Test-Path LICENSE)) { throw "proprietary LICENSE missing" }
+          if (!(Select-String -LiteralPath LICENSE -SimpleMatch 'BKE LICENSING AGENT PROPRIETARY SOFTWARE LICENSE')) { throw "unexpected license text" }
+          if (Select-String -LiteralPath pyproject.toml -SimpleMatch 'license = { text = "MIT" }') { throw "MIT package grant must not be present" }
 
       - name: Run Windows native tests
         shell: pwsh
@@ -123,8 +126,66 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
           "${hash}  BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe" | Set-Content -Encoding ascii dist/installer/SHA256SUMS.txt
           "source=${env:SOURCE_SHA}" | Set-Content -Encoding ascii dist/installer/SOURCE.txt
+          Copy-Item LICENSE dist/installer/LICENSE.txt
           Get-Item $installer | Select-Object Name,Length
           Get-Content dist/installer/SHA256SUMS.txt
+
+      - name: Scan frozen payload and installer with Microsoft Defender
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
+          $payload = (Resolve-Path "dist/windows").Path
+          $platformRoot = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Platform'
+          $mpCmd = $null
+          if (Test-Path $platformRoot) {
+            $mpCmd = Get-ChildItem -Path $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+          }
+          if ($null -eq $mpCmd) {
+            $fallback = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+            if (Test-Path $fallback) { $mpCmd = Get-Item $fallback }
+          }
+          if ($null -eq $mpCmd) { throw 'Microsoft Defender command-line scanner is unavailable on the release runner.' }
+
+          $status = Get-MpComputerStatus -ErrorAction Stop
+          if (-not $status.AMServiceEnabled) { throw 'Microsoft Defender antimalware service is not enabled.' }
+
+          $lines = @(
+            "scanner=$($mpCmd.FullName)",
+            "antivirus_enabled=$($status.AntivirusEnabled)",
+            "antivirus_signature_version=$($status.AntivirusSignatureVersion)",
+            "antivirus_signature_last_updated=$($status.AntivirusSignatureLastUpdated.ToUniversalTime().ToString('o'))",
+            "payload=$payload",
+            "installer=$installer"
+          )
+
+          & $mpCmd.FullName -Scan -ScanType 3 -File $payload -DisableRemediation
+          $payloadExit = $LASTEXITCODE
+          $lines += "payload_scan_exit_code=$payloadExit"
+          if ($payloadExit -ne 0) { $lines | Set-Content -Encoding utf8 dist/installer/DEFENDER-SCAN.txt; throw "Microsoft Defender payload scan failed or detected a threat (exit $payloadExit)." }
+
+          & $mpCmd.FullName -Scan -ScanType 3 -File $installer -DisableRemediation
+          $installerExit = $LASTEXITCODE
+          $lines += "installer_scan_exit_code=$installerExit"
+          if ($installerExit -ne 0) { $lines | Set-Content -Encoding utf8 dist/installer/DEFENDER-SCAN.txt; throw "Microsoft Defender installer scan failed or detected a threat (exit $installerExit)." }
+
+          $lines += 'result=clean'
+          $lines | Set-Content -Encoding utf8 dist/installer/DEFENDER-SCAN.txt
+          Get-Content dist/installer/DEFENDER-SCAN.txt
+
+      - name: Record Authenticode publisher state
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
+          $signature = Get-AuthenticodeSignature -FilePath $installer
+          @(
+            "status=$($signature.Status)",
+            "status_message=$($signature.StatusMessage)",
+            "signer_subject=$($signature.SignerCertificate.Subject)",
+            "signer_thumbprint=$($signature.SignerCertificate.Thumbprint)"
+          ) | Set-Content -Encoding utf8 dist/installer/SIGNATURE.txt
+          Get-Content dist/installer/SIGNATURE.txt
 
       - name: Attest release-candidate provenance
         uses: actions/attest-build-provenance@v2
@@ -139,9 +200,13 @@ jobs:
             dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
             dist/installer/SHA256SUMS.txt
             dist/installer/SOURCE.txt
+            dist/installer/DEFENDER-SCAN.txt
+            dist/installer/SIGNATURE.txt
+            dist/installer/LICENSE.txt
+          if-no-files-found: error
 
       - name: Release boundary reminder
         shell: pwsh
         run: |
-          Write-Host "This CI artifact proves build/package integrity with disposable target trust."
-          Write-Host "A public production release MUST replace the disposable payload with persistent BKE-signed target keys/policies and pass installed Windows acceptance."
+          Write-Host "This RC artifact proves exact-source build/package integrity, Microsoft Defender scanning, SHA-256, and GitHub provenance."
+          Write-Host "It does NOT become a customer-trusted production installer unless Authenticode status is Valid for the approved BKE publisher and disposable target trust is replaced by persistent BKE-signed production trust."
