@@ -435,9 +435,10 @@ class InstalledAgentRuntime:
         ) as server:
             self._server = server
             try:
-                while True:
-                    time.sleep(1)
+                while not self._update_stop.wait(1):
+                    pass
             except KeyboardInterrupt:
+                self._update_stop.set()
                 return
             finally:
                 self._update_stop.set()

@@ -1,0 +1,271 @@
+name: Windows in-place upgrade certification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade-in-place:
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: "1.0.0"
+      RC3_SHA256: "b5a36d3848431c3b0e5815824ee5ca0a4aa6ebb2f4164ce4734fdee5eb1d2b45"
+      RC3_URL: "https://github.com/jan2xo/bke-licensing-agent/releases/download/v1.0.0-rc.3/BKE-Licensing-Agent-1.0.0-Windows-x64.exe"
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+          choco install innosetup -y --no-progress
+
+      - name: Run Windows packaging and shutdown tests
+        shell: pwsh
+        run: python -m pytest -q tests/windows tests/unit/test_windows_privileged_packaging.py tests/unit/test_runtime.py
+
+      - name: Freeze candidate Windows runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          pyinstaller --clean --noconfirm --hidden-import win32timezone --name bke-licensing-agent-service packaging/windows/service_entry.py
+          Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          Move-Item dist/bke-license-center dist/windows/bke-license-center
+          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
+          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
+          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
+          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
+          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
+          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
+
+      - name: Generate disposable packaging trust
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
+          @'
+          import base64, json
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+          root = Path('dist/windows/privileged-payload')
+          private = Ed25519PrivateKey.generate()
+          public = private.public_key()
+          key_id = 'ci-windows-upgrade-target-v1'
+          (root / 'target-keys' / f'{key_id}.pem').write_bytes(public.public_bytes(
+              serialization.Encoding.PEM,
+              serialization.PublicFormat.SubjectPublicKeyInfo,
+          ))
+          unsigned = {
+              'schema': 'bke.install-target-policy.v1',
+              'policy_id': 'ci-windows-upgrade-only',
+              'revision': 1,
+              'product_id': 'bke-certification-product',
+              'platform': 'windows',
+              'architecture': 'x86_64',
+              'install_root': r'C:\\Program Files\\BKE Digital Solutions\\Certification Product',
+              'entry_point': 'product.exe',
+              'signing_key_id': key_id,
+              'algorithm': 'Ed25519',
+          }
+          canonical = json.dumps(unsigned, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+          document = dict(unsigned)
+          document['signature'] = base64.b64encode(private.sign(canonical)).decode('ascii')
+          (root / 'target-policies' / 'ci-windows-upgrade-only.json').write_text(
+              json.dumps(document, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          '@ | python -
+
+      - name: Build candidate installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent.iss
+          $candidate = "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe"
+          if (!(Test-Path $candidate)) { throw "candidate installer missing" }
+          Get-FileHash -Algorithm SHA256 $candidate
+
+      - name: Download and verify published RC3 baseline
+        shell: pwsh
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP "BKE-Licensing-Agent-1.0.0-Windows-x64-RC3.exe"
+          Invoke-WebRequest -UseBasicParsing -Uri $env:RC3_URL -OutFile $baseline
+          $hash = (Get-FileHash -Algorithm SHA256 $baseline).Hash.ToLowerInvariant()
+          if ($hash -ne $env:RC3_SHA256) { throw "RC3 baseline SHA-256 mismatch: $hash" }
+          "BASELINE_INSTALLER=$baseline" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install published RC3 baseline
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "rc3-baseline-install.log"
+          $process = Start-Process -FilePath $env:BASELINE_INSTALLER -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "RC3 baseline installer failed with exit code $($process.ExitCode)"
+          }
+
+          $service = Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+
+          $body = '{"product_id":"ci-upgrade-product","version":"1.0.0","installation_id":"00000000-0000-0000-0000-000000000001"}'
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:43873/v1/authorize' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw 'RC3 baseline Agent never became protocol-ready' }
+
+          $dataDir = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+          $db = Join-Path $dataDir 'agent.db'
+          if (!(Test-Path $db)) { throw 'RC3 baseline did not create machine Agent database' }
+          Set-Content -LiteralPath (Join-Path $dataDir 'upgrade-state-marker.txt') -Value 'preserve-across-upgrade' -Encoding ascii
+
+      - name: Upgrade broken-shutdown RC3 in place to candidate
+        shell: pwsh
+        run: |
+          $candidate = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP "candidate-upgrade.log"
+          "CANDIDATE_UPGRADE_LOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $process = Start-Process -FilePath $candidate -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "candidate in-place upgrade failed with exit code $($process.ExitCode)"
+          }
+
+      - name: Verify legacy recovery, protocol, and machine state
+        shell: pwsh
+        run: |
+          $service = Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          $service.Refresh()
+          if ($service.Status -ne 'Running') { throw "Agent service is not running after upgrade" }
+
+          $dataDir = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+          $marker = Join-Path $dataDir 'upgrade-state-marker.txt'
+          $db = Join-Path $dataDir 'agent.db'
+          if (!(Test-Path $marker)) { throw 'machine state marker was lost during upgrade' }
+          if ((Get-Content $marker -Raw).Trim() -ne 'preserve-across-upgrade') { throw 'machine state marker changed during upgrade' }
+          if (!(Test-Path $db)) { throw 'Agent database was lost during upgrade' }
+
+          $body = '{"product_id":"ci-upgrade-product","version":"1.0.0","installation_id":"00000000-0000-0000-0000-000000000001"}'
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:43873/v1/authorize' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw 'upgraded Agent never became protocol-ready' }
+
+          if (!(Select-String -LiteralPath $env:CANDIDATE_UPGRADE_LOG -SimpleMatch 'Legacy BKE Licensing Agent service required exact SCM PID termination before payload replacement.')) {
+            Get-Content $env:CANDIDATE_UPGRADE_LOG
+            throw 'RC3 migration did not exercise the exact-service legacy recovery path'
+          }
+          if (!(Select-String -LiteralPath $env:CANDIDATE_UPGRADE_LOG -SimpleMatch 'Existing BKE Licensing Agent service stopped before payload replacement.')) {
+            Get-Content $env:CANDIDATE_UPGRADE_LOG
+            throw 'installer did not record a completed pre-replacement service stop'
+          }
+          if (!(Select-String -LiteralPath $env:CANDIDATE_UPGRADE_LOG -SimpleMatch 'BKE Licensing Agent service running after payload replacement.')) {
+            Get-Content $env:CANDIDATE_UPGRADE_LOG
+            throw 'installer did not record a completed post-replacement service start'
+          }
+
+      - name: Reinstall candidate in place through graceful shutdown path
+        shell: pwsh
+        run: |
+          $candidate = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:RELEASE_VERSION}-Windows-x64.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP "candidate-graceful-reinstall.log"
+          "CANDIDATE_GRACEFUL_LOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $process = Start-Process -FilePath $candidate -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$log"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "candidate graceful reinstall failed with exit code $($process.ExitCode)"
+          }
+
+          if (!(Select-String -LiteralPath $log -SimpleMatch 'Existing BKE Licensing Agent service stopped gracefully before payload replacement.')) {
+            Get-Content $log
+            throw 'fixed candidate did not stop gracefully during the next in-place replacement'
+          }
+          if (Select-String -LiteralPath $log -SimpleMatch 'exact SCM PID termination') {
+            Get-Content $log
+            throw 'fixed candidate unexpectedly required legacy forced-service recovery'
+          }
+
+      - name: Verify future graceful upgrade state and protocol
+        shell: pwsh
+        run: |
+          $service = Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          $service.Refresh()
+          if ($service.Status -ne 'Running') { throw 'Agent service is not running after graceful replacement' }
+
+          $dataDir = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+          $marker = Join-Path $dataDir 'upgrade-state-marker.txt'
+          $db = Join-Path $dataDir 'agent.db'
+          if (!(Test-Path $marker) -or (Get-Content $marker -Raw).Trim() -ne 'preserve-across-upgrade') {
+            throw 'machine state was not preserved through the graceful replacement path'
+          }
+          if (!(Test-Path $db)) { throw 'Agent database was lost during graceful replacement' }
+
+          $body = '{"product_id":"ci-upgrade-product","version":"1.0.0","installation_id":"00000000-0000-0000-0000-000000000001"}'
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:43873/v1/authorize' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw 'gracefully replaced Agent never became protocol-ready' }
+
+          Write-Host 'RC3 -> candidate recovery and candidate -> candidate graceful replacement both passed.'
+
+      - name: Show installer diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-Service -Name 'BKE-Licensing-Agent' -ErrorAction SilentlyContinue | Format-List *
+          foreach ($log in @($env:CANDIDATE_UPGRADE_LOG, $env:CANDIDATE_GRACEFUL_LOG)) {
+            if ($log -and (Test-Path $log)) {
+              Write-Host "===== $log ====="
+              Get-Content $log
+            }
+          }
+          Get-CimInstance Win32_Service -Filter "Name='BKE-Licensing-Agent'" -ErrorAction SilentlyContinue | Format-List *
+          Get-Process bke-licensing-agent-service -ErrorAction SilentlyContinue | Format-List *
+
+      - name: Upload upgrade candidate and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-1.0.0-Windows-x64-in-place-upgrade-candidate
+          path: |
+            dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe
+            ${{ runner.temp }}/candidate-upgrade.log
+            ${{ runner.temp }}/candidate-graceful-reinstall.log
+          if-no-files-found: warn

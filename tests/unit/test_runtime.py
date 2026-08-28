@@ -1,4 +1,6 @@
 from pathlib import Path
+from threading import Thread
+import time
 
 from bke_updater_core.models import TransactionState
 from bke_licensing_agent.config import DEFAULT_AGENT_PORT, get_agent_port
@@ -68,6 +70,22 @@ def test_update_center_fails_closed_when_privileged_handoff_rejects(tmp_path: Pa
                           "correlation_id": "corr-3"}
     finally:
         runtime.close()
+
+
+def test_runtime_close_unblocks_serve_forever(tmp_path: Path):
+    database = Database(tmp_path / "agent.db")
+    runtime = InstalledAgentRuntime(database=database, port=0)
+    thread = Thread(target=runtime.serve_forever, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + 3
+    while runtime._server is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert runtime._server is not None
+    runtime.close()
+    thread.join(timeout=3)
+    assert not thread.is_alive(), "runtime.close() must terminate the persistent service loop"
 
 
 def test_trusted_key_loader_uses_filename_stem_as_key_id(tmp_path: Path):
