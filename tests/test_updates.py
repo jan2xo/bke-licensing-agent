@@ -11,11 +11,12 @@ from bke_licensing_agent.updates.orchestrator import UpdateOrchestrator
 from bke_updater_core.models import Decision, ProductManifest
 
 
-def _policy(private_key: Ed25519PrivateKey, *, revision: int = 1, product_id: str = "mock-product") -> dict:
+def _policy(private_key: Ed25519PrivateKey, *, revision: int = 1,
+            product_id: str = "mock-product", current_version: str = "1.0.0") -> dict:
     unsigned = {
         "schema": "bke.update-policy.v1",
         "product_id": product_id,
-        "current_version": "1.0.0",
+        "current_version": current_version,
         "latest_version": "1.1.0",
         "minimum_supported_version": "1.0.0",
         "channel": "stable",
@@ -76,6 +77,14 @@ def test_policy_tampering_unknown_key_and_stale_revision_fail_closed(manifest: P
         agent.verify_policy({**valid, "signing_key_id": "unknown"}, manifest)
     with pytest.raises(ValueError):
         agent.verify_policy(_policy(private_key, revision=1), manifest, last_revision=1)
+
+
+def test_signed_policy_current_version_must_match_installed_manifest(manifest: ProductManifest, tmp_path: Path) -> None:
+    private_key = Ed25519PrivateKey.generate()
+    agent = UpdateOrchestrator({"test-key": private_key.public_key().public_bytes_raw()}, tmp_path / "state")
+    mismatched = _policy(private_key, current_version="9.9.9")
+    with pytest.raises(ValueError):
+        agent.verify_policy(mismatched, manifest)
 
 
 def test_required_version_is_enforced(manifest: ProductManifest, tmp_path: Path) -> None:
