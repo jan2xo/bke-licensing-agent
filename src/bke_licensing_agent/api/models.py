@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ApiModel(BaseModel):
@@ -79,3 +79,11 @@ class UpdateDiscoveryResponse(ApiModel):
     status: Literal["up_to_date", "update_available"]
     policy: dict[str, Any] | None = None
     download_url: str | None = None
+
+    @model_validator(mode="after")
+    def require_update_contract(self) -> "UpdateDiscoveryResponse":
+        if self.status == "update_available" and (self.policy is None or not self.download_url):
+            raise ValueError("update_available requires signed policy and download grant")
+        if self.status == "up_to_date" and (self.policy is not None or self.download_url is not None):
+            raise ValueError("up_to_date must not carry update authority data")
+        return self
