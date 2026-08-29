@@ -100,8 +100,8 @@ class LicensingPlatformClient:
         return self._request("GET", TRUSTED_KEYS, TrustedKeyMetadataResponse, access_token=access_token)
 
     def check_update(self, request: UpdateDiscoveryRequest) -> UpdateDiscoveryResponse:
-        """Run the idempotent Agent update-discovery query over verified HTTPS."""
-        return self._request(
+        """Run update discovery and bind any offered policy to the requested context."""
+        response = self._request(
             "POST", UPDATE_CHECK, UpdateDiscoveryResponse,
             request.model_dump(exclude_none=True), idempotent=True,
             protocol_version="bke.licensing.v3",
@@ -112,6 +112,18 @@ class LicensingPlatformClient:
                 "INVALID_ARTIFACT_CONTRACT": UpdateVerificationError,
             },
         )
+        if response.status == "update_available":
+            policy = response.policy or {}
+            expected = {
+                "product_id": request.product_id,
+                "current_version": request.current_version,
+                "platform": request.platform,
+                "architecture": request.architecture,
+                "channel": request.channel,
+            }
+            if any(policy.get(key) != value for key, value in expected.items()):
+                raise UpdateVerificationError("The update policy does not match the requested product context")
+        return response
 
     def _request(self, method: str, path: str, model: type[T], payload: dict[str, Any] | None = None,
                  *, idempotent: bool = True, access_token: str | None = None,
