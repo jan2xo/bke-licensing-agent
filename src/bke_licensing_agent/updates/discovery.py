@@ -15,6 +15,22 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from bke_updater_core.models import Decision, ProductManifest
 
+from ..api.errors import (
+    AuthenticationExpiredError,
+    AuthenticationRequiredError,
+    AuthorizationDeniedError,
+    ConflictError,
+    InvalidServerResponseError,
+    NetworkUnavailableError,
+    RateLimitExceededError,
+    ResourceNotFoundError,
+    ServerUnavailableError,
+    TlsFailureError,
+    UnknownApiError,
+    UnsupportedClientVersionError,
+    UpdateProtocolError,
+    UpdateVerificationError,
+)
 from ..api.models import UpdateDiscoveryRequest
 from .orchestrator import UpdateOrchestrator
 
@@ -97,6 +113,15 @@ class UpdateDiscoveryCoordinator:
         with self._inflight_lock:
             self._consecutive_failures = min(self._consecutive_failures + 1, 16) if failed else 0
 
+    def _failed_refresh(self, status_path: Path, *, product_id: str, version: str,
+                        attempted: datetime, error: str) -> dict[str, object]:
+        previous = self._read_status(status_path)
+        document = {**(previous or {}), "state": "refresh_failed", "product_id": product_id,
+                    "current_version": version, "last_attempt_at": _iso(attempted), "error": error}
+        self._write_status(status_path, document)
+        self._mark_result(True)
+        return document
+
     def queue_refresh(self, product_id: str, version: str) -> bool:
         """Start at most one concurrent refresh for a product/version pair."""
         key = (product_id, version)
@@ -120,13 +145,17 @@ class UpdateDiscoveryCoordinator:
             policy_path, status_path = self._paths(product_id, version)
             attempted = self.clock()
             resolved = self.resolve_product(product_id, version)
+            if resolved is None:
+                return self._failed_refresh(
+                    status_path, product_id=product_id, version=version,
+                    attempted=attempted, error="invalid_product_context",
+                )
             lease = self.resolve_lease(product_id, version)
-            if resolved is None or lease is None:
-                document = {"state": "refresh_failed", "product_id": product_id, "current_version": version,
-                            "last_attempt_at": _iso(attempted), "error": "product_or_entitlement_unavailable"}
-                self._write_status(status_path, document)
-                self._mark_result(True)
-                return document
+            if lease is None:
+                return self._failed_refresh(
+                    status_path, product_id=product_id, version=version,
+                    attempted=attempted, error="policy_denied",
+                )
             record, manifest = resolved
             envelope = {"payload": lease.signed_payload, "signature": lease.signed_signature,
                         "key_id": lease.key_id, "algorithm": lease.signed_algorithm}
@@ -168,14 +197,37 @@ class UpdateDiscoveryCoordinator:
                 self._write_status(status_path, document)
                 self._mark_result(False)
                 return document
+            except TlsFailureError:
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="verification_failure")
+            except NetworkUnavailableError:
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="transport_failure")
+            except InvalidServerResponseError:
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="malformed_response")
+            except UpdateVerificationError:
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="verification_failure")
+            except UpdateProtocolError:
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="protocol_failure")
+            except AuthorizationDeniedError:
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="policy_denied")
+            except (ServerUnavailableError, RateLimitExceededError):
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="provider_unavailable")
+            except (AuthenticationRequiredError, AuthenticationExpiredError, ResourceNotFoundError,
+                    ConflictError, UnsupportedClientVersionError, UnknownApiError):
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="protocol_failure")
+            except ValueError:
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="verification_failure")
             except Exception:
-                previous = self._read_status(status_path)
-                document = {**(previous or {}), "state": "refresh_failed", "product_id": product_id,
-                            "current_version": version, "last_attempt_at": _iso(attempted),
-                            "error": "remote_or_verification_failure"}
-                self._write_status(status_path, document)
-                self._mark_result(True)
-                return document
+                return self._failed_refresh(status_path, product_id=product_id, version=version,
+                                            attempted=attempted, error="unknown")
 
     def dismiss(self, product_id: str, version: str, latest_version: str) -> dict[str, object]:
         status = self.status(product_id, version, apply_suppression=False)
@@ -200,7 +252,9 @@ class UpdateDiscoveryCoordinator:
         document = self._read_status(status_path)
         if document is None:
             return {"state": "never_checked", "product_id": product_id, "current_version": version}
-        result = {key: document[key] for key in ("state", "product_id", "current_version", "latest_version", "verified_at", "last_attempt_at") if key in document}
+        result = {key: document[key] for key in (
+            "state", "product_id", "current_version", "latest_version", "verified_at", "last_attempt_at", "error"
+        ) if key in document}
         if document.get("latest_version") and policy_path.exists():
             resolved = self.resolve_product(product_id, version)
             if resolved is None:
