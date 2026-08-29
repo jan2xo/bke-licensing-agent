@@ -1,6 +1,6 @@
-"""Loopback-only product-to-Agent authorization, activation, and update-status boundary.
+"""Loopback-only product-to-Agent authorization, activation, and capability boundary.
 
-Products receive authorization decisions and secret-free update status. License keys
+Products receive authorization decisions and capability-shaped results. License keys
 are submitted only to the loopback Agent; products never receive leases, signing
 keys, platform credentials, update policies, download grants, or Agent storage.
 """
@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 
 MAX_JSON_BODY_BYTES = 32_768
 MAX_CHUNK_LINE_BYTES = 8_192
+UPDATE_CAPABILITY_ID = "bke.updates.check"
+UPDATE_CONTRACT_VERSION = 1
 
 
 class LocalAuthorizationServer:
@@ -26,18 +28,14 @@ class LocalAuthorizationServer:
         authorize: Callable[[dict[str, str]], dict[str, object]],
         activate: Callable[[dict[str, str]], dict[str, object]] | None = None,
         open_license_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
-        update_status: Callable[[str, str], dict[str, object]] | None = None,
-        refresh_update: Callable[[str, str], dict[str, object]] | None = None,
-        dismiss_update: Callable[[str, str, str], dict[str, object]] | None = None,
+        update_check: Callable[[dict[str, str]], dict[str, object]] | None = None,
         open_update_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
         port: int = 0,
     ):
         self._authorize = authorize
         self._activate = activate
         self._open_license_center = open_license_center
-        self._update_status = update_status
-        self._refresh_update = refresh_update
-        self._dismiss_update = dismiss_update
+        self._update_check = update_check
         self._open_update_center = open_update_center
         self._server = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
         self._thread: Thread | None = None
@@ -46,9 +44,7 @@ class LocalAuthorizationServer:
         authorize = self._authorize
         activate = self._activate
         open_license_center = self._open_license_center
-        update_status = self._update_status
-        refresh_update = self._refresh_update
-        dismiss_update = self._dismiss_update
+        update_check = self._update_check
         open_update_center = self._open_update_center
 
         class Handler(BaseHTTPRequestHandler):
@@ -60,6 +56,16 @@ class LocalAuthorizationServer:
                 self.send_header("cache-control", "no-store")
                 self.end_headers()
                 self.wfile.write(payload)
+
+            def _update_failure(self, status: int, code: str, message: str,
+                                *, retryable: bool = False) -> None:
+                self._json(status, {
+                    "capability_id": UPDATE_CAPABILITY_ID,
+                    "contract_version": UPDATE_CONTRACT_VERSION,
+                    "status": "Failed",
+                    "available_version": None,
+                    "error": {"code": code, "message": message, "retryable": retryable},
+                })
 
             def _read_request_body(self) -> bytes | None:
                 content_length = self.headers.get("content-length")
@@ -131,18 +137,6 @@ class LocalAuthorizationServer:
 
             def do_GET(self):  # noqa: N802
                 parsed = urlparse(self.path)
-                if parsed.path == "/v1/updates/status":
-                    if self.headers.get("origin") is not None or update_status is None:
-                        self.send_error(403 if self.headers.get("origin") is not None else 503)
-                        return
-                    query = parse_qs(parsed.query)
-                    product_id = query.get("product_id", [""])[0]
-                    version = query.get("version", [""])[0]
-                    if not product_id or len(product_id) > 128 or len(version) > 64:
-                        self.send_error(400)
-                        return
-                    self._json(200, update_status(product_id, version))
-                    return
                 if parsed.path != "/license-center":
                     self.send_error(404)
                     return
@@ -212,23 +206,38 @@ class LocalAuthorizationServer:
                             "correlation_id": str(result.get("correlation_id", body["correlation_id"])),
                         })
                         return
-                    if self.path == "/v1/updates/refresh":
-                        if refresh_update is None:
-                            self._json(503, {"state": "refresh_failed"})
+                    if self.path == "/v1/updates/check":
+                        if update_check is None:
+                            self._update_failure(503, "ProviderUnavailable", "The update provider is unavailable.", retryable=True)
                             return
-                        required = ("product_id", "version")
-                        if not all(isinstance(body.get(k), str) and body[k].strip() for k in required):
-                            raise ValueError("invalid refresh request")
-                        self._json(202, refresh_update(body["product_id"], body["version"]))
-                        return
-                    if self.path == "/v1/updates/dismiss":
-                        if dismiss_update is None:
-                            self._json(503, {"state": "dismiss_failed"})
+                        product_id = body.get("product_id")
+                        current_version = body.get("current_version")
+                        requested_version = body.get("requested_version")
+                        if (not isinstance(product_id, str) or not product_id.strip() or len(product_id) > 128
+                                or not isinstance(current_version, str) or not current_version.strip() or len(current_version) > 64
+                                or (requested_version is not None and
+                                    (not isinstance(requested_version, str) or not requested_version.strip() or len(requested_version) > 64))):
+                            self._update_failure(400, "InvalidRequest", "Invalid BKE.Updater check request.")
                             return
-                        required = ("product_id", "version", "latest_version")
-                        if not all(isinstance(body.get(k), str) and body[k].strip() for k in required):
-                            raise ValueError("invalid dismiss request")
-                        self._json(200, dismiss_update(body["product_id"], body["version"], body["latest_version"]))
+                        request = {"product_id": product_id, "current_version": current_version}
+                        if isinstance(requested_version, str):
+                            request["requested_version"] = requested_version
+                        result = update_check(request)
+                        response: dict[str, object] = {
+                            "capability_id": str(result.get("capability_id", UPDATE_CAPABILITY_ID)),
+                            "contract_version": int(result.get("contract_version", UPDATE_CONTRACT_VERSION)),
+                            "status": str(result.get("status", "Failed")),
+                            "available_version": result.get("available_version") if isinstance(result.get("available_version"), str) else None,
+                            "error": None,
+                        }
+                        error = result.get("error")
+                        if isinstance(error, dict):
+                            response["error"] = {
+                                "code": str(error.get("code", "Unknown")),
+                                "message": str(error.get("message", "The update check failed.")),
+                                "retryable": bool(error.get("retryable")),
+                            }
+                        self._json(200, response)
                         return
                     if self.path == "/v1/update-center/open":
                         if open_update_center is None:
@@ -244,7 +253,10 @@ class LocalAuthorizationServer:
                         return
                     self.send_error(404)
                 except Exception:
-                    self._json(400, {"authorized": False, "reason": "invalid_request"})
+                    if self.path == "/v1/updates/check":
+                        self._update_failure(400, "InvalidRequest", "Invalid BKE.Updater check request.")
+                    else:
+                        self._json(400, {"authorized": False, "reason": "invalid_request"})
 
             def log_message(self, *_args):
                 return
