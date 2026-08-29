@@ -16,6 +16,7 @@ from .errors import (
     InvalidServerResponseError, NetworkUnavailableError, RateLimitExceededError,
     RequestTimeoutError, ResourceNotFoundError, ServerUnavailableError,
     TlsFailureError, UnknownApiError, UnsupportedClientVersionError,
+    UpdateProtocolError, UpdateVerificationError,
 )
 from .models import (
     DeviceRegistrationRequest, DeviceRegistrationResponse, HealthResponse,
@@ -104,10 +105,18 @@ class LicensingPlatformClient:
             "POST", UPDATE_CHECK, UpdateDiscoveryResponse,
             request.model_dump(exclude_none=True), idempotent=True,
             protocol_version="bke.licensing.v3",
+            error_codes={
+                "INVALID_REQUEST": UpdateProtocolError,
+                "INVALID_CONTENT_TYPE": UpdateProtocolError,
+                "RELEASE_NOT_VERIFIED": UpdateVerificationError,
+                "INVALID_ARTIFACT_CONTRACT": UpdateVerificationError,
+            },
         )
 
     def _request(self, method: str, path: str, model: type[T], payload: dict[str, Any] | None = None,
-                 *, idempotent: bool = True, access_token: str | None = None, protocol_version: str | None = None) -> T:
+                 *, idempotent: bool = True, access_token: str | None = None,
+                 protocol_version: str | None = None,
+                 error_codes: dict[str, type[ApiError]] | None = None) -> T:
         request_id = str(uuid.uuid4())
         headers = {"Accept": "application/json", "User-Agent": self.config.user_agent,
                    "X-Request-ID": request_id}
@@ -131,7 +140,7 @@ class LicensingPlatformClient:
                 if response.status_code in {408, 425, 429, 500, 502, 503, 504} and attempt < attempts:
                     self.sleep(min(self.config.retry_backoff * (2 ** attempt), 30))
                     continue
-                return self._parse_response(response, model)
+                return self._parse_response(response, model, error_codes=error_codes)
             except requests.exceptions.ConnectTimeout as exc:
                 if attempt < attempts and idempotent:
                     self.sleep(min(self.config.retry_backoff * (2 ** attempt), 30)); continue
@@ -148,7 +157,18 @@ class LicensingPlatformClient:
                 raise NetworkUnavailableError("The licensing platform is unavailable") from exc
         raise UnknownApiError("The licensing platform request did not complete")
 
-    def _parse_response(self, response: requests.Response, model: type[T]) -> T:
+    def _parse_response(self, response: requests.Response, model: type[T],
+                        *, error_codes: dict[str, type[ApiError]] | None = None) -> T:
+        if not 200 <= response.status_code < 300 and error_codes:
+            try:
+                remote_error = response.json()
+            except (ValueError, json.JSONDecodeError):
+                remote_error = None
+            if isinstance(remote_error, dict):
+                code = remote_error.get("error")
+                if isinstance(code, str) and code in error_codes:
+                    raise error_codes[code]("The licensing platform rejected the updater contract")
+
         status_map = {401: AuthenticationRequiredError, 403: AuthorizationDeniedError,
                       404: ResourceNotFoundError, 409: ConflictError,
                       429: RateLimitExceededError, 426: UnsupportedClientVersionError}
