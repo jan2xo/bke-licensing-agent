@@ -1,5 +1,6 @@
 import json
 import socket
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -185,36 +186,81 @@ def test_native_license_center_open_rejects_incomplete_context():
             urlopen(request)
 
 
-def test_update_status_is_secret_free_and_browser_origins_are_rejected():
-    with LocalAuthorizationServer(lambda _request: {"authorized": True},
-                                  update_status=lambda product, version: {
-                                      "state": "update_available", "product_id": product,
-                                      "current_version": version, "latest_version": "2.0.0"}) as server:
-        with urlopen(f"{server.url}/v1/updates/status?product_id=p&version=1.0.0") as response:
-            result = json.loads(response.read())
-        assert result == {"state": "update_available", "product_id": "p", "current_version": "1.0.0", "latest_version": "2.0.0"}
-        assert not any(key in result for key in ("download_url", "policy", "lease", "path"))
-        request = Request(f"{server.url}/v1/updates/status?product_id=p&version=1.0.0",
-                          headers={"origin": "https://attacker.invalid"})
-        with pytest.raises(Exception): urlopen(request)
-
-
-def test_update_dismissal_is_agent_owned_and_secret_free():
+def test_sdk_update_check_is_the_only_product_facing_update_discovery_contract():
     seen = []
     with LocalAuthorizationServer(
         lambda _request: {"authorized": True},
-        dismiss_update=lambda product, version, latest: seen.append((product, version, latest)) or {
-            "state": "suppressed_update", "product_id": product, "current_version": version,
-            "latest_version": latest, "suppressed_until": "2026-08-27T00:00:00Z",
+        update_check=lambda value: seen.append(value) or {
+            "capability_id": "bke.updates.check",
+            "contract_version": 1,
+            "status": "UpdateAvailable",
+            "available_version": "2.0.0",
+            "error": None,
+            "policy": {"must_not": "leak"},
+            "download_url": "https://must-not-leak.invalid",
         },
     ) as server:
         request = Request(
-            f"{server.url}/v1/updates/dismiss",
-            data=json.dumps({"product_id": "p", "version": "1.0.0", "latest_version": "2.0.0"}).encode(),
+            f"{server.url}/v1/updates/check",
+            data=json.dumps({"product_id": "p", "current_version": "1.0.0"}).encode(),
             headers={"content-type": "application/json"}, method="POST",
         )
         with urlopen(request) as response:
             result = json.loads(response.read())
-    assert result["state"] == "suppressed_update"
-    assert seen == [("p", "1.0.0", "2.0.0")]
-    assert not any(key in result for key in ("download_url", "policy", "lease", "path"))
+
+    assert result == {
+        "capability_id": "bke.updates.check",
+        "contract_version": 1,
+        "status": "UpdateAvailable",
+        "available_version": "2.0.0",
+        "error": None,
+    }
+    assert seen == [{"product_id": "p", "current_version": "1.0.0"}]
+    assert not any(key in result for key in ("download_url", "policy", "lease", "path", "signature"))
+
+
+def test_sdk_update_check_returns_typed_invalid_request_and_rejects_browser_origin():
+    with LocalAuthorizationServer(
+        lambda _request: {"authorized": True},
+        update_check=lambda _request: {"status": "UpToDate"},
+    ) as server:
+        request = Request(
+            f"{server.url}/v1/updates/check",
+            data=json.dumps({"product_id": "p"}).encode(),
+            headers={"content-type": "application/json"}, method="POST",
+        )
+        with pytest.raises(HTTPError) as invalid:
+            urlopen(request)
+        payload = json.loads(invalid.value.read())
+        assert payload["status"] == "Failed"
+        assert payload["error"]["code"] == "InvalidRequest"
+
+        browser = Request(
+            f"{server.url}/v1/updates/check",
+            data=json.dumps({"product_id": "p", "current_version": "1.0.0"}).encode(),
+            headers={"content-type": "application/json", "origin": "https://attacker.invalid"}, method="POST",
+        )
+        with pytest.raises(HTTPError):
+            urlopen(browser)
+
+
+def test_legacy_product_facing_update_status_refresh_and_dismiss_routes_are_removed():
+    with LocalAuthorizationServer(
+        lambda _request: {"authorized": True},
+        update_check=lambda _request: {"status": "UpToDate"},
+    ) as server:
+        with pytest.raises(HTTPError) as status_error:
+            urlopen(f"{server.url}/v1/updates/status?product_id=p&version=1.0.0")
+        assert status_error.value.code == 404
+
+        for path, body in (
+            ("/v1/updates/refresh", {"product_id": "p", "version": "1.0.0"}),
+            ("/v1/updates/dismiss", {"product_id": "p", "version": "1.0.0", "latest_version": "2.0.0"}),
+        ):
+            request = Request(
+                f"{server.url}{path}", data=json.dumps(body).encode(),
+                headers={"content-type": "application/json"}, method="POST",
+            )
+            with pytest.raises(HTTPError) as removed:
+                urlopen(request)
+            assert removed.value.code == 404

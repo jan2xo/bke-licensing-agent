@@ -7,9 +7,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from bke_licensing_agent.api.errors import (
+    AuthorizationDeniedError,
+    InvalidServerResponseError,
+    NetworkUnavailableError,
+    ServerUnavailableError,
+    TlsFailureError,
+    UpdateProtocolError,
+    UpdateVerificationError,
+)
 from bke_licensing_agent.api.models import UpdateDiscoveryResponse
 from bke_licensing_agent.updates.discovery import RefreshPolicy, UpdateDiscoveryCoordinator
 
@@ -17,7 +27,7 @@ from bke_licensing_agent.updates.discovery import RefreshPolicy, UpdateDiscovery
 def _fixture(tmp_path: Path, response: UpdateDiscoveryResponse, *, clock=None, policy=None):
     private = Ed25519PrivateKey.generate()
     public_pem = private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
-    root = tmp_path / "product"; root.mkdir(); (root / "run.exe").write_text("v1")
+    root = tmp_path / "product"; root.mkdir(exist_ok=True); (root / "run.exe").write_text("v1")
     record = SimpleNamespace(product_root=str(root))
     manifest = SimpleNamespace(productId="p", version="1.0.0", platform="windows", architecture="x64",
                                entryPoint="run.exe", updateChannel="stable")
@@ -58,15 +68,17 @@ def test_verified_update_is_cached_and_reported(tmp_path):
     assert coordinator.refresh("p", "1.0.0")["state"] == "update_available"
 
 
-def test_non_updater_payload_policy_is_rejected(tmp_path):
+def test_non_updater_payload_policy_is_rejected_as_verification_failure(tmp_path):
     coordinator, private = _fixture(tmp_path, UpdateDiscoveryResponse(status="up_to_date"))
     coordinator.client.check_update = lambda _request: UpdateDiscoveryResponse(
         status="update_available", policy=_signed_policy(private, content_type="application/vnd.microsoft.portable-executable"),
         download_url="https://example.invalid/grant")
-    assert coordinator.refresh("p", "1.0.0")["state"] == "refresh_failed"
+    result = coordinator.refresh("p", "1.0.0")
+    assert result["state"] == "refresh_failed"
+    assert result["error"] == "verification_failure"
 
 
-def test_same_revision_with_changed_policy_is_rejected(tmp_path):
+def test_same_revision_with_changed_policy_is_rejected_as_verification_failure(tmp_path):
     coordinator, private = _fixture(tmp_path, UpdateDiscoveryResponse(status="up_to_date"))
     policy = _signed_policy(private)
     coordinator.client.check_update = lambda _request: UpdateDiscoveryResponse(
@@ -75,13 +87,36 @@ def test_same_revision_with_changed_policy_is_rejected(tmp_path):
     changed = {**policy, "issued_at": "2026-08-21T00:00:00Z"}
     coordinator.client.check_update = lambda _request: UpdateDiscoveryResponse(
         status="update_available", policy=changed, download_url="https://example.invalid/grant")
-    assert coordinator.refresh("p", "1.0.0")["state"] == "refresh_failed"
+    result = coordinator.refresh("p", "1.0.0")
+    assert result["state"] == "refresh_failed"
+    assert result["error"] == "verification_failure"
 
 
-def test_malformed_or_offline_refresh_never_becomes_no_update(tmp_path):
+@pytest.mark.parametrize("error, expected", [
+    (NetworkUnavailableError("offline"), "transport_failure"),
+    (TlsFailureError("tls"), "verification_failure"),
+    (InvalidServerResponseError("bad"), "malformed_response"),
+    (UpdateProtocolError("protocol"), "protocol_failure"),
+    (UpdateVerificationError("verify"), "verification_failure"),
+    (AuthorizationDeniedError("denied"), "policy_denied"),
+    (ServerUnavailableError("server"), "provider_unavailable"),
+])
+def test_remote_failures_keep_their_first_broken_boundary(tmp_path, error, expected):
     coordinator, _ = _fixture(tmp_path, UpdateDiscoveryResponse(status="up_to_date"))
-    coordinator.client.check_update = lambda _request: (_ for _ in ()).throw(TimeoutError())
-    assert coordinator.refresh("p", "1.0.0")["state"] == "refresh_failed"
+    coordinator.client.check_update = lambda _request: (_ for _ in ()).throw(error)
+    result = coordinator.refresh("p", "1.0.0")
+    assert result["state"] == "refresh_failed"
+    assert result["error"] == expected
+    assert coordinator.status("p", "1.0.0")["error"] == expected
+
+
+def test_missing_product_and_entitlement_are_not_collapsed(tmp_path):
+    coordinator, _ = _fixture(tmp_path, UpdateDiscoveryResponse(status="up_to_date"))
+    coordinator.resolve_product = lambda _p, _v: None
+    assert coordinator.refresh("p", "1.0.0")["error"] == "invalid_product_context"
+    coordinator, _ = _fixture(tmp_path, UpdateDiscoveryResponse(status="up_to_date"))
+    coordinator.resolve_lease = lambda _p, _v: None
+    assert coordinator.refresh("p", "1.0.0")["error"] == "policy_denied"
 
 
 def test_later_is_persisted_for_same_release_and_new_release_resets_it(tmp_path):
@@ -114,7 +149,7 @@ def test_queue_refresh_deduplicates_concurrent_requests(tmp_path):
 def test_failure_backoff_is_bounded_and_resets_on_success(tmp_path):
     coordinator, _ = _fixture(tmp_path, UpdateDiscoveryResponse(status="up_to_date"),
         policy=RefreshPolicy(interval=timedelta(hours=6), initial_backoff=timedelta(minutes=1), maximum_backoff=timedelta(minutes=5)))
-    coordinator.client.check_update = lambda _request: (_ for _ in ()).throw(TimeoutError())
+    coordinator.client.check_update = lambda _request: (_ for _ in ()).throw(NetworkUnavailableError("offline"))
     coordinator.refresh("p", "1.0.0")
     assert 50 <= coordinator.next_delay() <= 70
     coordinator.client.check_update = lambda _request: UpdateDiscoveryResponse(status="up_to_date")

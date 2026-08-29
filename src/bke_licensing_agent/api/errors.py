@@ -16,3 +16,11 @@ class RateLimitExceededError(ApiError): pass
 class ServerUnavailableError(ApiError): pass
 class UnsupportedClientVersionError(ApiError): pass
 class UnknownApiError(ApiError): pass
+
+
+class UpdateProtocolError(ApiError):
+    """The remote updater endpoint rejected the provider protocol contract."""
+
+
+class UpdateVerificationError(ApiError):
+    """The remote updater authority could not prove a trusted release contract."""

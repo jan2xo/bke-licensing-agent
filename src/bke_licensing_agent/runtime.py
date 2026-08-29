@@ -45,6 +45,7 @@ from .license_center.service import LicenseCenterAction, LicenseCenterService, O
 from .manifest.validator import validate_manifest
 from .storage.database import Database
 from .storage.models import DiscoveredProductRecord
+from .updates.capability import from_discovery, invalid_request
 from .updates.discovery import UpdateDiscoveryCoordinator
 from .updates.installed_privileged import execute_installed_product_update
 
@@ -117,28 +118,13 @@ class InstalledAgentRuntime:
                     self.update_discovery.refresh(record.product_id, record.version)
             self._update_stop.wait(self.update_discovery.next_delay())
 
-    def request_update_refresh(self, product_id: str, version: str) -> dict[str, object]:
-        if self._validated_product_record(product_id, version) is None:
-            return {"state": "refresh_failed", "product_id": product_id, "current_version": version}
-        queued = self.update_discovery.queue_refresh(product_id, version)
-        return {"state": "refresh_queued" if queued else "refresh_already_queued",
-                "product_id": product_id, "current_version": version}
-
-    def dismiss_update(self, product_id: str, version: str, latest_version: str) -> dict[str, object]:
-        if self._validated_product_record(product_id, version) is None:
-            return {"state": "dismiss_rejected", "product_id": product_id, "current_version": version}
-        return self.update_discovery.dismiss(product_id, version, latest_version)
-
-    def product_update_status(self, product_id: str, version: str = "") -> dict[str, object]:
-        candidates = [record for record in self.database.list_discovered_products()
-                      if record.product_id == product_id and (not version or record.version == version)]
-        if not candidates:
-            result: dict[str, object] = {"state": "never_checked", "product_id": product_id}
-            if version:
-                result["current_version"] = version
-            return result
-        selected = sorted(candidates, key=lambda item: item.discovered_at, reverse=True)[0]
-        return self.update_discovery.status(selected.product_id, selected.version)
+    def check_update_capability(self, request: dict[str, str]) -> dict[str, object]:
+        """Fulfil BKE.Updater contract v1 without exposing Agent authority internals."""
+        requested_version = request.get("requested_version")
+        if requested_version:
+            return invalid_request("requested_version is not supported by the Licensing Agent provider yet")
+        result = self.update_discovery.refresh(request["product_id"], request["current_version"])
+        return from_discovery(result)
 
     def open_update_center(self, request: dict[str, str]) -> dict[str, object]:
         product_id, version = request["product_id"], request["version"]
@@ -427,9 +413,7 @@ class InstalledAgentRuntime:
         self._update_thread.start()
         with LocalAuthorizationServer(
             self.authorize, self.activate, self.open_license_center,
-            update_status=self.product_update_status,
-            refresh_update=self.request_update_refresh,
-            dismiss_update=self.dismiss_update,
+            update_check=self.check_update_capability,
             open_update_center=self.open_update_center,
             port=self.port,
         ) as server:
