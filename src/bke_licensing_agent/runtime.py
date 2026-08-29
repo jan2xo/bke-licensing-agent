@@ -101,7 +101,7 @@ class InstalledAgentRuntime:
 
     def _update_lease(self, product_id: str, version: str):
         for record in self.repository.list_for_product(product_id):
-            if (record.product_version == version and record.status == "ACTIVE" and
+            if (record.product_version == version and record.status == "verified" and
                     record.signed_payload and record.signed_signature and record.signed_algorithm):
                 return record
         return None
