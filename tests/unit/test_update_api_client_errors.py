@@ -54,6 +54,18 @@ def _client(status: int, data: Any) -> LicensingPlatformClient:
     )
 
 
+def _update_policy(**overrides: object) -> dict[str, object]:
+    policy: dict[str, object] = {
+        "product_id": "p",
+        "current_version": "1.0.0",
+        "platform": "windows",
+        "architecture": "x64",
+        "channel": "stable",
+    }
+    policy.update(overrides)
+    return policy
+
+
 @pytest.mark.parametrize("remote_error", ["RELEASE_NOT_VERIFIED", "INVALID_ARTIFACT_CONTRACT"])
 def test_remote_release_verification_errors_are_not_collapsed(remote_error):
     with pytest.raises(UpdateVerificationError):
@@ -89,3 +101,29 @@ def test_incomplete_or_contradictory_success_payload_is_malformed_response(paylo
 def test_invalid_json_is_malformed_response():
     with pytest.raises(InvalidServerResponseError):
         _client(200, ValueError("not json")).check_update(_request())
+
+
+def test_update_policy_current_version_is_bound_to_request_context():
+    payload = {
+        "status": "update_available",
+        "policy": _update_policy(current_version="9.9.9"),
+        "download_url": "https://authority.invalid/grant",
+    }
+    with pytest.raises(UpdateVerificationError):
+        _client(200, payload).check_update(_request())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("product_id", "other"),
+    ("platform", "linux"),
+    ("architecture", "arm64"),
+    ("channel", "lts"),
+])
+def test_update_policy_identity_context_is_bound_to_request(field, value):
+    payload = {
+        "status": "update_available",
+        "policy": _update_policy(**{field: value}),
+        "download_url": "https://authority.invalid/grant",
+    }
+    with pytest.raises(UpdateVerificationError):
+        _client(200, payload).check_update(_request())
