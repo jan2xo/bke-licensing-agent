@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from bke_licensing_agent.api.client import LicensingPlatformClient
 from bke_licensing_agent.api.config import ApiConfig
 from bke_licensing_agent.api.errors import (
     AuthorizationDeniedError,
+    InvalidServerResponseError,
     ServerUnavailableError,
     UpdateProtocolError,
     UpdateVerificationError,
@@ -14,11 +17,13 @@ from bke_licensing_agent.api.models import UpdateDiscoveryRequest
 
 
 class FakeResponse:
-    def __init__(self, status: int, data: dict[str, object]):
+    def __init__(self, status: int, data: Any):
         self.status_code = status
         self.data = data
 
     def json(self):
+        if isinstance(self.data, Exception):
+            raise self.data
         return self.data
 
 
@@ -41,10 +46,10 @@ def _request() -> UpdateDiscoveryRequest:
     )
 
 
-def _client(status: int, error: str) -> LicensingPlatformClient:
+def _client(status: int, data: Any) -> LicensingPlatformClient:
     return LicensingPlatformClient(
         ApiConfig(base_url="https://api.example.test", retry_count=0),
-        FakeSession(FakeResponse(status, {"error": error})),  # type: ignore[arg-type]
+        FakeSession(FakeResponse(status, data)),  # type: ignore[arg-type]
         sleep=lambda _seconds: None,
     )
 
@@ -52,20 +57,35 @@ def _client(status: int, error: str) -> LicensingPlatformClient:
 @pytest.mark.parametrize("remote_error", ["RELEASE_NOT_VERIFIED", "INVALID_ARTIFACT_CONTRACT"])
 def test_remote_release_verification_errors_are_not_collapsed(remote_error):
     with pytest.raises(UpdateVerificationError):
-        _client(503, remote_error).check_update(_request())
+        _client(503, {"error": remote_error}).check_update(_request())
 
 
 @pytest.mark.parametrize("remote_error", ["INVALID_REQUEST", "INVALID_CONTENT_TYPE"])
 def test_remote_protocol_errors_are_not_collapsed(remote_error):
     with pytest.raises(UpdateProtocolError):
-        _client(400, remote_error).check_update(_request())
+        _client(400, {"error": remote_error}).check_update(_request())
 
 
 def test_remote_policy_denial_stays_policy_denial():
     with pytest.raises(AuthorizationDeniedError):
-        _client(403, "UPDATE_NOT_ENTITLED").check_update(_request())
+        _client(403, {"error": "UPDATE_NOT_ENTITLED"}).check_update(_request())
 
 
 def test_unclassified_remote_server_failure_stays_provider_unavailable():
     with pytest.raises(ServerUnavailableError):
-        _client(500, "UPDATE_DISCOVERY_FAILED").check_update(_request())
+        _client(500, {"error": "UPDATE_DISCOVERY_FAILED"}).check_update(_request())
+
+
+@pytest.mark.parametrize("payload", [
+    {"status": "update_available"},
+    {"status": "update_available", "policy": {"schema": "bke.update-policy.v1"}},
+    {"status": "up_to_date", "download_url": "https://authority.invalid/grant"},
+])
+def test_incomplete_or_contradictory_success_payload_is_malformed_response(payload):
+    with pytest.raises(InvalidServerResponseError):
+        _client(200, payload).check_update(_request())
+
+
+def test_invalid_json_is_malformed_response():
+    with pytest.raises(InvalidServerResponseError):
+        _client(200, ValueError("not json")).check_update(_request())
