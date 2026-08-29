@@ -27,7 +27,7 @@ from bke_licensing_agent.updates.discovery import RefreshPolicy, UpdateDiscovery
 def _fixture(tmp_path: Path, response: UpdateDiscoveryResponse, *, clock=None, policy=None):
     private = Ed25519PrivateKey.generate()
     public_pem = private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
-    root = tmp_path / "product"; root.mkdir(); (root / "run.exe").write_text("v1")
+    root = tmp_path / "product"; root.mkdir(exist_ok=True); (root / "run.exe").write_text("v1")
     record = SimpleNamespace(product_root=str(root))
     manifest = SimpleNamespace(productId="p", version="1.0.0", platform="windows", architecture="x64",
                                entryPoint="run.exe", updateChannel="stable")
