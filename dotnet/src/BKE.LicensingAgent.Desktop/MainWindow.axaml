@@ -1,6 +1,8 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:BKE.LicensingAgent.Desktop.ViewModels"
         x:Class="BKE.LicensingAgent.Desktop.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
         Title="BKE Licensing Agent"
         Width="1280"
         Height="820"
@@ -192,7 +194,7 @@
 
                 <ItemsControl ItemsSource="{Binding Products}">
                   <ItemsControl.ItemTemplate>
-                    <DataTemplate>
+                    <DataTemplate x:DataType="vm:ProductCardViewModel">
                       <Border Classes="subcard" Margin="0,0,0,10">
                         <Grid ColumnDefinitions="48,*,Auto" ColumnSpacing="14">
                           <Border Width="44" Height="44" CornerRadius="13" Background="#172741">
@@ -228,7 +230,7 @@
                 <TextBlock Text="Recent activity" FontSize="18" FontWeight="SemiBold" />
                 <ItemsControl ItemsSource="{Binding Activity}">
                   <ItemsControl.ItemTemplate>
-                    <DataTemplate>
+                    <DataTemplate x:DataType="vm:ActivityRowViewModel">
                       <Grid ColumnDefinitions="10,14,*,Auto" Margin="0,7">
                         <Ellipse Width="8" Height="8" Fill="#5E8FFF" VerticalAlignment="Center" />
                         <StackPanel Grid.Column="2" Spacing="2">
