@@ -1,0 +1,32 @@
+name: .NET 10 Agent Desktop UI
+
+on:
+  pull_request:
+    paths:
+      - "dotnet/src/BKE.LicensingAgent.Presentation/**"
+      - "dotnet/src/BKE.LicensingAgent.Desktop/**"
+      - "dotnet/certify-ui.sh"
+      - ".github/workflows/dotnet-desktop-ui.yml"
+  push:
+    branches: [main]
+    paths:
+      - "dotnet/src/BKE.LicensingAgent.Presentation/**"
+      - "dotnet/src/BKE.LicensingAgent.Desktop/**"
+      - "dotnet/certify-ui.sh"
+      - ".github/workflows/dotnet-desktop-ui.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-ui:
+    name: Presentation contract + Avalonia shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Certify desktop UI boundary
+        run: bash dotnet/certify-ui.sh
