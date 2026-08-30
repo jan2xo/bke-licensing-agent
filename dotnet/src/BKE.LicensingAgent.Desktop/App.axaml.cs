@@ -3,6 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using BKE.LicensingAgent.Desktop.Infrastructure;
 using BKE.LicensingAgent.Desktop.ViewModels;
+using BKE.LicensingAgent.Presentation;
 
 namespace BKE.LicensingAgent.Desktop;
 
@@ -19,7 +20,7 @@ public sealed partial class App : Application
                 "1",
                 StringComparison.Ordinal);
 
-            var source = preview
+            IAgentDesktopViewSource source = preview
                 ? new DesignAgentDesktopViewSource()
                 : new UnconnectedAgentDesktopViewSource();
 
