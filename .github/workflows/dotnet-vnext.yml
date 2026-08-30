@@ -1,0 +1,39 @@
+name: .NET 10 Agent vNext
+
+on:
+  pull_request:
+    paths:
+      - 'dotnet/**'
+      - 'legacy/README.md'
+      - '.github/workflows/dotnet-vnext.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'dotnet/**'
+      - 'legacy/README.md'
+      - '.github/workflows/dotnet-vnext.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dotnet-vnext-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  certify:
+    name: Contract + host certification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Certify .NET 10 vNext boundary
+        run: bash dotnet/certify.sh

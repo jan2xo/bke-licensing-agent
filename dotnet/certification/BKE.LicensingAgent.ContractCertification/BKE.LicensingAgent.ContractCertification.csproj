@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>BKE.LicensingAgent.ContractCertification</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.ContractCertification</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/BKE.LicensingAgent.Contracts/BKE.LicensingAgent.Contracts.csproj" />
+    <ProjectReference Include="../../src/BKE.LicensingAgent.Application/BKE.LicensingAgent.Application.csproj" />
+    <Content Include="../../contracts/local-api-v1.json" Link="local-api-v1.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
