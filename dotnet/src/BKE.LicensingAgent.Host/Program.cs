@@ -40,7 +40,7 @@ var app = builder.Build();
 
 app.Use(async (context, next) =>
 {
-    context.Response.Headers.CacheControl = "no-store";
+    context.Response.Headers["Cache-Control"] = "no-store";
 
     if (HttpMethods.IsPost(context.Request.Method) && context.Request.Headers.ContainsKey("Origin"))
     {
