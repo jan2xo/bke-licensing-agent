@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Presentation contract for replaceable BKE Licensing Agent desktop UIs.</Description>
+  </PropertyGroup>
+</Project>

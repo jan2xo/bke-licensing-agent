@@ -1,0 +1,11 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="BKE.LicensingAgent.Desktop.App"
+             RequestedThemeVariant="Dark">
+  <Application.Styles>
+    <FluentTheme DensityStyle="Compact" />
+    <Style Selector="Window">
+      <Setter Property="FontFamily" Value="Inter, Segoe UI, SF Pro Display, sans-serif" />
+    </Style>
+  </Application.Styles>
+</Application>

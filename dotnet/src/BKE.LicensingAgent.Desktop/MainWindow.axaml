@@ -1,0 +1,293 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:BKE.LicensingAgent.Desktop.ViewModels"
+        x:Class="BKE.LicensingAgent.Desktop.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="BKE Licensing Agent"
+        Width="1280"
+        Height="820"
+        MinWidth="980"
+        MinHeight="680"
+        Background="#080B11">
+
+  <Window.Styles>
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="#111722" />
+      <Setter Property="BorderBrush" Value="#202A3A" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="22" />
+      <Setter Property="Padding" Value="22" />
+    </Style>
+    <Style Selector="Border.subcard">
+      <Setter Property="Background" Value="#0D131D" />
+      <Setter Property="BorderBrush" Value="#1B2635" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="16" />
+      <Setter Property="Padding" Value="16" />
+    </Style>
+    <Style Selector="Button.nav">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#8D9AAE" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Padding" Value="14,11" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Margin" Value="0,2" />
+    </Style>
+    <Style Selector="Button.nav:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#172131" />
+    </Style>
+    <Style Selector="Button.nav.selected">
+      <Setter Property="Background" Value="#172741" />
+      <Setter Property="Foreground" Value="#EAF2FF" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#2F6BFF" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="Padding" Value="18,11" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.ghost">
+      <Setter Property="Background" Value="#151D29" />
+      <Setter Property="Foreground" Value="#D7E2F2" />
+      <Setter Property="BorderBrush" Value="#283446" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="12" />
+      <Setter Property="Padding" Value="16,10" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Foreground" Value="#7E8A9C" />
+    </Style>
+    <Style Selector="TextBlock.label">
+      <Setter Property="Foreground" Value="#6E7B8F" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="LetterSpacing" Value="1.2" />
+    </Style>
+  </Window.Styles>
+
+  <Grid ColumnDefinitions="238,*">
+    <Border Grid.Column="0"
+            Background="#0C111A"
+            BorderBrush="#182131"
+            BorderThickness="0,0,1,0"
+            Padding="20,24">
+      <Grid RowDefinitions="Auto,28,*,Auto">
+        <StackPanel Grid.Row="0" Spacing="12">
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Border Width="42" Height="42" CornerRadius="14">
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                  <GradientStop Color="#3C7BFF" Offset="0" />
+                  <GradientStop Color="#7848FF" Offset="1" />
+                </LinearGradientBrush>
+              </Border.Background>
+              <TextBlock Text="B" FontSize="20" FontWeight="Bold"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <StackPanel VerticalAlignment="Center" Spacing="1">
+              <TextBlock Text="BKE" FontWeight="Bold" FontSize="16" />
+              <TextBlock Text="LICENSING AGENT" Classes="label" FontSize="9" />
+            </StackPanel>
+          </StackPanel>
+          <Border Background="#101B2B" BorderBrush="#1F3554" BorderThickness="1"
+                  CornerRadius="10" Padding="10,7">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Ellipse Width="7" Height="7" Fill="#55D6A3" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding EnvironmentLabel}" FontSize="11" Foreground="#A8B8CE" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Spacing="2">
+          <TextBlock Text="AGENT" Classes="label" Margin="10,0,0,8" />
+          <Button Classes="nav selected" Content="Overview" />
+          <Button Classes="nav" Content="Products" />
+          <Button Classes="nav" Content="Updates" />
+          <Button Classes="nav" Content="Trust &amp; Security" />
+          <TextBlock Text="SYSTEM" Classes="label" Margin="10,24,0,8" />
+          <Button Classes="nav" Content="Activity" />
+          <Button Classes="nav" Content="Settings" />
+        </StackPanel>
+
+        <Border Grid.Row="3" Classes="subcard" Padding="14">
+          <StackPanel Spacing="8">
+            <TextBlock Text="LOCAL AUTHORITY" Classes="label" />
+            <TextBlock Text="{Binding SecurityState}" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding SecurityDetail}" Classes="muted" FontSize="11" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Border>
+
+    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+      <Grid Margin="34,30,34,38" RowDefinitions="Auto,24,Auto,24,*">
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+          <StackPanel Spacing="5">
+            <TextBlock Text="AUTHORIZATION PRODUCT" Classes="label" Foreground="#729BFF" />
+            <TextBlock Text="Licensing Agent" FontSize="31" FontWeight="Bold" />
+            <TextBlock Text="Trusted local authorization, application management and update control."
+                       Classes="muted" FontSize="14" />
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+            <Button Classes="ghost" Content="License Center" />
+            <Button Classes="primary" Content="Refresh" Command="{Binding RefreshCommand}" />
+          </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="2" CornerRadius="26" Padding="28" BorderBrush="#284A82" BorderThickness="1">
+          <Border.Background>
+            <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+              <GradientStop Color="#102342" Offset="0" />
+              <GradientStop Color="#12182A" Offset="0.55" />
+              <GradientStop Color="#241645" Offset="1" />
+            </LinearGradientBrush>
+          </Border.Background>
+          <Grid ColumnDefinitions="*,240">
+            <StackPanel Spacing="13">
+              <Border Background="#142A49" BorderBrush="#2A5892" BorderThickness="1"
+                      CornerRadius="99" Padding="10,6" HorizontalAlignment="Left">
+                <TextBlock Text="{Binding RuntimeState}" Foreground="#A9CAFF" FontSize="11" FontWeight="SemiBold" />
+              </Border>
+              <TextBlock Text="Your software trust layer, without the noise." FontSize="25" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding RuntimeDetail}" Foreground="#A5B2C6" FontSize="13"
+                         MaxWidth="650" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="28" Margin="0,8,0,0">
+                <StackPanel Spacing="3">
+                  <TextBlock Text="MANAGED" Classes="label" />
+                  <TextBlock Text="{Binding ProductCount}" FontSize="24" FontWeight="Bold" />
+                </StackPanel>
+                <StackPanel Spacing="3">
+                  <TextBlock Text="UPDATE STATE" Classes="label" />
+                  <TextBlock Text="{Binding UpdateState}" FontSize="15" FontWeight="SemiBold" />
+                </StackPanel>
+                <StackPanel Spacing="3">
+                  <TextBlock Text="TRUST" Classes="label" />
+                  <TextBlock Text="{Binding SecurityState}" FontSize="15" FontWeight="SemiBold" />
+                </StackPanel>
+              </StackPanel>
+            </StackPanel>
+            <Grid Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+              <Ellipse Width="176" Height="176" Fill="#0D1524" Stroke="#315E9F" StrokeThickness="1" />
+              <Ellipse Width="126" Height="126" Fill="#13233D" Stroke="#487FD2" StrokeThickness="1" />
+              <TextBlock Text="BKE" FontSize="32" FontWeight="Bold"
+                         Foreground="#DCEAFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+          </Grid>
+        </Border>
+
+        <Grid Grid.Row="4" ColumnDefinitions="1.65*,18,1*">
+          <StackPanel Grid.Column="0" Spacing="18">
+            <Border Classes="card">
+              <StackPanel Spacing="16">
+                <Grid ColumnDefinitions="*,Auto">
+                  <StackPanel Spacing="3">
+                    <TextBlock Text="Managed products" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="Products discovered and governed by this Agent." Classes="muted" FontSize="12" />
+                  </StackPanel>
+                  <Border Grid.Column="1" Background="#141D2A" CornerRadius="10" Padding="10,7">
+                    <TextBlock Text="{Binding ProductCountLabel}" FontSize="11" Foreground="#A7B6CB" />
+                  </Border>
+                </Grid>
+
+                <ItemsControl ItemsSource="{Binding Products}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ProductCardViewModel">
+                      <Border Classes="subcard" Margin="0,0,0,10">
+                        <Grid ColumnDefinitions="48,*,Auto" ColumnSpacing="14">
+                          <Border Width="44" Height="44" CornerRadius="13" Background="#172741">
+                            <TextBlock Text="{Binding Initials}" Foreground="#AFCBFF" FontWeight="Bold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                          </Border>
+                          <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="14" />
+                            <TextBlock Text="{Binding Detail}" Classes="muted" FontSize="11" />
+                          </StackPanel>
+                          <StackPanel Grid.Column="2" Spacing="4" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding AuthorizationState}" Foreground="#68DBAA" FontSize="11" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding UpdateState}" Classes="muted" FontSize="10" HorizontalAlignment="Right" />
+                          </StackPanel>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Border Classes="subcard" IsVisible="{Binding ShowEmptyProducts}">
+                  <StackPanel HorizontalAlignment="Center" Margin="16" Spacing="6">
+                    <TextBlock Text="No product state connected yet" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock Text="The UI shell is ready; the .NET Agent provider migration will feed this contract."
+                               Classes="muted" FontSize="11" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="430" />
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Spacing="15">
+                <TextBlock Text="Recent activity" FontSize="18" FontWeight="SemiBold" />
+                <ItemsControl ItemsSource="{Binding Activity}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ActivityRowViewModel">
+                      <Grid ColumnDefinitions="10,14,*,Auto" Margin="0,7">
+                        <Ellipse Width="8" Height="8" Fill="#5E8FFF" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="2" Spacing="2">
+                          <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding Detail}" Classes="muted" FontSize="11" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="3" Text="{Binding TimestampLabel}" Classes="muted" FontSize="10" VerticalAlignment="Center" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="No recent activity." Classes="muted" FontSize="11" IsVisible="{Binding ShowEmptyActivity}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <StackPanel Grid.Column="2" Spacing="18">
+            <Border Classes="card">
+              <StackPanel Spacing="14">
+                <TextBlock Text="Update control" Classes="label" />
+                <TextBlock Text="{Binding UpdateState}" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding UpdateDetail}" Classes="muted" FontSize="12" TextWrapping="Wrap" />
+                <Button Classes="ghost" Content="Check managed products" Command="{Binding RefreshCommand}" HorizontalAlignment="Stretch" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Spacing="14">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="Trust posture" Classes="label" />
+                  <Border Grid.Column="1" Width="34" Height="34" CornerRadius="11" Background="#14342B">
+                    <TextBlock Text="✓" Foreground="#63DBAA" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  </Border>
+                </Grid>
+                <TextBlock Text="{Binding SecurityState}" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding SecurityDetail}" Classes="muted" FontSize="12" TextWrapping="Wrap" />
+                <Border Background="#0D151F" CornerRadius="13" Padding="13">
+                  <Grid ColumnDefinitions="Auto,12,*">
+                    <Border Width="8" Height="8" CornerRadius="4" Background="#5A8DFF" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Text="Product applications never receive signing keys, trusted paths or privileged execution controls."
+                               Foreground="#93A4BA" FontSize="10.5" TextWrapping="Wrap" />
+                  </Grid>
+                </Border>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Spacing="9">
+                <TextBlock Text="Architecture" Classes="label" />
+                <TextBlock Text="Replaceable UI" FontSize="16" FontWeight="SemiBold" />
+                <TextBlock Text="This desktop shell consumes the Agent presentation contract only. A different UI can be wired without changing licensing internals."
+                           Classes="muted" FontSize="11" TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </ScrollViewer>
+  </Grid>
+</Window>
