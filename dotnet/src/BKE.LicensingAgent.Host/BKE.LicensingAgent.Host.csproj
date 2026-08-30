@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <AssemblyName>BKE.LicensingAgent.Host</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.Host</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BKE.LicensingAgent.Application/BKE.LicensingAgent.Application.csproj" />
+    <ProjectReference Include="../BKE.LicensingAgent.Contracts/BKE.LicensingAgent.Contracts.csproj" />
+  </ItemGroup>
+</Project>

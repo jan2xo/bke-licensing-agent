@@ -1,0 +1,19 @@
+{
+  "contract_id": "bke.licensing-agent.local-api",
+  "contract_version": 1,
+  "bind_host": "127.0.0.1",
+  "default_port": 43873,
+  "max_json_body_bytes": 32768,
+  "routes": [
+    { "method": "GET", "path": "/license-center" },
+    { "method": "POST", "path": "/v1/authorize" },
+    { "method": "POST", "path": "/v1/activate" },
+    { "method": "POST", "path": "/v1/license-center/open" },
+    { "method": "POST", "path": "/v1/updates/check" },
+    { "method": "POST", "path": "/v1/update-center/open" }
+  ],
+  "update_capability": {
+    "capability_id": "bke.updates.check",
+    "contract_version": 1
+  }
+}

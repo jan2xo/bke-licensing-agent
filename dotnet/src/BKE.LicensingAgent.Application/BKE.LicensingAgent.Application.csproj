@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>BKE.LicensingAgent.Application</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.Application</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BKE.LicensingAgent.Contracts/BKE.LicensingAgent.Contracts.csproj" />
+  </ItemGroup>
+</Project>
