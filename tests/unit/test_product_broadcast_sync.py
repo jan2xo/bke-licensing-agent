@@ -6,11 +6,7 @@ from bke_licensing_agent.broadcasts import (
     ProductBroadcastSyncError,
     ProductBroadcastSynchronizer,
 )
-from bke_licensing_agent.notifications import (
-    AgentNotificationService,
-    NotificationCode,
-    NotificationDeliveryMode,
-)
+from bke_licensing_agent.notifications import AgentNotificationService, NotificationCode
 from bke_licensing_agent.storage.database import Database
 
 
@@ -83,7 +79,7 @@ def test_remote_broadcast_materializes_agent_owned_wording(tmp_path: Path):
         records = notifications.list_for_product("bke-render-dock")
         assert len(records) == 1
         assert records[0].code is NotificationCode.FREE_SUPPORT_ENDED
-        assert records[0].delivery_mode is NotificationDeliveryMode.ONCE
+        assert not sync.is_every_launch("bke-render-dock", records[0].notification_id)
         presentation = notifications.presentation(records[0].code)
         assert presentation.title == "Free support period ended"
         assert "complimentary support" in presentation.body.lower()
@@ -95,7 +91,7 @@ def test_remote_broadcast_materializes_agent_owned_wording(tmp_path: Path):
         assert session.calls[0][1]["allow_redirects"] is False
 
 
-def test_every_launch_delivery_mode_is_persisted(tmp_path: Path):
+def test_every_launch_delivery_mode_is_live_campaign_policy(tmp_path: Path):
     with Database(tmp_path / "agent.db") as database:
         notifications = AgentNotificationService(database)
         sync = ProductBroadcastSynchronizer(
@@ -107,7 +103,11 @@ def test_every_launch_delivery_mode_is_persisted(tmp_path: Path):
         sync.sync("bke-render-dock", "1.0.2")
 
         record = notifications.list_for_product("bke-render-dock")[0]
-        assert record.delivery_mode is NotificationDeliveryMode.EVERY_LAUNCH
+        assert sync.is_every_launch("bke-render-dock", record.notification_id)
+        columns = {
+            row[1] for row in database.connection.execute("PRAGMA table_info(notifications)").fetchall()
+        }
+        assert "delivery_mode" not in columns
 
 
 def test_same_broadcast_preserves_state_but_republish_rearms_unread(tmp_path: Path):
@@ -152,12 +152,14 @@ def test_withdrawn_remote_campaign_is_deactivated_locally(tmp_path: Path):
             session=_Session(_payload(delivery_mode="EVERY_LAUNCH")),
         )
         sync.sync("bke-render-dock", "1.0.2")
-        assert len(notifications.list_for_product("bke-render-dock")) == 1
+        record = notifications.list_for_product("bke-render-dock")[0]
+        assert sync.is_every_launch("bke-render-dock", record.notification_id)
 
         sync.session = _Session(_empty_payload())
         sync.sync("bke-render-dock", "1.0.2")
 
         assert notifications.list_for_product("bke-render-dock") == ()
+        assert not sync.is_every_launch("bke-render-dock", record.notification_id)
         dismissed = notifications.list_for_product(
             "bke-render-dock", include_dismissed=True
         )
