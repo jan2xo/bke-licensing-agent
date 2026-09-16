@@ -6,7 +6,7 @@ from collections.abc import Callable
 from ..config import get_database_path
 from .models import DiscoveredProductRecord
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 8
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -179,7 +179,6 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_product_state_created
 ON notifications(product_id, state, created_at DESC)
 """),
-    9: ("ALTER TABLE notifications ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'ONCE'",),
 }
 
 
@@ -294,11 +293,8 @@ class Database:
 
     def ensure_notification(self, *, notification_id: str, product_id: str, code: str,
                             severity: str, expires_at: str | None = None,
-                            delivery_mode: str = "ONCE",
                             replace_campaign: bool = False) -> dict[str, object]:
         from datetime import datetime, timezone
-        if delivery_mode not in {"ONCE", "EVERY_LAUNCH"}:
-            raise ValueError("unsupported notification delivery mode")
         created_at = datetime.now(timezone.utc).isoformat()
         with self._lock, self.connection:
             existing = self.connection.execute(
@@ -309,29 +305,28 @@ class Database:
                 self.connection.execute(
                     """
                     INSERT INTO notifications (
-                        id, product_id, code, severity, state, created_at, expires_at, dismissed_at, delivery_mode
-                    ) VALUES (?, ?, ?, ?, 'unread', ?, ?, NULL, ?)
+                        id, product_id, code, severity, state, created_at, expires_at, dismissed_at
+                    ) VALUES (?, ?, ?, ?, 'unread', ?, ?, NULL)
                     """,
-                    (notification_id, product_id, code, severity, created_at, expires_at, delivery_mode),
+                    (notification_id, product_id, code, severity, created_at, expires_at),
                 )
             elif replace_campaign and str(existing["id"]) != notification_id:
                 self.connection.execute(
                     """
                     UPDATE notifications
-                    SET id=?, severity=?, state='unread', created_at=?, expires_at=?, dismissed_at=NULL,
-                        delivery_mode=?
+                    SET id=?, severity=?, state='unread', created_at=?, expires_at=?, dismissed_at=NULL
                     WHERE product_id=? AND code=?
                     """,
-                    (notification_id, severity, created_at, expires_at, delivery_mode, product_id, code),
+                    (notification_id, severity, created_at, expires_at, product_id, code),
                 )
             else:
                 self.connection.execute(
                     """
                     UPDATE notifications
-                    SET severity=?, expires_at=?, delivery_mode=?
+                    SET severity=?, expires_at=?
                     WHERE product_id=? AND code=?
                     """,
-                    (severity, expires_at, delivery_mode, product_id, code),
+                    (severity, expires_at, product_id, code),
                 )
             row = self.connection.execute(
                 "SELECT * FROM notifications WHERE product_id=? AND code=?",
