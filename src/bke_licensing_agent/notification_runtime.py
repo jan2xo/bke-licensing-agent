@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 
-from .local_api import LocalAuthorizationServer
 from .notification_local_api import NotificationLocalAuthorizationServer
 from .notifications import AgentNotificationService
 from .runtime import InstalledAgentRuntime
@@ -108,7 +107,6 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
         if state is None:
             return {"status": "NotFound", "error": None}
         if state != "dismissed":
-            from datetime import datetime, timezone
             dismissed_at = datetime.now(timezone.utc).isoformat()
             with self.database._lock, self.database.connection:
                 self.database.connection.execute(
