@@ -72,6 +72,51 @@ def build_standalone_window(root: tk.Tk) -> None:
     ).pack(anchor="w", pady=(14, 0))
 
 
+def _agent_update_window(current_version: str, latest_version: str, release_notes: str | None) -> int:
+    """Ask the active user whether the free Licensing Agent should update now."""
+    root = tk.Tk()
+    presentation = AgentNotificationService.presentation(NotificationCode.AGENT_UPDATE_AVAILABLE)
+    root.title(presentation.title)
+    root.minsize(520, 300)
+    outcome = {"code": 2}
+
+    frame = ttk.Frame(root, padding=24)
+    frame.pack(fill="both", expand=True)
+    ttk.Label(frame, text=presentation.title, font=("TkDefaultFont", 20, "bold")).pack(anchor="w")
+    ttk.Label(
+        frame,
+        text=(
+            f"{presentation.body}\n\n"
+            f"Current version: {current_version}\n"
+            f"Available version: {latest_version}"
+        ),
+        wraplength=460,
+        justify="left",
+    ).pack(anchor="w", pady=(10, 16))
+
+    if release_notes:
+        notes = ttk.LabelFrame(frame, text="What's new", padding=12)
+        notes.pack(fill="x", pady=(0, 16))
+        ttk.Label(notes, text=release_notes, wraplength=440, justify="left").pack(anchor="w")
+
+    actions = ttk.Frame(frame)
+    actions.pack(fill="x", pady=(8, 0))
+
+    def update_now() -> None:
+        outcome["code"] = 0
+        root.destroy()
+
+    def later() -> None:
+        outcome["code"] = 2
+        root.destroy()
+
+    ttk.Button(actions, text="Update Now", command=update_now).pack(side="left")
+    ttk.Button(actions, text="Later", command=later).pack(side="left", padx=(8, 0))
+    root.protocol("WM_DELETE_WINDOW", later)
+    root.mainloop()
+    return outcome["code"]
+
+
 def _activation_window(
     product_id: str, version: str, installation_id: str,
     notification_code: NotificationCode | None = None,
@@ -145,6 +190,10 @@ def main() -> int:
     """Start the standalone desktop shell or run a non-interactive package smoke check."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--agent-update-prompt", action="store_true")
+    parser.add_argument("--current-version")
+    parser.add_argument("--latest-version")
+    parser.add_argument("--release-notes")
     parser.add_argument("--product-id")
     parser.add_argument("--product-version")
     parser.add_argument("--installation-id")
@@ -156,6 +205,11 @@ def main() -> int:
     if args.smoke:
         print("BKE License Center smoke: import and entrypoint OK")
         return 0
+
+    if args.agent_update_prompt:
+        if not args.current_version or not args.latest_version:
+            return 3
+        return _agent_update_window(args.current_version, args.latest_version, args.release_notes)
 
     context = (args.product_id, args.product_version, args.installation_id, args.correlation_id)
     if any(context):
