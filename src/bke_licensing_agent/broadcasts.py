@@ -7,7 +7,12 @@ from uuid import UUID
 
 import requests
 
-from .notifications import AgentNotificationService, NotificationCode, NotificationSeverity
+from .notifications import (
+    AgentNotificationService,
+    NotificationCode,
+    NotificationDeliveryMode,
+    NotificationSeverity,
+)
 
 
 _REMOTE_CODES = {
@@ -76,6 +81,7 @@ class ProductBroadcastSynchronizer:
             raise ProductBroadcastSyncError("invalid product broadcast collection")
 
         materialized = 0
+        seen_codes: set[NotificationCode] = set()
         for raw in broadcasts:
             if not isinstance(raw, dict):
                 raise ProductBroadcastSyncError("invalid product broadcast item")
@@ -97,6 +103,10 @@ class ProductBroadcastSynchronizer:
             priority = raw.get("priority")
             if priority not in {"LOW", "NORMAL", "HIGH", "URGENT"}:
                 raise ProductBroadcastSyncError("invalid product broadcast priority")
+            try:
+                delivery_mode = NotificationDeliveryMode(str(raw.get("deliveryMode", "ONCE")))
+            except ValueError as exc:
+                raise ProductBroadcastSyncError("invalid product broadcast delivery mode") from exc
             published_at = raw.get("publishedAt")
             starts_at = raw.get("startsAt")
             ends_at = raw.get("endsAt")
@@ -116,7 +126,14 @@ class ProductBroadcastSynchronizer:
                 code=code,
                 severity=severity,
                 expires_at=ends_at,
+                delivery_mode=delivery_mode,
             )
+            seen_codes.add(code)
             materialized += 1
+
+        missing_codes = tuple(
+            code.value for code in _REMOTE_CODES if code not in seen_codes
+        )
+        self.notifications.database.deactivate_notifications_for_codes(product_id, missing_codes)
 
         return ProductBroadcastSyncResult(fetched=len(broadcasts), materialized=materialized)
