@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 
+from .broadcasts import ProductBroadcastSynchronizer
+from .config import get_platform_base_url
 from .notification_local_api import NotificationLocalAuthorizationServer
 from .notifications import AgentNotificationService, NotificationCode
 from .runtime import InstalledAgentRuntime
@@ -12,6 +14,13 @@ from .runtime import InstalledAgentRuntime
 
 class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
     """Expose Agent-owned persisted notices through a least-privilege inbox contract."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.product_broadcasts = ProductBroadcastSynchronizer(
+            self.notifications,
+            platform_base_url=get_platform_base_url(),
+        )
 
     @staticmethod
     def _error(code: str, message: str, *, retryable: bool = False) -> dict[str, object]:
@@ -41,6 +50,16 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
             return expiry > datetime.now(timezone.utc)
         except ValueError:
             return False
+
+    def _sync_product_broadcasts(self, request: dict[str, object]) -> None:
+        """Best-effort remote sync; notification transport must never become a startup authority."""
+        try:
+            self.product_broadcasts.sync(
+                str(request["product_id"]),
+                str(request["version"]),
+            )
+        except Exception:
+            return
 
     def _visible_notifications(
         self,
@@ -78,6 +97,7 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
         if not self._valid_product_context(request):
             return self._error("InvalidRequest", "The notification product context is invalid.")
 
+        self._sync_product_broadcasts(request)
         limit = int(request["limit"])
         include_dismissed = bool(request["include_dismissed"])
         records = self._visible_notifications(
@@ -96,7 +116,7 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
                 "source": "bke-licensing-agent",
                 "title": presentation.title,
                 "body": presentation.body,
-                "category": "Licensing",
+                "category": AgentNotificationService.category(record.code),
                 "severity": severity_names.get(record.severity.value, "Information"),
                 "created_at": record.created_at,
                 "expires_at": record.expires_at,
@@ -150,6 +170,7 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
     def notification_unread_count(self, request: dict[str, object]) -> dict[str, object]:
         if not self._valid_product_context(request):
             return self._error("InvalidRequest", "The notification product context is invalid.")
+        self._sync_product_broadcasts(request)
         records = self._visible_notifications(request, include_dismissed=False, limit=200)
         count = sum(1 for record in records if record.state == "unread")
         return {"status": "Succeeded", "count": count, "error": None}

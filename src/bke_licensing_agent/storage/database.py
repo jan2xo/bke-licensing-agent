@@ -292,21 +292,42 @@ class Database:
         return [DiscoveredProductRecord.from_row(dict(row)) for row in cursor.fetchall()]
 
     def ensure_notification(self, *, notification_id: str, product_id: str, code: str,
-                            severity: str, expires_at: str | None = None) -> dict[str, object]:
+                            severity: str, expires_at: str | None = None,
+                            replace_campaign: bool = False) -> dict[str, object]:
         from datetime import datetime, timezone
         created_at = datetime.now(timezone.utc).isoformat()
         with self._lock, self.connection:
-            self.connection.execute(
-                """
-                INSERT INTO notifications (
-                    id, product_id, code, severity, state, created_at, expires_at, dismissed_at
-                ) VALUES (?, ?, ?, ?, 'unread', ?, ?, NULL)
-                ON CONFLICT(product_id, code) DO UPDATE SET
-                    severity=excluded.severity,
-                    expires_at=excluded.expires_at
-                """,
-                (notification_id, product_id, code, severity, created_at, expires_at),
-            )
+            existing = self.connection.execute(
+                "SELECT * FROM notifications WHERE product_id=? AND code=?",
+                (product_id, code),
+            ).fetchone()
+            if existing is None:
+                self.connection.execute(
+                    """
+                    INSERT INTO notifications (
+                        id, product_id, code, severity, state, created_at, expires_at, dismissed_at
+                    ) VALUES (?, ?, ?, ?, 'unread', ?, ?, NULL)
+                    """,
+                    (notification_id, product_id, code, severity, created_at, expires_at),
+                )
+            elif replace_campaign and str(existing["id"]) != notification_id:
+                self.connection.execute(
+                    """
+                    UPDATE notifications
+                    SET id=?, severity=?, state='unread', created_at=?, expires_at=?, dismissed_at=NULL
+                    WHERE product_id=? AND code=?
+                    """,
+                    (notification_id, severity, created_at, expires_at, product_id, code),
+                )
+            else:
+                self.connection.execute(
+                    """
+                    UPDATE notifications
+                    SET severity=?, expires_at=?
+                    WHERE product_id=? AND code=?
+                    """,
+                    (severity, expires_at, product_id, code),
+                )
             row = self.connection.execute(
                 "SELECT * FROM notifications WHERE product_id=? AND code=?",
                 (product_id, code),
