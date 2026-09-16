@@ -30,14 +30,23 @@ def _runtime(database: Database) -> NotificationEnabledAgentRuntime:
     runtime._validated_product = lambda product_id, version: (
         _manifest() if (product_id, version) == ("bke-render-dock", "1.0.2") else None
     )
+    runtime.authorize = lambda _request: {"authorized": False, "reason": "activation_required"}
     return runtime
+
+
+def _context():
+    return {
+        "product_id": "bke-render-dock",
+        "version": "1.0.2",
+        "installation_id": "install-render-dock-1",
+    }
 
 
 def test_notification_inbox_feed_read_dismiss_and_unread_count(tmp_path: Path):
     with Database(tmp_path / "agent.db") as database:
         runtime = _runtime(database)
         notice = runtime.notifications.ensure("bke-render-dock", NotificationCode.LICENSE_REQUIRED)
-        context = {"product_id": "bke-render-dock", "version": "1.0.2"}
+        context = _context()
 
         unread = runtime.notification_unread_count(context)
         assert unread == {"status": "Succeeded", "count": 1, "error": None}
@@ -69,11 +78,28 @@ def test_notification_inbox_feed_read_dismiss_and_unread_count(tmp_path: Path):
         assert dismissed[0]["state"] == "Dismissed"
 
 
+def test_license_required_is_suppressed_when_installation_is_now_authorized(tmp_path: Path):
+    with Database(tmp_path / "agent.db") as database:
+        runtime = _runtime(database)
+        runtime.notifications.ensure("bke-render-dock", NotificationCode.LICENSE_REQUIRED)
+        runtime.authorize = lambda _request: {"authorized": True, "reason": "ALLOW"}
+
+        feed = runtime.notification_feed({**_context(), "limit": 50, "include_dismissed": False})
+
+        assert feed == {"status": "Succeeded", "items": [], "error": None}
+        assert runtime.notification_unread_count(_context())["count"] == 0
+
+
 def test_notification_inbox_lifecycle_is_product_scoped(tmp_path: Path):
     with Database(tmp_path / "agent.db") as database:
         runtime = _runtime(database)
         notice = runtime.notifications.ensure("bke-render-dock", NotificationCode.LICENSE_REQUIRED)
-        wrong_context = {"product_id": "other-product", "version": "1.0.2", "notification_id": notice.notification_id}
+        wrong_context = {
+            "product_id": "other-product",
+            "version": "1.0.2",
+            "installation_id": "install-render-dock-1",
+            "notification_id": notice.notification_id,
+        }
 
         result = runtime.notification_dismiss(wrong_context)
         assert result["status"] == "Failed"
@@ -98,6 +124,7 @@ def test_notification_inbox_http_contract_is_product_read_only():
         feed_body = {
             "product_id": "bke-render-dock",
             "version": "1.0.2",
+            "installation_id": "install-render-dock-1",
             "limit": 25,
             "include_dismissed": False,
         }
@@ -121,6 +148,7 @@ def test_notification_inbox_http_contract_is_product_read_only():
         dismiss_body = {
             "product_id": "bke-render-dock",
             "version": "1.0.2",
+            "installation_id": "install-render-dock-1",
             "notification_id": "notice-1",
         }
         request = Request(
