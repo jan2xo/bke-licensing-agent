@@ -9,6 +9,7 @@ from bke_licensing_agent.broadcasts import (
 from bke_licensing_agent.notifications import (
     AgentNotificationService,
     NotificationCode,
+    NotificationDeliveryMode,
 )
 from bke_licensing_agent.storage.database import Database
 
@@ -33,7 +34,12 @@ class _Session:
         return _Response(self.payload)
 
 
-def _payload(*, broadcast_id="11111111-1111-4111-8111-111111111111", code="FREE_SUPPORT_ENDED"):
+def _payload(
+    *,
+    broadcast_id="11111111-1111-4111-8111-111111111111",
+    code="FREE_SUPPORT_ENDED",
+    delivery_mode="ONCE",
+):
     return {
         "capabilityId": "bke.product-broadcasts",
         "contractVersion": 1,
@@ -45,6 +51,7 @@ def _payload(*, broadcast_id="11111111-1111-4111-8111-111111111111", code="FREE_
             "code": code,
             "audience": "ALL_ACTIVE_CLIENTS",
             "priority": "HIGH",
+            "deliveryMode": delivery_mode,
             "minimumVersion": None,
             "maximumVersion": None,
             "publishedAt": "2026-09-17T00:00:00.000Z",
@@ -52,6 +59,12 @@ def _payload(*, broadcast_id="11111111-1111-4111-8111-111111111111", code="FREE_
             "endsAt": None,
         }],
     }
+
+
+def _empty_payload():
+    value = _payload()
+    value["broadcasts"] = []
+    return value
 
 
 def test_remote_broadcast_materializes_agent_owned_wording(tmp_path: Path):
@@ -70,6 +83,7 @@ def test_remote_broadcast_materializes_agent_owned_wording(tmp_path: Path):
         records = notifications.list_for_product("bke-render-dock")
         assert len(records) == 1
         assert records[0].code is NotificationCode.FREE_SUPPORT_ENDED
+        assert records[0].delivery_mode is NotificationDeliveryMode.ONCE
         presentation = notifications.presentation(records[0].code)
         assert presentation.title == "Free support period ended"
         assert "complimentary support" in presentation.body.lower()
@@ -79,6 +93,21 @@ def test_remote_broadcast_materializes_agent_owned_wording(tmp_path: Path):
             "version": "1.0.2",
         }
         assert session.calls[0][1]["allow_redirects"] is False
+
+
+def test_every_launch_delivery_mode_is_persisted(tmp_path: Path):
+    with Database(tmp_path / "agent.db") as database:
+        notifications = AgentNotificationService(database)
+        sync = ProductBroadcastSynchronizer(
+            notifications,
+            platform_base_url="https://jl-bke.com",
+            session=_Session(_payload(delivery_mode="EVERY_LAUNCH")),
+        )
+
+        sync.sync("bke-render-dock", "1.0.2")
+
+        record = notifications.list_for_product("bke-render-dock")[0]
+        assert record.delivery_mode is NotificationDeliveryMode.EVERY_LAUNCH
 
 
 def test_same_broadcast_preserves_state_but_republish_rearms_unread(tmp_path: Path):
@@ -112,6 +141,28 @@ def test_same_broadcast_preserves_state_but_republish_rearms_unread(tmp_path: Pa
         current = notifications.list_for_product("bke-render-dock")[0]
         assert current.notification_id != first.notification_id
         assert current.state == "unread"
+
+
+def test_withdrawn_remote_campaign_is_deactivated_locally(tmp_path: Path):
+    with Database(tmp_path / "agent.db") as database:
+        notifications = AgentNotificationService(database)
+        sync = ProductBroadcastSynchronizer(
+            notifications,
+            platform_base_url="https://jl-bke.com",
+            session=_Session(_payload(delivery_mode="EVERY_LAUNCH")),
+        )
+        sync.sync("bke-render-dock", "1.0.2")
+        assert len(notifications.list_for_product("bke-render-dock")) == 1
+
+        sync.session = _Session(_empty_payload())
+        sync.sync("bke-render-dock", "1.0.2")
+
+        assert notifications.list_for_product("bke-render-dock") == ()
+        dismissed = notifications.list_for_product(
+            "bke-render-dock", include_dismissed=True
+        )
+        assert len(dismissed) == 1
+        assert dismissed[0].state == "dismissed"
 
 
 def test_remote_authority_cannot_invent_notification_code(tmp_path: Path):
