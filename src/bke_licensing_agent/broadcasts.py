@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
+from enum import StrEnum
 from uuid import UUID
 
 import requests
 
-from .notifications import (
-    AgentNotificationService,
-    NotificationCode,
-    NotificationDeliveryMode,
-    NotificationSeverity,
-)
+from .notifications import AgentNotificationService, NotificationCode, NotificationSeverity
 
 
 _REMOTE_CODES = {
@@ -21,6 +18,11 @@ _REMOTE_CODES = {
     NotificationCode.FREE_SUPPORT_ENDED,
     NotificationCode.LICENSE_RENEWAL_REQUIRED,
 }
+
+
+class BroadcastDeliveryMode(StrEnum):
+    ONCE = "ONCE"
+    EVERY_LAUNCH = "EVERY_LAUNCH"
 
 
 class ProductBroadcastSyncError(RuntimeError):
@@ -49,6 +51,12 @@ class ProductBroadcastSynchronizer:
         self.notifications = notifications
         self.platform_base_url = base
         self.session = session or requests.Session()
+        self._delivery_lock = threading.RLock()
+        self._every_launch_ids: dict[str, set[str]] = {}
+
+    def is_every_launch(self, product_id: str, notification_id: str) -> bool:
+        with self._delivery_lock:
+            return notification_id in self._every_launch_ids.get(product_id, set())
 
     def sync(self, product_id: str, version: str) -> ProductBroadcastSyncResult:
         response = self.session.get(
@@ -82,6 +90,7 @@ class ProductBroadcastSynchronizer:
 
         materialized = 0
         seen_codes: set[NotificationCode] = set()
+        every_launch_ids: set[str] = set()
         for raw in broadcasts:
             if not isinstance(raw, dict):
                 raise ProductBroadcastSyncError("invalid product broadcast item")
@@ -104,7 +113,7 @@ class ProductBroadcastSynchronizer:
             if priority not in {"LOW", "NORMAL", "HIGH", "URGENT"}:
                 raise ProductBroadcastSyncError("invalid product broadcast priority")
             try:
-                delivery_mode = NotificationDeliveryMode(str(raw.get("deliveryMode", "ONCE")))
+                delivery_mode = BroadcastDeliveryMode(str(raw.get("deliveryMode", "ONCE")))
             except ValueError as exc:
                 raise ProductBroadcastSyncError("invalid product broadcast delivery mode") from exc
             published_at = raw.get("publishedAt")
@@ -120,14 +129,15 @@ class ProductBroadcastSynchronizer:
                 if priority in {"HIGH", "URGENT"}
                 else NotificationSeverity.INFORMATION
             )
-            self.notifications.ensure_broadcast(
+            record = self.notifications.ensure_broadcast(
                 broadcast_id=broadcast_id,
                 product_id=product_id,
                 code=code,
                 severity=severity,
                 expires_at=ends_at,
-                delivery_mode=delivery_mode,
             )
+            if delivery_mode is BroadcastDeliveryMode.EVERY_LAUNCH:
+                every_launch_ids.add(record.notification_id)
             seen_codes.add(code)
             materialized += 1
 
@@ -135,5 +145,7 @@ class ProductBroadcastSynchronizer:
             code.value for code in _REMOTE_CODES if code not in seen_codes
         )
         self.notifications.database.deactivate_notifications_for_codes(product_id, missing_codes)
+        with self._delivery_lock:
+            self._every_launch_ids[product_id] = every_launch_ids
 
         return ProductBroadcastSyncResult(fetched=len(broadcasts), materialized=materialized)
