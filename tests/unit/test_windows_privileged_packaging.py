@@ -22,12 +22,16 @@ def test_windows_installer_stops_before_replace_and_waits_for_restart():
     assert "CompleteServiceStopForUpgrade" in source
     assert "Get-CimInstance -ClassName Win32_Service" in source
     assert "Where-Object Name -EQ ''{#ServiceName}''" in source
+    assert "Stop-Service -Name ''{#ServiceName}''" in source
+    assert "Get-Process -Id $servicePid -ErrorAction SilentlyContinue" in source
+    assert "$processGone" in source
     assert "Stop-Process -Id $servicePid -Force" in source
+    assert source.index("$servicePid=[int]$legacy.ProcessId") < source.index("Stop-Service -Name")
     assert "taskkill.exe" in source
     assert "/IM bke-license-center.exe" in source
     assert "CloseApplications=yes" in source
     assert "RestartApplications=no" in source
-    assert "stopped before payload replacement" in source
+    assert "process exited before payload replacement" in source
     assert "running after payload replacement" in source
 
 
