@@ -28,8 +28,6 @@ def _run_windows_interactive(
     if not arguments:
         raise OSError("License Center command is empty")
 
-    # Keep all Windows-only imports inside the Windows execution path so the
-    # package remains importable and testable on macOS/Linux.
     import ctypes
     from ctypes import wintypes
 
@@ -142,9 +140,6 @@ def _run_windows_interactive(
         ):
             raise windows_error("Could not launch License Center in the active Windows session")
 
-        # The Agent endpoint is typed around the License Center terminal exit
-        # code, so wait for the UI to finish and preserve the established
-        # 0=refreshed, 2=cancelled, 3=activation-failed mapping.
         WAIT_FAILED = 0xFFFFFFFF
         INFINITE = 0xFFFFFFFF
         if kernel32.WaitForSingleObject(process_info.hProcess, INFINITE) == WAIT_FAILED:
@@ -191,9 +186,6 @@ class NativeLicenseCenterLauncher:
         name = "bke-license-center.exe" if sys.platform == "win32" else "bke-license-center"
         agent_dir = Path(sys.executable).resolve().parent
 
-        # Windows service payload: {app}/service/<service.exe>
-        # Windows GUI payload:     {app}/license-center/bke-license-center.exe
-        # macOS/Linux frozen layout continues to use bke-license-center/.
         if sys.platform == "win32":
             candidates = (
                 agent_dir / name,
@@ -212,13 +204,16 @@ class NativeLicenseCenterLauncher:
         if not self.executable.is_file():
             return self._result(request, LicenseCenterOutcome.AGENT_UNAVAILABLE,
                                 "native License Center is not installed")
-        arguments: Sequence[str] = (
+        arguments = [
             str(self.executable), "--product-id", request.product_id,
             "--product-version", request.product_version,
             "--installation-id", request.safe_context["installation_id"] if request.safe_context else "",
             "--correlation-id", request.correlation_id,
             "--action", request.action.value,
-        )
+        ]
+        notification_code = request.safe_context.get("notification_code") if request.safe_context else None
+        if isinstance(notification_code, str) and notification_code:
+            arguments.extend(("--notification-code", notification_code))
         try:
             completed = self.runner(arguments, shell=False, check=False)
         except (OSError, ValueError):
