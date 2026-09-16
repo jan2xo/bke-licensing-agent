@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timezone
 
 from .notification_local_api import NotificationLocalAuthorizationServer
-from .notifications import AgentNotificationService
+from .notifications import AgentNotificationService, NotificationCode
 from .runtime import InstalledAgentRuntime
 
 
@@ -23,9 +23,12 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
     def _valid_product_context(self, request: dict[str, object]) -> bool:
         product_id = request.get("product_id")
         version = request.get("version")
+        installation_id = request.get("installation_id")
         return (
             isinstance(product_id, str)
             and isinstance(version, str)
+            and isinstance(installation_id, str)
+            and bool(installation_id)
             and self._validated_product(product_id, version) is not None
         )
 
@@ -39,15 +42,46 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
         except ValueError:
             return False
 
+    def _visible_notifications(
+        self,
+        request: dict[str, object],
+        *,
+        include_dismissed: bool,
+        limit: int,
+    ):
+        product_id = str(request["product_id"])
+        version = str(request["version"])
+        installation_id = str(request["installation_id"])
+        records = self.notifications.list_for_product(
+            product_id,
+            include_dismissed=include_dismissed,
+            limit=limit,
+        )
+        authorization: dict[str, object] | None = None
+        visible = []
+        for record in records:
+            if not self._not_expired(record.expires_at):
+                continue
+            if record.code is NotificationCode.LICENSE_REQUIRED:
+                if authorization is None:
+                    authorization = self.authorize({
+                        "product_id": product_id,
+                        "version": version,
+                        "installation_id": installation_id,
+                    })
+                if authorization.get("authorized") is True or authorization.get("reason") != "activation_required":
+                    continue
+            visible.append(record)
+        return visible
+
     def notification_feed(self, request: dict[str, object]) -> dict[str, object]:
         if not self._valid_product_context(request):
             return self._error("InvalidRequest", "The notification product context is invalid.")
 
-        product_id = str(request["product_id"])
         limit = int(request["limit"])
         include_dismissed = bool(request["include_dismissed"])
-        records = self.notifications.list_for_product(
-            product_id,
+        records = self._visible_notifications(
+            request,
             include_dismissed=include_dismissed,
             limit=limit,
         )
@@ -56,8 +90,6 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
         state_names = {"unread": "Unread", "read": "Read", "dismissed": "Dismissed"}
         severity_names = {"information": "Information", "warning": "Warning"}
         for record in records:
-            if not self._not_expired(record.expires_at):
-                continue
             presentation = AgentNotificationService.presentation(record.code)
             items.append({
                 "id": record.notification_id,
@@ -118,9 +150,8 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
     def notification_unread_count(self, request: dict[str, object]) -> dict[str, object]:
         if not self._valid_product_context(request):
             return self._error("InvalidRequest", "The notification product context is invalid.")
-        product_id = str(request["product_id"])
-        records = self.notifications.list_for_product(product_id, include_dismissed=False, limit=200)
-        count = sum(1 for record in records if record.state == "unread" and self._not_expired(record.expires_at))
+        records = self._visible_notifications(request, include_dismissed=False, limit=200)
+        count = sum(1 for record in records if record.state == "unread")
         return {"status": "Succeeded", "count": count, "error": None}
 
     def serve_forever(self) -> None:
