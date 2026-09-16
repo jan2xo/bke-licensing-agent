@@ -25,6 +25,11 @@ class NotificationSeverity(StrEnum):
     WARNING = "warning"
 
 
+class NotificationDeliveryMode(StrEnum):
+    ONCE = "ONCE"
+    EVERY_LAUNCH = "EVERY_LAUNCH"
+
+
 @dataclass(frozen=True)
 class NotificationRecord:
     notification_id: str
@@ -34,6 +39,7 @@ class NotificationRecord:
     state: str
     created_at: str
     expires_at: str | None = None
+    delivery_mode: NotificationDeliveryMode = NotificationDeliveryMode.ONCE
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,7 @@ class AgentNotificationService:
             code=code.value,
             severity=severity.value,
             expires_at=expires_at,
+            delivery_mode=NotificationDeliveryMode.ONCE.value,
         )
         return self._record(row)
 
@@ -134,6 +141,7 @@ class AgentNotificationService:
         code: NotificationCode,
         severity: NotificationSeverity,
         expires_at: str | None,
+        delivery_mode: NotificationDeliveryMode,
     ) -> NotificationRecord:
         """Materialize one remote campaign and re-arm only when its broadcastId changes."""
         notification_id = str(uuid5(NAMESPACE_URL, f"bke-product-broadcast:{broadcast_id}"))
@@ -143,6 +151,7 @@ class AgentNotificationService:
             code=code.value,
             severity=severity.value,
             expires_at=expires_at,
+            delivery_mode=delivery_mode.value,
             replace_campaign=True,
         )
         return self._record(row)
@@ -170,4 +179,5 @@ class AgentNotificationService:
             state=str(row["state"]),
             created_at=str(row["created_at"]),
             expires_at=str(row["expires_at"]) if row.get("expires_at") is not None else None,
+            delivery_mode=NotificationDeliveryMode(str(row.get("delivery_mode", "ONCE"))),
         )
