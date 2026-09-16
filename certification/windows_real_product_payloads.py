@@ -25,7 +25,7 @@ from bke_licensing_agent.updates.orchestrator import UPDATE_PACKAGE_CONTENT_TYPE
 from bke_licensing_agent.updates.privileged_runtime import AgentPrivilegedRuntimeConfig
 
 CHANNEL = "stable"
-CURRENT_VERSION = "0.0.0"
+CURRENT_VERSION = "0"
 
 
 def _canonical(document: dict[str, object]) -> bytes:
