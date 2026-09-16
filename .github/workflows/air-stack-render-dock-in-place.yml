@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 45
     env:
       AIR_STACK_SHA: 1fd4756a99ebc253a0f402c3bd99da9a960729ce
-      RENDER_DOCK_SHA: 98653d9a9e8967caf74156ee77f5e5c6126aaee7
+      RENDER_DOCK_SHA: fb4a68aa6b1068924834c430652f66fc6d3b1984
     steps:
       - name: Checkout exact Agent candidate
         uses: actions/checkout@v4
