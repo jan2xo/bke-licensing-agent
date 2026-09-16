@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import servicemanager
 import sys
+import threading
 import win32event
 import win32service
 import win32serviceutil
 import win32timezone
 
+from bke_licensing_agent.config import get_data_dir, get_platform_base_url
 from bke_licensing_agent.runtime import InstalledAgentRuntime
+from bke_licensing_agent.self_update import AgentSelfUpdateCoordinator, CHECK_INTERVAL
 
 
 class LicensingAgentService(win32serviceutil.ServiceFramework):
@@ -21,19 +24,49 @@ class LicensingAgentService(win32serviceutil.ServiceFramework):
         super().__init__(args)
         self.stop_event = win32event.CreateEvent(None, 0, 0, None)
         self.runtime: InstalledAgentRuntime | None = None
+        self.self_update_stop = threading.Event()
+        self.self_update_thread: threading.Thread | None = None
 
     def SvcStop(self):  # noqa: N802
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        self.self_update_stop.set()
         if self.runtime is not None:
             self.runtime.close()
         win32event.SetEvent(self.stop_event)
 
+    def _run_self_update_loop(self) -> None:
+        coordinator = AgentSelfUpdateCoordinator(
+            state_root=get_data_dir(),
+            platform_base_url=get_platform_base_url(),
+        )
+        if self.self_update_stop.wait(5):
+            return
+        while not self.self_update_stop.is_set():
+            try:
+                outcome = coordinator.poll_once()
+                if outcome == "update_started":
+                    servicemanager.LogInfoMsg("BKE Licensing Agent self-update installer started")
+                elif outcome == "later":
+                    servicemanager.LogInfoMsg("BKE Licensing Agent self-update deferred by the active user")
+            except Exception as exc:
+                servicemanager.LogWarningMsg(f"BKE Licensing Agent self-update check failed: {exc}")
+            if self.self_update_stop.wait(CHECK_INTERVAL.total_seconds()):
+                return
+
     def SvcDoRun(self):  # noqa: N802
         servicemanager.LogInfoMsg("BKE Licensing Agent service starting")
+        self.self_update_stop.clear()
+        self.self_update_thread = threading.Thread(
+            target=self._run_self_update_loop,
+            daemon=True,
+            name="bke-agent-self-update",
+        )
+        self.self_update_thread.start()
         self.runtime = InstalledAgentRuntime()
         try:
             self.runtime.serve_forever()
         finally:
+            self.self_update_stop.set()
             self.runtime.close()
 
 
