@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 from .broadcasts import ProductBroadcastSynchronizer
 from .config import get_platform_base_url
 from .notification_local_api import NotificationLocalAuthorizationServer
-from .notifications import AgentNotificationService, NotificationCode
+from .notifications import (
+    AgentNotificationService,
+    NotificationCode,
+    NotificationDeliveryMode,
+)
 from .runtime import InstalledAgentRuntime
 
 
@@ -111,6 +115,11 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
         severity_names = {"information": "Information", "warning": "Warning"}
         for record in records:
             presentation = AgentNotificationService.presentation(record.code)
+            effective_state = (
+                "Unread"
+                if record.delivery_mode is NotificationDeliveryMode.EVERY_LAUNCH
+                else state_names.get(record.state, "Unread")
+            )
             items.append({
                 "id": record.notification_id,
                 "source": "bke-licensing-agent",
@@ -120,7 +129,7 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
                 "severity": severity_names.get(record.severity.value, "Information"),
                 "created_at": record.created_at,
                 "expires_at": record.expires_at,
-                "state": state_names.get(record.state, "Unread"),
+                "state": effective_state,
                 "delivery_mode": record.delivery_mode.value,
                 "actions": [],
             })
@@ -173,7 +182,12 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
             return self._error("InvalidRequest", "The notification product context is invalid.")
         self._sync_product_broadcasts(request)
         records = self._visible_notifications(request, include_dismissed=False, limit=200)
-        count = sum(1 for record in records if record.state == "unread")
+        count = sum(
+            1
+            for record in records
+            if record.state == "unread"
+            or record.delivery_mode is NotificationDeliveryMode.EVERY_LAUNCH
+        )
         return {"status": "Succeeded", "count": count, "error": None}
 
     def serve_forever(self) -> None:
