@@ -43,6 +43,7 @@ from .local_api import LocalAuthorizationServer
 from .license_center.native_launcher import NativeLicenseCenterLauncher
 from .license_center.service import LicenseCenterAction, LicenseCenterService, OpenLicenseCenterRequest
 from .manifest.validator import validate_manifest
+from .notifications import AgentNotificationService, NotificationCode
 from .storage.database import Database
 from .storage.models import DiscoveredProductRecord
 from .updates.capability import from_discovery, invalid_request
@@ -82,6 +83,7 @@ class InstalledAgentRuntime:
                  module_server: ModuleLaunchPipeServer | None = None):
         self.database = database or Database()
         self.repository = VerifiedLicenseRepository(self.database)
+        self.notifications = AgentNotificationService(self.database)
         self.fingerprint = DeviceFingerprint()
         self.device_id = self.fingerprint.calculate()
         self.port = port if port is not None else get_agent_port()
@@ -275,6 +277,35 @@ class InstalledAgentRuntime:
         except Exception:
             return {"authorized": False, "reason": "unverifiable_signed_lease"}
 
+    def request_notification(self, request: dict[str, str]) -> dict[str, object]:
+        """Materialize only notices that current Agent authority can prove are true."""
+        product_id = request["product_id"]
+        version = request["version"]
+        installation_id = request["installation_id"]
+        try:
+            code = NotificationCode(request["code"])
+        except ValueError:
+            return {"status": "rejected", "reason": "unsupported_notification_code"}
+        if code is not NotificationCode.LICENSE_REQUIRED:
+            return {"status": "rejected", "reason": "unsupported_notification_code"}
+        if self._validated_product(product_id, version) is None:
+            return {"status": "rejected", "reason": "invalid_product_context"}
+        decision = self.authorize({
+            "product_id": product_id,
+            "version": version,
+            "installation_id": installation_id,
+        })
+        if decision.get("authorized") is True:
+            return {"status": "rejected", "reason": "product_already_authorized"}
+        if decision.get("reason") != "activation_required":
+            return {"status": "rejected", "reason": "notification_not_authoritative"}
+        record = self.notifications.ensure(product_id, code)
+        return {
+            "status": "accepted",
+            "notification_id": record.notification_id,
+            "code": record.code.value,
+        }
+
     def _authorize_bundle_source(self, policy: BundlePolicy,
                                  installation_id: str) -> LaunchAuthorizationDecision:
         """Freshly re-evaluate the signed local Air Stack lease for each module launch."""
@@ -391,16 +422,26 @@ class InstalledAgentRuntime:
     def open_license_center(self, request: dict[str, str]) -> dict[str, object]:
         product_id = request["product_id"]
         version = request["version"]
+        installation_id = request["installation_id"]
         manifest = self._validated_product(product_id, version)
         correlation_id = request.get("correlation_id") or str(uuid.uuid4())
         if manifest is None:
             return {"outcome": "invalid_product_context", "reason": "invalid product context",
                     "correlation_id": correlation_id, "authorization_changed": False}
+        notice = self.request_notification({
+            "product_id": product_id,
+            "version": version,
+            "installation_id": installation_id,
+            "code": NotificationCode.LICENSE_REQUIRED.value,
+        })
+        safe_context = {"installation_id": installation_id}
+        if notice.get("status") == "accepted":
+            safe_context["notification_code"] = str(notice["code"])
         typed = OpenLicenseCenterRequest(
             product_id=product_id, product_version=version,
             action=LicenseCenterAction.ACTIVATION_REQUIRED,
             correlation_id=correlation_id, manifest=manifest,
-            safe_context={"installation_id": request["installation_id"]},
+            safe_context=safe_context,
         )
         result = LicenseCenterService(NativeLicenseCenterLauncher()).open_license_center(typed)
         return result.model_dump()
@@ -413,6 +454,7 @@ class InstalledAgentRuntime:
         self._update_thread.start()
         with LocalAuthorizationServer(
             self.authorize, self.activate, self.open_license_center,
+            notification_request=self.request_notification,
             update_check=self.check_update_capability,
             open_update_center=self.open_update_center,
             port=self.port,
