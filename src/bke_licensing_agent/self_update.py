@@ -64,9 +64,12 @@ class AgentSelfUpdateCoordinator:
         if os.name != "nt":
             raise AgentSelfUpdateError("Agent self-update is currently supported only on Windows")
         machine = platform.machine().lower()
-        if machine not in {"amd64", "x86_64", "x64"}:
-            raise AgentSelfUpdateError("unsupported Agent architecture")
-        return "windows", "x86_64"
+        if machine in {"amd64", "x86_64", "x64", "arm64", "aarch64"}:
+            # Until a native ARM64 Agent package is published, Windows on ARM64
+            # intentionally consumes the existing x86_64 installer via Windows'
+            # x64 application emulation layer.
+            return "windows", "x86_64"
+        raise AgentSelfUpdateError("unsupported Agent architecture")
 
     @staticmethod
     def _validate_catalog_url(value: str) -> str:
