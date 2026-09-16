@@ -129,12 +129,24 @@ jobs:
         shell: pwsh
         run: |
           $work = Join-Path $env:RUNNER_TEMP 'bke-real-product-in-place'
+          $diagnostic = 'certification/air-stack-render-dock-in-place-diagnostic.log'
           python certification/windows_real_product_payloads.py `
             --package-dir certification/product-payloads/air-stack `
             --package-dir certification/product-payloads/render-dock `
             --helper dist/bke-updater-core.exe `
             --work-root $work `
-            --evidence certification/air-stack-render-dock-in-place-evidence.json
+            --evidence certification/air-stack-render-dock-in-place-evidence.json `
+            2>&1 | Tee-Object -FilePath $diagnostic
+          $certExit = $LASTEXITCODE
+          if ($certExit -ne 0) { exit $certExit }
+
+      - name: Upload real product certification diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: air-stack-render-dock-in-place-diagnostic
+          path: certification/air-stack-render-dock-in-place-diagnostic.log
+          if-no-files-found: warn
 
       - name: Upload exact product certification evidence
         uses: actions/upload-artifact@v4
