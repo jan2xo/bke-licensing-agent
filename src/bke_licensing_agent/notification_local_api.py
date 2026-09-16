@@ -68,6 +68,7 @@ class NotificationLocalAuthorizationServer(LocalAuthorizationServer):
             def _valid_context(body: dict[str, object]) -> bool:
                 product_id = body.get("product_id")
                 version = body.get("version")
+                installation_id = body.get("installation_id")
                 return (
                     isinstance(product_id, str)
                     and bool(product_id.strip())
@@ -75,6 +76,9 @@ class NotificationLocalAuthorizationServer(LocalAuthorizationServer):
                     and isinstance(version, str)
                     and bool(version.strip())
                     and len(version) <= 64
+                    and isinstance(installation_id, str)
+                    and bool(installation_id.strip())
+                    and len(installation_id) <= 256
                 )
 
             def do_POST(self):  # noqa: N802
@@ -101,7 +105,7 @@ class NotificationLocalAuthorizationServer(LocalAuthorizationServer):
                         if notification_feed is None:
                             self._inbox_failure(503, "ProviderUnavailable", "The notification provider is unavailable.", retryable=True)
                             return
-                        if set(body) != {"product_id", "version", "limit", "include_dismissed"}:
+                        if set(body) != {"product_id", "version", "installation_id", "limit", "include_dismissed"}:
                             self._inbox_failure(400, "InvalidRequest", "Invalid notification feed request.")
                             return
                         limit = body.get("limit")
@@ -115,7 +119,7 @@ class NotificationLocalAuthorizationServer(LocalAuthorizationServer):
                         if notification_unread_count is None:
                             self._inbox_failure(503, "ProviderUnavailable", "The notification provider is unavailable.", retryable=True)
                             return
-                        if set(body) != {"product_id", "version"}:
+                        if set(body) != {"product_id", "version", "installation_id"}:
                             self._inbox_failure(400, "InvalidRequest", "Invalid unread-count request.")
                             return
                         result = notification_unread_count(body)
@@ -125,7 +129,7 @@ class NotificationLocalAuthorizationServer(LocalAuthorizationServer):
                         if callback is None:
                             self._inbox_failure(503, "ProviderUnavailable", "The notification provider is unavailable.", retryable=True)
                             return
-                        if set(body) != {"product_id", "version", "notification_id"}:
+                        if set(body) != {"product_id", "version", "installation_id", "notification_id"}:
                             self._inbox_failure(400, "InvalidRequest", "Invalid notification lifecycle request.")
                             return
                         notification_id = body.get("notification_id")
