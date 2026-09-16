@@ -8,11 +8,7 @@ from datetime import datetime, timezone
 from .broadcasts import ProductBroadcastSynchronizer
 from .config import get_platform_base_url
 from .notification_local_api import NotificationLocalAuthorizationServer
-from .notifications import (
-    AgentNotificationService,
-    NotificationCode,
-    NotificationDeliveryMode,
-)
+from .notifications import AgentNotificationService, NotificationCode
 from .runtime import InstalledAgentRuntime
 
 
@@ -115,10 +111,9 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
         severity_names = {"information": "Information", "warning": "Warning"}
         for record in records:
             presentation = AgentNotificationService.presentation(record.code)
-            effective_state = (
-                "Unread"
-                if record.delivery_mode is NotificationDeliveryMode.EVERY_LAUNCH
-                else state_names.get(record.state, "Unread")
+            every_launch = self.product_broadcasts.is_every_launch(
+                record.product_id,
+                record.notification_id,
             )
             items.append({
                 "id": record.notification_id,
@@ -129,8 +124,8 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
                 "severity": severity_names.get(record.severity.value, "Information"),
                 "created_at": record.created_at,
                 "expires_at": record.expires_at,
-                "state": effective_state,
-                "delivery_mode": record.delivery_mode.value,
+                "state": "Unread" if every_launch else state_names.get(record.state, "Unread"),
+                "delivery_mode": "EVERY_LAUNCH" if every_launch else "ONCE",
                 "actions": [],
             })
 
@@ -186,7 +181,7 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
             1
             for record in records
             if record.state == "unread"
-            or record.delivery_mode is NotificationDeliveryMode.EVERY_LAUNCH
+            or self.product_broadcasts.is_every_launch(record.product_id, record.notification_id)
         )
         return {"status": "Succeeded", "count": count, "error": None}
 
