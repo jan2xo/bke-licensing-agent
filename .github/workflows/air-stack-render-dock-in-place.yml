@@ -1,0 +1,159 @@
+name: Air Stack Render Dock in-place package certification
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/air-stack-render-dock-in-place.yml'
+      - 'certification/windows_real_product_payloads.py'
+      - 'src/bke_licensing_agent/updates/**'
+      - 'packaging/windows/updater_core_entry.py'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-product-packages:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      AIR_STACK_SHA: 1fd4756a99ebc253a0f402c3bd99da9a960729ce
+      RENDER_DOCK_SHA: fb4a68aa6b1068924834c430652f66fc6d3b1984
+    steps:
+      - name: Checkout exact Agent candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Checkout exact Air Stack source
+        uses: actions/checkout@v4
+        with:
+          repository: jan2xo/BKE_AIR_STACK
+          ref: ${{ env.AIR_STACK_SHA }}
+          path: products/air-stack
+
+      - name: Checkout exact Render Dock source
+        uses: actions/checkout@v4
+        with:
+          repository: jan2xo/BKE_RENDER_DOCK
+          ref: ${{ env.RENDER_DOCK_SHA }}
+          path: products/render-dock
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up product .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Install exact Agent and freeze pinned Updater Core helper
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+          pyinstaller --clean --noconfirm --onefile `
+            --name bke-updater-core `
+            packaging/windows/updater_core_entry.py
+          if (!(Test-Path 'dist/bke-updater-core.exe')) { throw 'frozen Updater Core helper missing' }
+
+      - name: Build exact Air Stack updater package
+        shell: pwsh
+        run: |
+          $agentRoot = (Get-Location).Path
+          $airRoot = (Resolve-Path 'products/air-stack').Path
+          $publish = Join-Path $env:RUNNER_TEMP 'air-stack-publish'
+          $output = Join-Path $agentRoot 'certification/product-payloads/air-stack'
+          $manifest = Get-Content -LiteralPath (Join-Path $airRoot 'BKE AirStack/bke.manifest.json') -Raw | ConvertFrom-Json
+          Push-Location $airRoot
+          try {
+            dotnet publish 'BKE AirStack/BKE AirStack.csproj' `
+              -c Release `
+              -r win-x64 `
+              --self-contained true `
+              --output $publish `
+              -p:PublishSingleFile=false `
+              -p:PublishTrimmed=false `
+              -p:GenerateManifests=false `
+              -p:SignManifests=false `
+              -p:DebugType=None `
+              -p:DebugSymbols=false
+            if ($LASTEXITCODE -ne 0) { throw 'Air Stack updater publish failed.' }
+            Copy-Item -LiteralPath 'BKE AirStack/bke.manifest.json' -Destination (Join-Path $publish 'bke.manifest.json') -Force
+            ./scripts/build-updater-payload.ps1 `
+              -PublishDirectory $publish `
+              -OutputDirectory $output `
+              -Version ([string]$manifest.version)
+          }
+          finally { Pop-Location }
+          $metadata = Get-ChildItem -LiteralPath $output -Filter '*.update.json' | Select-Object -First 1
+          if ($null -eq $metadata) { throw 'Air Stack updater metadata missing.' }
+          Get-Content -LiteralPath $metadata.FullName
+
+      - name: Build exact Render Dock updater package
+        shell: pwsh
+        run: |
+          $agentRoot = (Get-Location).Path
+          $renderRoot = (Resolve-Path 'products/render-dock').Path
+          $output = Join-Path $agentRoot 'certification/product-payloads/render-dock'
+          Push-Location $renderRoot
+          try {
+            ./scripts/bootstrap-bke-sdk.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Render Dock BKE SDK bootstrap failed.' }
+            ./packaging/windows/publish.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Render Dock publish failed.' }
+            ./packaging/windows/build-updater-payload.ps1 `
+              -PublishDirectory './artifacts/publish/win-x64' `
+              -OutputDirectory $output
+          }
+          finally { Pop-Location }
+          $metadata = Get-ChildItem -LiteralPath $output -Filter '*.update.json' | Select-Object -First 1
+          if ($null -eq $metadata) { throw 'Render Dock updater metadata missing.' }
+          Get-Content -LiteralPath $metadata.FullName
+
+      - name: Verify exact product pins
+        shell: pwsh
+        run: |
+          $air = (git -C products/air-stack rev-parse HEAD).Trim()
+          $render = (git -C products/render-dock rev-parse HEAD).Trim()
+          if ($air -ne $env:AIR_STACK_SHA) { throw "Air Stack SHA drift: $air" }
+          if ($render -ne $env:RENDER_DOCK_SHA) { throw "Render Dock SHA drift: $render" }
+
+      - name: Certify real product packages through Agent signed staging and whole-tree replacement
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'bke-real-product-in-place'
+          $diagnostic = 'certification/air-stack-render-dock-in-place-diagnostic.log'
+          python certification/windows_real_product_payloads.py `
+            --package-dir certification/product-payloads/air-stack `
+            --package-dir certification/product-payloads/render-dock `
+            --helper dist/bke-updater-core.exe `
+            --work-root $work `
+            --evidence certification/air-stack-render-dock-in-place-evidence.json `
+            2>&1 | Tee-Object -FilePath $diagnostic
+          $certExit = $LASTEXITCODE
+          if ($certExit -ne 0) { exit $certExit }
+
+      - name: Upload real product certification diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: air-stack-render-dock-in-place-diagnostic
+          path: certification/air-stack-render-dock-in-place-diagnostic.log
+          if-no-files-found: warn
+
+      - name: Upload exact product certification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: air-stack-render-dock-in-place-evidence
+          path: |
+            certification/air-stack-render-dock-in-place-evidence.json
+            certification/product-payloads/air-stack/*.update.json
+            certification/product-payloads/render-dock/*.update.json
+          if-no-files-found: error
