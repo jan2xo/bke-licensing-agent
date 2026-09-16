@@ -11,7 +11,7 @@ import win32serviceutil
 import win32timezone
 
 from bke_licensing_agent.config import get_data_dir, get_platform_base_url
-from bke_licensing_agent.runtime import InstalledAgentRuntime
+from bke_licensing_agent.notification_runtime import NotificationEnabledAgentRuntime
 from bke_licensing_agent.self_update import AgentSelfUpdateCoordinator, CHECK_INTERVAL
 
 
@@ -23,7 +23,7 @@ class LicensingAgentService(win32serviceutil.ServiceFramework):
     def __init__(self, args):
         super().__init__(args)
         self.stop_event = win32event.CreateEvent(None, 0, 0, None)
-        self.runtime: InstalledAgentRuntime | None = None
+        self.runtime: NotificationEnabledAgentRuntime | None = None
         self.self_update_stop = threading.Event()
         self.self_update_thread: threading.Thread | None = None
 
@@ -62,7 +62,7 @@ class LicensingAgentService(win32serviceutil.ServiceFramework):
             name="bke-agent-self-update",
         )
         self.self_update_thread.start()
-        self.runtime = InstalledAgentRuntime()
+        self.runtime = NotificationEnabledAgentRuntime()
         try:
             self.runtime.serve_forever()
         finally:
