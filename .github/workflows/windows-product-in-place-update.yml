@@ -1,0 +1,111 @@
+name: Windows product in-place update certification
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/windows-product-in-place-update.yml'
+      - 'certification/windows_product_in_place.py'
+      - 'src/bke_licensing_agent/updates/**'
+      - 'packaging/windows/updater_core_entry.py'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-product-in-place:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact Agent candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install exact Agent and test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+
+      - name: Run updater authority and staging regression tests
+        shell: pwsh
+        run: |
+          python -m pytest -q `
+            tests/unit/test_privileged_product_execution.py `
+            tests/unit/test_privileged_runtime.py `
+            tests/unit/test_installed_privileged_update.py `
+            tests/unit/test_update_staging.py
+
+      - name: Freeze the pinned Updater Core privileged helper
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm --onefile `
+            --name bke-updater-core `
+            packaging/windows/updater_core_entry.py
+          if (!(Test-Path 'dist/bke-updater-core.exe')) { throw 'frozen Updater Core helper missing' }
+
+      - name: Build deterministic disposable update probe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force certification/probe | Out-Null
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+              <AssemblyName>BKE.Update.Probe</AssemblyName>
+              <UseAppHost>true</UseAppHost>
+            </PropertyGroup>
+          </Project>
+          '@ | Set-Content -Encoding utf8 certification/probe/BKE.Update.Probe.csproj
+          @'
+          var root = AppContext.BaseDirectory;
+          var modePath = Path.Combine(root, "mode.txt");
+          var mode = File.Exists(modePath) ? File.ReadAllText(modePath).Trim() : "ready";
+          if (string.Equals(mode, "broken", StringComparison.OrdinalIgnoreCase))
+          {
+              Console.Error.WriteLine("BKE_UPDATE_PROBE_BROKEN");
+              return 42;
+          }
+          Console.WriteLine("BKE_UPDATER_READY");
+          Console.Out.Flush();
+          Thread.Sleep(TimeSpan.FromSeconds(1));
+          return 0;
+          '@ | Set-Content -Encoding utf8 certification/probe/Program.cs
+          dotnet publish certification/probe/BKE.Update.Probe.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -o certification/probe-publish
+          if (!(Test-Path 'certification/probe-publish/BKE.Update.Probe.exe')) { throw 'probe executable missing' }
+
+      - name: Execute real in-place replace and rollback certification
+        shell: pwsh
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'bke-product-in-place-certification'
+          python certification/windows_product_in_place.py `
+            --probe-publish certification/probe-publish `
+            --helper dist/bke-updater-core.exe `
+            --work-root $work
+          Copy-Item (Join-Path $work 'windows-product-in-place-evidence.json') certification/windows-product-in-place-evidence.json
+
+      - name: Upload product in-place certification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-product-in-place-update-evidence
+          path: certification/windows-product-in-place-evidence.json
+          if-no-files-found: error
