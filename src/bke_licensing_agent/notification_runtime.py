@@ -121,6 +121,7 @@ class NotificationEnabledAgentRuntime(InstalledAgentRuntime):
                 "created_at": record.created_at,
                 "expires_at": record.expires_at,
                 "state": state_names.get(record.state, "Unread"),
+                "delivery_mode": record.delivery_mode.value,
                 "actions": [],
             })
 
