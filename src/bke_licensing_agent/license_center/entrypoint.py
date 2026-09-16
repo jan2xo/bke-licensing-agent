@@ -7,6 +7,7 @@ from tkinter import ttk
 from urllib.request import Request, urlopen
 
 from ..config import get_agent_port
+from ..notifications import AgentNotificationService, NotificationCode
 
 
 _STATUS_ROWS = (
@@ -71,19 +72,32 @@ def build_standalone_window(root: tk.Tk) -> None:
     ).pack(anchor="w", pady=(14, 0))
 
 
-def _activation_window(product_id: str, version: str, installation_id: str) -> int:
+def _activation_window(
+    product_id: str, version: str, installation_id: str,
+    notification_code: NotificationCode | None = None,
+) -> int:
     """Run the Agent-owned activation UI; return 0 on success or 2 on cancel."""
     root = tk.Tk()
     root.title("BKE License Center")
     root.minsize(520, 300)
     outcome = {"code": 2}
-    status = tk.StringVar(value="Enter the license key for this product.")
+    if notification_code is None:
+        initial_status = "Enter the license key for this product."
+    else:
+        presentation = AgentNotificationService.presentation(notification_code)
+        initial_status = f"{presentation.body} Enter a license key to activate."
+    status = tk.StringVar(value=initial_status)
     key = tk.StringVar()
 
     frame = ttk.Frame(root, padding=24)
     frame.pack(fill="both", expand=True)
     ttk.Label(frame, text="BKE License Center", font=("TkDefaultFont", 20, "bold")).pack(anchor="w")
     ttk.Label(frame, text=f"Activate {product_id} version {version}").pack(anchor="w", pady=(4, 18))
+    if notification_code is not None:
+        presentation = AgentNotificationService.presentation(notification_code)
+        notice = ttk.LabelFrame(frame, text=presentation.title, padding=12)
+        notice.pack(fill="x", pady=(0, 14))
+        ttk.Label(notice, text=presentation.body, wraplength=450, justify="left").pack(anchor="w")
     ttk.Entry(frame, textvariable=key, show="*").pack(fill="x")
     ttk.Label(frame, textvariable=status, wraplength=460).pack(anchor="w", pady=12)
 
@@ -136,6 +150,7 @@ def main() -> int:
     parser.add_argument("--installation-id")
     parser.add_argument("--correlation-id")
     parser.add_argument("--action")
+    parser.add_argument("--notification-code")
     args, _unknown = parser.parse_known_args()
 
     if args.smoke:
@@ -146,7 +161,13 @@ def main() -> int:
     if any(context):
         if not all(context) or args.action != "activation_required":
             return 3
-        return _activation_window(args.product_id, args.product_version, args.installation_id)
+        try:
+            notification_code = NotificationCode(args.notification_code) if args.notification_code else None
+        except ValueError:
+            return 3
+        return _activation_window(
+            args.product_id, args.product_version, args.installation_id, notification_code
+        )
     root = tk.Tk()
     build_standalone_window(root)
     root.mainloop()
