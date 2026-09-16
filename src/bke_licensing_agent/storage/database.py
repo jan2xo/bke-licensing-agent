@@ -6,7 +6,7 @@ from collections.abc import Callable
 from ..config import get_database_path
 from .models import DiscoveredProductRecord
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -163,6 +163,22 @@ DROP TABLE verified_licenses
 """, """
 ALTER TABLE verified_licenses_v7 RENAME TO verified_licenses
 """),
+    8: ("""
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    dismissed_at TEXT,
+    UNIQUE(product_id, code)
+)
+""", """
+CREATE INDEX IF NOT EXISTS idx_notifications_product_state_created
+ON notifications(product_id, state, created_at DESC)
+"""),
 }
 
 
@@ -274,3 +290,55 @@ class Database:
             "SELECT * FROM discovered_products ORDER BY discovered_at DESC"
         )
         return [DiscoveredProductRecord.from_row(dict(row)) for row in cursor.fetchall()]
+
+    def ensure_notification(self, *, notification_id: str, product_id: str, code: str,
+                            severity: str, expires_at: str | None = None) -> dict[str, object]:
+        from datetime import datetime, timezone
+        created_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO notifications (
+                    id, product_id, code, severity, state, created_at, expires_at, dismissed_at
+                ) VALUES (?, ?, ?, ?, 'unread', ?, ?, NULL)
+                ON CONFLICT(product_id, code) DO UPDATE SET
+                    severity=excluded.severity,
+                    expires_at=excluded.expires_at
+                """,
+                (notification_id, product_id, code, severity, created_at, expires_at),
+            )
+            row = self.connection.execute(
+                "SELECT * FROM notifications WHERE product_id=? AND code=?",
+                (product_id, code),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("notification persistence failed")
+        return dict(row)
+
+    def list_notifications(self, product_id: str, *, include_dismissed: bool = False,
+                           limit: int = 50) -> list[dict[str, object]]:
+        if limit < 1 or limit > 200:
+            raise ValueError("notification limit must be between 1 and 200")
+        query = "SELECT * FROM notifications WHERE product_id=?"
+        values: list[object] = [product_id]
+        if not include_dismissed:
+            query += " AND state != 'dismissed'"
+        query += " ORDER BY created_at DESC LIMIT ?"
+        values.append(limit)
+        with self._lock:
+            rows = self.connection.execute(query, values).fetchall()
+        return [dict(row) for row in rows]
+
+    def dismiss_notification(self, notification_id: str) -> bool:
+        from datetime import datetime, timezone
+        dismissed_at = datetime.now(timezone.utc).isoformat()
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                """
+                UPDATE notifications
+                SET state='dismissed', dismissed_at=?
+                WHERE id=? AND state != 'dismissed'
+                """,
+                (dismissed_at, notification_id),
+            )
+        return cursor.rowcount == 1

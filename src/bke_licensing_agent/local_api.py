@@ -20,6 +20,8 @@ MAX_JSON_BODY_BYTES = 32_768
 MAX_CHUNK_LINE_BYTES = 8_192
 UPDATE_CAPABILITY_ID = "bke.updates.check"
 UPDATE_CONTRACT_VERSION = 1
+NOTIFICATION_CAPABILITY_ID = "bke.notifications.typed"
+NOTIFICATION_CONTRACT_VERSION = 1
 
 
 class LocalAuthorizationServer:
@@ -31,12 +33,14 @@ class LocalAuthorizationServer:
         update_check: Callable[[dict[str, str]], dict[str, object]] | None = None,
         open_update_center: Callable[[dict[str, str]], dict[str, object]] | None = None,
         port: int = 0,
+        notification_request: Callable[[dict[str, str]], dict[str, object]] | None = None,
     ):
         self._authorize = authorize
         self._activate = activate
         self._open_license_center = open_license_center
         self._update_check = update_check
         self._open_update_center = open_update_center
+        self._notification_request = notification_request
         self._server = ThreadingHTTPServer(("127.0.0.1", port), self._handler())
         self._thread: Thread | None = None
 
@@ -46,6 +50,7 @@ class LocalAuthorizationServer:
         open_license_center = self._open_license_center
         update_check = self._update_check
         open_update_center = self._open_update_center
+        notification_request = self._notification_request
 
         class Handler(BaseHTTPRequestHandler):
             def _json(self, status: int, body: dict[str, object]) -> None:
@@ -65,6 +70,16 @@ class LocalAuthorizationServer:
                     "status": "Failed",
                     "available_version": None,
                     "error": {"code": code, "message": message, "retryable": retryable},
+                })
+
+            def _notification_failure(self, status: int, reason: str) -> None:
+                self._json(status, {
+                    "capability_id": NOTIFICATION_CAPABILITY_ID,
+                    "contract_version": NOTIFICATION_CONTRACT_VERSION,
+                    "status": "rejected",
+                    "notification_id": None,
+                    "code": None,
+                    "reason": reason,
                 })
 
             def _read_request_body(self) -> bytes | None:
@@ -206,6 +221,33 @@ class LocalAuthorizationServer:
                             "correlation_id": str(result.get("correlation_id", body["correlation_id"])),
                         })
                         return
+                    if self.path == "/v1/notifications/request":
+                        if notification_request is None:
+                            self._notification_failure(503, "notification_capability_unavailable")
+                            return
+                        allowed = {"product_id", "version", "installation_id", "code"}
+                        if set(body) != allowed:
+                            self._notification_failure(400, "invalid_notification_request")
+                            return
+                        limits = {"product_id": 128, "version": 64, "installation_id": 256, "code": 64}
+                        if not all(
+                            isinstance(body.get(key), str)
+                            and body[key].strip()
+                            and len(body[key]) <= limit
+                            for key, limit in limits.items()
+                        ):
+                            self._notification_failure(400, "invalid_notification_request")
+                            return
+                        result = notification_request({key: str(body[key]) for key in allowed})
+                        self._json(200, {
+                            "capability_id": NOTIFICATION_CAPABILITY_ID,
+                            "contract_version": NOTIFICATION_CONTRACT_VERSION,
+                            "status": str(result.get("status", "rejected")),
+                            "notification_id": result.get("notification_id") if isinstance(result.get("notification_id"), str) else None,
+                            "code": result.get("code") if isinstance(result.get("code"), str) else None,
+                            "reason": str(result.get("reason", "")),
+                        })
+                        return
                     if self.path == "/v1/updates/check":
                         if update_check is None:
                             self._update_failure(503, "ProviderUnavailable", "The update provider is unavailable.", retryable=True)
@@ -255,6 +297,8 @@ class LocalAuthorizationServer:
                 except Exception:
                     if self.path == "/v1/updates/check":
                         self._update_failure(400, "InvalidRequest", "Invalid BKE.Updater check request.")
+                    elif self.path == "/v1/notifications/request":
+                        self._notification_failure(400, "invalid_notification_request")
                     else:
                         self._json(400, {"authorized": False, "reason": "invalid_request"})
 
