@@ -13,6 +13,7 @@ class NotificationCode(StrEnum):
     """Codes the shipping Agent can safely materialize from authoritative state."""
 
     LICENSE_REQUIRED = "LICENSE_REQUIRED"
+    AGENT_UPDATE_AVAILABLE = "AGENT_UPDATE_AVAILABLE"
 
 
 class NotificationSeverity(StrEnum):
@@ -44,6 +45,10 @@ _PRESENTATION = {
             "This installation is not currently authorized. "
             "A commercial license is required to continue."
         ),
+    ),
+    NotificationCode.AGENT_UPDATE_AVAILABLE: NotificationPresentation(
+        title="BKE Licensing Agent update",
+        body="A newer BKE Licensing Agent release is available.",
     ),
 }
 
