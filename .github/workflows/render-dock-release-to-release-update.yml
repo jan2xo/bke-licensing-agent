@@ -78,6 +78,13 @@ jobs:
           if ($oldManifest.productId -ne 'bke-render-dock' -or $oldManifest.version -ne '1.0.1') { throw 'old Render Dock manifest mismatch' }
           if ($newManifest.productId -ne 'bke-render-dock' -or $newManifest.version -ne '1.0.2') { throw 'new Render Dock manifest mismatch' }
 
+      - name: Bootstrap Render Dock 1.0.2 canonical SDK packages
+        shell: pwsh
+        working-directory: render-dock-102
+        run: |
+          ./scripts/bootstrap-bke-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Render Dock 1.0.2 BKE SDK bootstrap failed' }
+
       - name: Publish exact Render Dock 1.0.1 and 1.0.2 trees
         shell: pwsh
         run: |
