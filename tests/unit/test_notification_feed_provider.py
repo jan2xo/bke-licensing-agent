@@ -23,10 +23,22 @@ def _manifest():
     })
 
 
+class _BroadcastPolicy:
+    def __init__(self):
+        self.every_launch_ids = set()
+
+    def sync(self, _product_id, _version):
+        return None
+
+    def is_every_launch(self, _product_id, notification_id):
+        return notification_id in self.every_launch_ids
+
+
 def _runtime(database: Database) -> NotificationEnabledAgentRuntime:
     runtime = object.__new__(NotificationEnabledAgentRuntime)
     runtime.database = database
     runtime.notifications = AgentNotificationService(database)
+    runtime.product_broadcasts = _BroadcastPolicy()
     runtime._validated_product = lambda product_id, version: (
         _manifest() if (product_id, version) == ("bke-render-dock", "1.0.2") else None
     )
@@ -59,6 +71,7 @@ def test_notification_inbox_feed_read_dismiss_and_unread_count(tmp_path: Path):
         assert item["title"] == "License required"
         assert "commercial license" in item["body"].lower()
         assert item["state"] == "Unread"
+        assert item["delivery_mode"] == "ONCE"
         assert item["category"] == "Licensing"
         assert item["severity"] == "Warning"
         assert item["actions"] == []
@@ -76,6 +89,28 @@ def test_notification_inbox_feed_read_dismiss_and_unread_count(tmp_path: Path):
         dismissed = runtime.notification_feed({**context, "limit": 50, "include_dismissed": True})["items"]
         assert len(dismissed) == 1
         assert dismissed[0]["state"] == "Dismissed"
+
+
+def test_every_launch_campaign_is_represented_as_unread_after_mark_read(tmp_path: Path):
+    with Database(tmp_path / "agent.db") as database:
+        runtime = _runtime(database)
+        notice = runtime.notifications.ensure("bke-render-dock", NotificationCode.FREE_SUPPORT_ENDED)
+        runtime.product_broadcasts.every_launch_ids.add(notice.notification_id)
+        context = _context()
+
+        first = runtime.notification_feed({**context, "limit": 50, "include_dismissed": False})
+        assert first["items"][0]["state"] == "Unread"
+        assert first["items"][0]["delivery_mode"] == "EVERY_LAUNCH"
+
+        assert runtime.notification_mark_read({**context, "notification_id": notice.notification_id}) == {
+            "status": "Succeeded", "error": None,
+        }
+        persisted = runtime.notifications.list_for_product("bke-render-dock")[0]
+        assert persisted.state == "read"
+
+        next_feed = runtime.notification_feed({**context, "limit": 50, "include_dismissed": False})
+        assert next_feed["items"][0]["state"] == "Unread"
+        assert runtime.notification_unread_count(context)["count"] == 1
 
 
 def test_license_required_is_suppressed_when_installation_is_now_authorized(tmp_path: Path):
