@@ -38,6 +38,13 @@ def _windows(monkeypatch):
     monkeypatch.setattr(self_update.platform, "machine", lambda: "AMD64")
 
 
+def test_windows_arm64_uses_x64_catalog_target(monkeypatch):
+    monkeypatch.setattr(self_update.os, "name", "nt")
+    monkeypatch.setattr(self_update.platform, "machine", lambda: "ARM64")
+
+    assert AgentSelfUpdateCoordinator._target() == ("windows", "x86_64")
+
+
 def test_zero_version_discovers_stable_one(monkeypatch, tmp_path: Path):
     _windows(monkeypatch)
     monkeypatch.setattr(self_update.requests, "get", lambda *args, **kwargs: _Response(_document()))
