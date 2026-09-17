@@ -159,7 +159,7 @@ jobs:
         run: |
           dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj `
             --configuration Release --runtime win-x64 --self-contained true `
-            -p:PublishSingleFile=true -p:AssemblyName=bke-licensing-agent-runtime -p:Version=${env:BRIDGE_VERSION} `
+            -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=${env:BRIDGE_VERSION} `
             --verbosity minimal `
             --output dist/windows/bke-licensing-agent-runtime
 
