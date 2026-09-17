@@ -291,13 +291,17 @@ static string LicenseCenterPage(string productId, string version, string install
         ["version"] = version,
         ["installation_id"] = installationId,
     });
-    return $$"""
+    var template = """
         <!doctype html><html><head><meta charset='utf-8'><title>BKE License Center</title>
         <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:560px;margin:48px auto;padding:24px}input,button{font-size:16px;padding:10px;width:100%;box-sizing:border-box;margin:6px 0}#status{white-space:pre-wrap}</style></head><body>
-        <h1>BKE License Center</h1><p>Activate <strong>{{safeProductId}}</strong> version {{safeVersion}} on this device.</p>
+        <h1>BKE License Center</h1><p>Activate <strong>__BKE_PRODUCT_ID__</strong> version __BKE_VERSION__ on this device.</p>
         <label>License key</label><input id='key' type='password' autocomplete='off' autofocus><button id='activate'>Activate License</button><p id='status'>Waiting for license key.</p>
-        <script>const context={{contextJson}};document.getElementById('activate').onclick=async()=>{const b=document.getElementById('activate'),s=document.getElementById('status'),k=document.getElementById('key');b.disabled=true;s.textContent='Activating…';try{const r=await fetch('/v1/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...context,license_key:k.value})});const d=await r.json();s.textContent=d.authorized?'Activation successful. Return to the product and refresh authorization.':('Activation failed: '+(d.reason||'denied'));if(d.authorized)k.value='';}catch(e){s.textContent='Activation failed: Agent unavailable';}finally{b.disabled=false;}};</script></body></html>
+        <script>const context=__BKE_CONTEXT__;document.getElementById('activate').onclick=async()=>{const b=document.getElementById('activate'),s=document.getElementById('status'),k=document.getElementById('key');b.disabled=true;s.textContent='Activating…';try{const r=await fetch('/v1/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...context,license_key:k.value})});const d=await r.json();s.textContent=d.authorized?'Activation successful. Return to the product and refresh authorization.':('Activation failed: '+(d.reason||'denied'));if(d.authorized)k.value='';}catch(e){s.textContent='Activation failed: Agent unavailable';}finally{b.disabled=false;}};</script></body></html>
         """;
+    return template
+        .Replace("__BKE_PRODUCT_ID__", safeProductId, StringComparison.Ordinal)
+        .Replace("__BKE_VERSION__", safeVersion, StringComparison.Ordinal)
+        .Replace("__BKE_CONTEXT__", contextJson, StringComparison.Ordinal);
 }
 
 static IResult NotificationInvalidRequest() =>
