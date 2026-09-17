@@ -38,8 +38,9 @@ builder.Services.AddSingleton<AuthorizationProvider>();
 builder.Services.AddSingleton<IAuthorizationService>(services => services.GetRequiredService<AuthorizationProvider>());
 builder.Services.AddSingleton<ActivationProvider>();
 builder.Services.AddSingleton<IActivationService>(services => services.GetRequiredService<ActivationProvider>());
+builder.Services.AddSingleton<LicenseCenterProvider>();
+builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetRequiredService<LicenseCenterProvider>());
 builder.Services.AddSingleton<UnavailableProviders>();
-builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<IUpdateService>(services => services.GetRequiredService<UnavailableProviders>());
 
@@ -112,11 +113,20 @@ app.Use(async (context, next) =>
     await next(context);
 });
 
-app.MapGet(LocalAgentContract.LicenseCenterBrowserPath, () =>
-    Results.Content(
-        "<!doctype html><html><body><h1>BKE License Center</h1><p>Generation 2 License Center provider is not migrated.</p></body></html>",
-        "text/html",
-        statusCode: StatusCodes.Status503ServiceUnavailable));
+app.MapGet(LocalAgentContract.LicenseCenterBrowserPath, (HttpRequest request) =>
+{
+    var productId = request.Query["product_id"].ToString();
+    var version = request.Query["version"].ToString();
+    var installationId = request.Query["installation_id"].ToString();
+    if (!ValidProductContext(productId, version, installationId))
+    {
+        return Results.Text("missing product context", statusCode: StatusCodes.Status400BadRequest);
+    }
+    return Results.Content(
+        LicenseCenterPage(productId, version, installationId),
+        "text/html; charset=utf-8",
+        statusCode: StatusCodes.Status200OK);
+});
 
 app.MapPost(LocalAgentContract.AuthorizePath, async (
     AuthorizeRequest request,
@@ -149,12 +159,12 @@ app.MapPost(LocalAgentContract.OpenLicenseCenterPath, async (
     ILicenseCenterService service,
     CancellationToken cancellationToken) =>
 {
-    if (!ValidProductContext(request.ProductId, request.Version, request.InstallationId) || string.IsNullOrWhiteSpace(request.CorrelationId))
+    if (!ValidProductContext(request.ProductId, request.Version, request.InstallationId) || !ValidCorrelationId(request.CorrelationId))
     {
-        return Results.Json(new { outcome = "failed", reason = "invalid_request" }, statusCode: 400);
+        return Results.Json(new { authorized = false, reason = "invalid_request" }, statusCode: 400);
     }
     var response = await service.OpenAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.RequestNotificationPath, async (
@@ -264,9 +274,31 @@ return 0;
 static bool ValidProductContext(string? productId, string? version, string? installationId) =>
     !string.IsNullOrWhiteSpace(productId) && !string.IsNullOrWhiteSpace(version) && !string.IsNullOrWhiteSpace(installationId);
 
+static bool ValidCorrelationId(string? correlationId) =>
+    !string.IsNullOrWhiteSpace(correlationId) && correlationId.All(character => character >= 32);
+
 static bool ValidNotificationContext(string? productId, string? version, string? installationId) =>
     ValidProductContext(productId, version, installationId) &&
     productId!.Length <= 128 && version!.Length <= 64 && installationId!.Length <= 256;
+
+static string LicenseCenterPage(string productId, string version, string installationId)
+{
+    var safeProductId = System.Net.WebUtility.HtmlEncode(productId);
+    var safeVersion = System.Net.WebUtility.HtmlEncode(version);
+    var contextJson = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
+    {
+        ["product_id"] = productId,
+        ["version"] = version,
+        ["installation_id"] = installationId,
+    });
+    return $$"""
+        <!doctype html><html><head><meta charset='utf-8'><title>BKE License Center</title>
+        <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:560px;margin:48px auto;padding:24px}input,button{font-size:16px;padding:10px;width:100%;box-sizing:border-box;margin:6px 0}#status{white-space:pre-wrap}</style></head><body>
+        <h1>BKE License Center</h1><p>Activate <strong>{{safeProductId}}</strong> version {{safeVersion}} on this device.</p>
+        <label>License key</label><input id='key' type='password' autocomplete='off' autofocus><button id='activate'>Activate License</button><p id='status'>Waiting for license key.</p>
+        <script>const context={{contextJson}};document.getElementById('activate').onclick=async()=>{const b=document.getElementById('activate'),s=document.getElementById('status'),k=document.getElementById('key');b.disabled=true;s.textContent='Activating…';try{const r=await fetch('/v1/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...context,license_key:k.value})});const d=await r.json();s.textContent=d.authorized?'Activation successful. Return to the product and refresh authorization.':('Activation failed: '+(d.reason||'denied'));if(d.authorized)k.value='';}catch(e){s.textContent='Activation failed: Agent unavailable';}finally{b.disabled=false;}};</script></body></html>
+        """;
+}
 
 static IResult NotificationInvalidRequest() =>
     Results.Json(new NotificationMutationResponse(
