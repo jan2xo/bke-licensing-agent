@@ -9,6 +9,7 @@ dotnet build dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.L
 dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release --no-build
 
 PYTHONPATH=src python dotnet/certification/python_dotnet_differential.py
+PYTHONPATH=src python dotnet/certification/authorization_differential.py
 python -m pytest -q \
   tests/unit/test_local_api.py \
   tests/unit/test_notifications.py \

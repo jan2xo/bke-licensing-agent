@@ -1,6 +1,7 @@
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 using BKE.LicensingAgent.Host;
+using BKE.LicensingAgent.Infrastructure;
 
 if (Environment.GetEnvironmentVariable("BKE_AGENT_VNEXT_ENABLE") != "1")
 {
@@ -33,8 +34,9 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.PropertyNamingPolicy = null;
 });
 
+builder.Services.AddSingleton<AuthorizationProvider>();
+builder.Services.AddSingleton<IAuthorizationService>(services => services.GetRequiredService<AuthorizationProvider>());
 builder.Services.AddSingleton<UnavailableProviders>();
-builder.Services.AddSingleton<IAuthorizationService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<IActivationService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<UnavailableProviders>());
@@ -125,7 +127,7 @@ app.MapPost(LocalAgentContract.AuthorizePath, async (
         return Results.Json(new { outcome = "failed", reason = "invalid_request" }, statusCode: 400);
     }
     var response = await service.AuthorizeAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.ActivatePath, async (
