@@ -132,27 +132,39 @@ jobs:
           Stop-Service -Name $env:SERVICE_NAME -Force
           (Get-Service -Name $env:SERVICE_NAME).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
 
-      - name: Publish stable .NET bootstrap and replaceable Gen2 runtime
+      - name: Prepare .NET runtime bridge publish directories
         shell: pwsh
         run: |
-          Remove-Item dist/windows/bke-licensing-agent-service -Recurse -Force
+          Remove-Item dist/windows/bke-licensing-agent-service -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item dist/windows/bke-licensing-agent-runtime -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
 
+      - name: Publish stable .NET bootstrap
+        shell: pwsh
+        run: |
           dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj `
             --configuration Release --runtime win-x64 --self-contained true `
             -p:PublishSingleFile=true -p:Version=${env:BRIDGE_VERSION} `
+            --verbosity minimal `
             --output dist/windows/bke-licensing-agent-service
 
+          if (!(Test-Path 'dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe')) {
+            Get-ChildItem dist/windows/bke-licensing-agent-service -Recurse -Force | Format-Table FullName
+            throw 'stable bootstrap service executable missing'
+          }
+
+      - name: Publish replaceable Gen2 runtime
+        shell: pwsh
+        run: |
           dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj `
             --configuration Release --runtime win-x64 --self-contained true `
             -p:PublishSingleFile=true -p:AssemblyName=bke-licensing-agent-runtime -p:Version=${env:BRIDGE_VERSION} `
+            --verbosity minimal `
             --output dist/windows/bke-licensing-agent-runtime
 
-          if (!(Test-Path 'dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe')) {
-            throw 'stable bootstrap service executable missing'
-          }
           if (!(Test-Path 'dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe')) {
+            Get-ChildItem dist/windows/bke-licensing-agent-runtime -Recurse -Force | Format-Table FullName
             throw 'replaceable Gen2 runtime executable missing'
           }
 
