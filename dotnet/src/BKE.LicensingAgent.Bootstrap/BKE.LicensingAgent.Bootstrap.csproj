@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <AssemblyName>BKE.LicensingAgent.Bootstrap</AssemblyName>
+    <AssemblyName>bke-licensing-agent-service</AssemblyName>
     <RootNamespace>BKE.LicensingAgent.Bootstrap</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
