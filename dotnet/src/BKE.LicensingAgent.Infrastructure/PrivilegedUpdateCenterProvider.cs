@@ -386,9 +386,9 @@ public sealed class PrivilegedUpdateCenterProvider
         WriteJson(Path.Combine(runtimeRoot, "trust.json"), trust);
 
         var updatePath = Path.Combine(runtimeRoot, "update-policy.json");
-        File.WriteAllText(updatePath, updatePolicy.GetRawText(), Encoding.UTF8);
+        File.WriteAllText(updatePath, updatePolicy.GetRawText(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         var targetPath = Path.Combine(runtimeRoot, "target-policy.json");
-        File.WriteAllText(targetPath, target.Raw.GetRawText(), Encoding.UTF8);
+        File.WriteAllText(targetPath, target.Raw.GetRawText(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         var runtimeArtifact = Path.Combine(runtimeRoot, "artifact.bin");
         File.Copy(artifact, runtimeArtifact, true);
 
@@ -901,7 +901,7 @@ public sealed class PrivilegedUpdateCenterProvider
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporary = path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(value), Encoding.UTF8);
+        File.WriteAllText(temporary, JsonSerializer.Serialize(value), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         File.Move(temporary, path, true);
     }
 
