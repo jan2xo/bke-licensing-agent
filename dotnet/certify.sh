@@ -10,8 +10,10 @@ dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertificati
 
 PYTHONPATH=src python dotnet/certification/python_dotnet_differential.py
 PYTHONPATH=src python dotnet/certification/authorization_differential.py
+PYTHONPATH=src python dotnet/certification/activation_differential.py
 python -m pytest -q \
   tests/unit/test_local_api.py \
   tests/unit/test_notifications.py \
   tests/unit/test_notification_feed_provider.py \
-  tests/unit/test_product_broadcast_sync.py
+  tests/unit/test_product_broadcast_sync.py \
+  tests/integration/test_platform_activation_http.py

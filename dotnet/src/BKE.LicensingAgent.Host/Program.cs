@@ -36,8 +36,9 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddSingleton<AuthorizationProvider>();
 builder.Services.AddSingleton<IAuthorizationService>(services => services.GetRequiredService<AuthorizationProvider>());
+builder.Services.AddSingleton<ActivationProvider>();
+builder.Services.AddSingleton<IActivationService>(services => services.GetRequiredService<ActivationProvider>());
 builder.Services.AddSingleton<UnavailableProviders>();
-builder.Services.AddSingleton<IActivationService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<IUpdateService>(services => services.GetRequiredService<UnavailableProviders>());
@@ -140,7 +141,7 @@ app.MapPost(LocalAgentContract.ActivatePath, async (
         return Results.Json(new { outcome = "failed", reason = "invalid_request" }, statusCode: 400);
     }
     var response = await service.ActivateAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.OpenLicenseCenterPath, async (
