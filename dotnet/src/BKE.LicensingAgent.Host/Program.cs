@@ -40,11 +40,14 @@ builder.Services.AddSingleton<ActivationProvider>();
 builder.Services.AddSingleton<IActivationService>(services => services.GetRequiredService<ActivationProvider>());
 builder.Services.AddSingleton<LicenseCenterProvider>();
 builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetRequiredService<LicenseCenterProvider>());
+builder.Services.AddSingleton<NotificationProvider>();
+builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<NotificationProvider>());
 builder.Services.AddSingleton<UnavailableProviders>();
-builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<UnavailableProviders>());
 builder.Services.AddSingleton<IUpdateService>(services => services.GetRequiredService<UnavailableProviders>());
 
 var app = builder.Build();
+
+app.UseMiddleware<NotificationEndpointMiddleware>();
 
 app.Use(async (context, next) =>
 {
@@ -179,7 +182,7 @@ app.MapPost(LocalAgentContract.RequestNotificationPath, async (
         return Results.Json(new { outcome = "failed", reason = "invalid_request" }, statusCode: 400);
     }
     var response = await service.RequestAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.NotificationFeedPath, async (
@@ -192,7 +195,7 @@ app.MapPost(LocalAgentContract.NotificationFeedPath, async (
         return NotificationInvalidRequest();
     }
     var response = await service.FeedAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.NotificationMarkReadPath, async (
@@ -206,7 +209,7 @@ app.MapPost(LocalAgentContract.NotificationMarkReadPath, async (
         return NotificationInvalidRequest();
     }
     var response = await service.MarkReadAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.NotificationDismissPath, async (
@@ -220,7 +223,7 @@ app.MapPost(LocalAgentContract.NotificationDismissPath, async (
         return NotificationInvalidRequest();
     }
     var response = await service.DismissAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.NotificationUnreadCountPath, async (
@@ -233,7 +236,7 @@ app.MapPost(LocalAgentContract.NotificationUnreadCountPath, async (
         return NotificationInvalidRequest();
     }
     var response = await service.UnreadCountAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.CheckUpdatesPath, async (

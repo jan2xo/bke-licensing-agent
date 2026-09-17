@@ -12,6 +12,7 @@ PYTHONPATH=src python dotnet/certification/python_dotnet_differential.py
 PYTHONPATH=src python dotnet/certification/authorization_differential.py
 PYTHONPATH=src python dotnet/certification/activation_differential.py
 PYTHONPATH=src python dotnet/certification/license_center_differential.py
+PYTHONPATH=src python dotnet/certification/notification_differential.py
 python -m pytest -q \
   tests/unit/test_local_api.py \
   tests/unit/test_license_center.py \
