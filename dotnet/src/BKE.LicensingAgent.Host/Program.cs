@@ -42,8 +42,9 @@ builder.Services.AddSingleton<LicenseCenterProvider>();
 builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetRequiredService<LicenseCenterProvider>());
 builder.Services.AddSingleton<NotificationProvider>();
 builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<NotificationProvider>());
+builder.Services.AddSingleton<UpdateProvider>();
+builder.Services.AddSingleton<IUpdateService>(services => services.GetRequiredService<UpdateProvider>());
 builder.Services.AddSingleton<UnavailableProviders>();
-builder.Services.AddSingleton<IUpdateService>(services => services.GetRequiredService<UnavailableProviders>());
 
 var app = builder.Build();
 
@@ -245,17 +246,18 @@ app.MapPost(LocalAgentContract.CheckUpdatesPath, async (
     CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.ProductId) || string.IsNullOrWhiteSpace(request.CurrentVersion) ||
-        request.ProductId.Length > 128 || request.CurrentVersion.Length > 64 || request.RequestedVersion?.Length > 64)
+        request.ProductId.Length > 128 || request.CurrentVersion.Length > 64 ||
+        (request.RequestedVersion is not null && (string.IsNullOrWhiteSpace(request.RequestedVersion) || request.RequestedVersion.Length > 64)))
     {
         return Results.Json(new UpdateCheckResponse(
             LocalAgentContract.UpdateCapabilityId,
             LocalAgentContract.UpdateContractVersion,
             "Failed",
             null,
-            new UpdateCapabilityError("InvalidRequest", "The update request is invalid.", false)), statusCode: 400);
+            new UpdateCapabilityError("InvalidRequest", "Invalid BKE.Updater check request.", false)), statusCode: 400);
     }
     var response = await service.CheckAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.OpenUpdateCenterPath, async (
