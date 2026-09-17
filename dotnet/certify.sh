@@ -14,6 +14,7 @@ PYTHONPATH=src python dotnet/certification/activation_differential.py
 PYTHONPATH=src python dotnet/certification/license_center_differential.py
 PYTHONPATH=src python dotnet/certification/notification_differential.py
 PYTHONPATH=src python dotnet/certification/update_differential.py
+PYTHONPATH=src python dotnet/certification/privileged_update_center_differential.py
 python -m pytest -q \
   tests/unit/test_local_api.py \
   tests/unit/test_license_center.py \
@@ -24,4 +25,8 @@ python -m pytest -q \
   tests/unit/test_product_broadcast_sync.py \
   tests/unit/test_update_capability.py \
   tests/unit/test_update_discovery.py \
+  tests/unit/test_installed_privileged_update.py \
+  tests/unit/test_privileged_runtime.py \
+  tests/unit/test_privileged_product_execution.py \
+  tests/unit/test_runtime.py \
   tests/integration/test_platform_activation_http.py

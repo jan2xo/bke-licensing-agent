@@ -43,7 +43,8 @@ builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetReq
 builder.Services.AddSingleton<NotificationProvider>();
 builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<NotificationProvider>());
 builder.Services.AddSingleton<UpdateProvider>();
-builder.Services.AddSingleton<IUpdateService>(services => services.GetRequiredService<UpdateProvider>());
+builder.Services.AddSingleton<PrivilegedUpdateCenterProvider>();
+builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
 builder.Services.AddSingleton<UnavailableProviders>();
 
 var app = builder.Build();
@@ -270,7 +271,7 @@ app.MapPost(LocalAgentContract.OpenUpdateCenterPath, async (
         return Results.Json(new { outcome = "failed", reason = "invalid_request" }, statusCode: 400);
     }
     var response = await service.OpenCenterAsync(request, cancellationToken);
-    return Results.Json(response, statusCode: 503);
+    return Results.Json(response, statusCode: 200);
 });
 
 await app.RunAsync();
