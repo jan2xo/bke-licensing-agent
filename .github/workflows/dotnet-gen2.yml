@@ -1,0 +1,45 @@
+name: .NET 10 Agent Gen2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/dotnet10-agent-gen2
+    paths:
+      - "dotnet/**"
+      - ".github/workflows/dotnet-gen2.yml"
+  pull_request:
+    paths:
+      - "dotnet/**"
+      - "src/bke_licensing_agent/local_api.py"
+      - "src/bke_licensing_agent/notification_local_api.py"
+      - "src/bke_licensing_agent/notification_runtime.py"
+      - "src/bke_licensing_agent/storage/database.py"
+      - "tests/unit/test_local_api.py"
+      - "tests/unit/test_notifications.py"
+      - "tests/unit/test_notification_feed_provider.py"
+      - "tests/unit/test_product_broadcast_sync.py"
+      - ".github/workflows/dotnet-gen2.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  gen2-contract-and-python-oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python oracle test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install ".[test]"
+
+      - name: Certify Gen2 contract against Python oracle
+        run: bash dotnet/certify.sh

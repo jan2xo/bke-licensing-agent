@@ -1,69 +1,86 @@
-# BKE Licensing Agent — .NET 10 vNext
+# BKE Licensing Agent .NET 10 Generation 2
 
-This directory is the Generation 2 Licensing Agent implementation.
+This directory contains the Generation 2 migration of the BKE Licensing Agent.
 
-The existing Python implementation remains the canonical shipping Generation 1 runtime until each capability has been migrated and independently certified. Do not move, delete, or silently replace the Python runtime during the migration.
+## Migration authority
 
-## Architecture rule
+Python at `feat/notification-feed-provider` commit `77bdcd0be364192a6c1adea073659c4a462ce0e7` is the frozen Generation 1 behavioral oracle for this migration wave. The shipping Python runtime is not replaced, deleted, or silently redirected by work in this directory.
 
-Each module must declare:
+The stale `refactor/dotnet10-agent-vnext` branch is archaeology only. Its useful composition-root and certification ideas are retained here because they were already present in the frozen Python baseline; the stale branch itself is not merged into Generation 2.
 
-- WHAT I NEED
-- WHAT I DO
-- WHAT I GIVE
+## Safety gate
 
-The host is a composition root only. It may wire capabilities, lifecycle, and adapters. It must not absorb licensing, update, discovery, trust, persistence, or UI business logic.
+The .NET host remains opt-in and refuses to start unless:
 
-## Current migration wave
+```text
+BKE_AGENT_VNEXT_ENABLE=1
+```
 
-This first wave freezes the existing product-facing loopback contract and introduces a .NET 10 host boundary without taking over production runtime behavior.
+This is a development/certification guard, not a stable-channel switch.
 
-The compatibility target remains:
+## Boundary rule
 
-- loopback host: `127.0.0.1`
-- default port: `43873`
-- `POST /v1/authorize`
-- `POST /v1/activate`
-- `POST /v1/license-center/open`
-- `POST /v1/updates/check`
-- `POST /v1/update-center/open`
-- legacy browser route: `GET /license-center`
+Every module must be describable as:
 
-The .NET host is intentionally guarded by `BKE_AGENT_VNEXT_ENABLE=1`. Until migrated providers exist, it fails closed. It must not be packaged as the production replacement yet.
+```text
+WHAT I NEED
+WHAT I DO
+WHAT I GIVE
+```
 
-## Module ownership
+The Host is a composition root. It owns loopback transport, lifecycle, dependency composition, and translation between HTTP and capability ports. It does not own licensing policy, notification policy, SQLite policy, update policy, Digital Solutions business rules, or interactive UI policy.
 
-### BKE.LicensingAgent.Contracts
+## Generation 2 module direction
 
-WHAT I NEED: nothing.
+```text
+BKE.LicensingAgent.Contracts      stable product-facing wire contracts
+BKE.LicensingAgent.Application    capability ports consumed by the Host
+BKE.LicensingAgent.Licensing      authorization/activation/lease policy (later wave)
+BKE.LicensingAgent.Notifications  typed notifications/broadcast policy (later wave)
+BKE.LicensingAgent.Updates        product + Agent update orchestration (later wave)
+BKE.LicensingAgent.Storage        schema-8 compatible persistence (later wave)
+BKE.LicensingAgent.Platform       outbound platform communication (later wave)
+BKE.LicensingAgent.Execution      privileged/process operations (later wave)
+BKE.LicensingAgent.LicenseCenter  interactive recovery presentation (later wave)
+BKE.LicensingAgent.Host           loopback composition boundary
+```
 
-WHAT I DO: define the stable loopback wire contract and typed DTOs.
+The capability projects are introduced only as their parity waves begin. Do not create fake wrappers that merely relocate Python behavior.
 
-WHAT I GIVE: route identities, capability identities, typed request/response shapes.
+## Current first-wave scope
 
-### BKE.LicensingAgent.Application
+The first Gen2 wave is deliberately narrow:
 
-WHAT I NEED: Contracts.
+- freeze the exact Python behavioral baseline;
+- inventory the current external/runtime contract in `contracts/gen1-baseline.json`;
+- bring the C# contract model up to the current licensing, update, typed-notification, and notification-inbox route set;
+- split the old monolithic runtime port into capability-oriented application ports;
+- retain fail-closed unavailable providers for capabilities not yet migrated;
+- explicitly enforce the known loopback request guardrails rather than relying silently on ASP.NET defaults;
+- certify the C# contract against the machine-readable inventory;
+- run Python-oracle compatibility checks beside the .NET certification.
 
-WHAT I DO: define the provider port implemented by Agent capabilities.
+This wave does **not** migrate licensing policy, SQLite reads/writes, broadcast synchronization, update execution, service IPC, packaging, or License Center UI.
 
-WHAT I GIVE: `ILicensingAgentRuntime`.
+## Frozen persistence invariant
 
-### BKE.LicensingAgent.Host
+Generation 1 currently uses SQLite schema version `8`. The notification campaign delivery mode is intentionally **not** persisted as a `delivery_mode` column in the `notifications` table. `EVERY_LAUNCH` is live campaign policy layered over schema 8.
 
-WHAT I NEED: Application + Contracts + concrete providers supplied by composition.
+A language migration alone is not authorization to bump the database schema.
 
-WHAT I DO: bind loopback HTTP, validate the guarded vNext startup, map stable routes to the runtime port.
+## Certification
 
-WHAT I GIVE: the local Agent process boundary.
+Run:
 
-## Migration gate
+```bash
+bash dotnet/certify.sh
+```
 
-A Python capability is replaced only after its .NET implementation passes:
+The certification must keep both sides visible during migration:
 
-1. module certification,
-2. contract/differential compatibility against the Generation 1 behavior where required,
-3. composition certification for declared consumers,
-4. exact candidate CI.
+```text
+PYTHON ORACLE ✅
+.NET GEN2 ✅
+```
 
-Only then may packaging switch that capability or the whole host to .NET 10.
+Only a later explicitly approved cutover wave may replace the shipping runtime or packaging.
