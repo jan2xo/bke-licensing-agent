@@ -491,7 +491,7 @@ public sealed class PrivilegedUpdateCenterProvider
         var capturePath = Environment.GetEnvironmentVariable("BKE_AGENT_VNEXT_PRIVILEGED_CAPTURE_PATH");
         if (_certificationMode && !string.IsNullOrWhiteSpace(capturePath))
         {
-            File.WriteAllText(capturePath, JsonSerializer.Serialize(command), Encoding.UTF8);
+            File.WriteAllText(capturePath, JsonSerializer.Serialize(command), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             return;
         }
         if (!OperatingSystem.IsWindows())
