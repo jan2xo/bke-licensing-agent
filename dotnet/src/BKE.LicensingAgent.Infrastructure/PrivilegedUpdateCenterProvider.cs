@@ -556,7 +556,7 @@ public sealed class PrivilegedUpdateCenterProvider
     {
         TargetPolicy? selected = null;
         foreach (var path in Directory.Exists(config.TargetPoliciesDir)
-                     ? Directory.EnumerateFiles(config.TargetPoliciesDir, "*.json").OrderBy(item => item, StringComparer.Ordinal)
+                     ? Directory.EnumerateFiles(config.TargetPoliciesDir, "*.json").OrderBy(item => item, StringComparer.Ordinal).ToArray()
                      : Array.Empty<string>())
         {
             try
