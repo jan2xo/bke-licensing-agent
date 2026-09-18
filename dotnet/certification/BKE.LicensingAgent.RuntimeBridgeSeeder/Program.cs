@@ -16,7 +16,6 @@ const string InstallationId = "runtime-bridge-installation";
 const string LicenseId = "runtime-bridge-license";
 const string LeaseId = "runtime-bridge-lease";
 const string KeyId = "runtime-bridge-state-key";
-const string FingerprintSchemaVersion = "bke-device-v1";
 const int ExpectedSchemaVersion = 8;
 
 if (!OperatingSystem.IsWindows())
@@ -282,7 +281,7 @@ static string CalculateDeviceFingerprint()
     var normalized =
         $"architecture={architecture}|os_version={release.Trim().ToLowerInvariant()}|platform={platform}";
     var digest = SHA256.HashData(
-        Encoding.UTF8.GetBytes($"{FingerprintSchemaVersion}|{normalized}"));
+        Encoding.UTF8.GetBytes($"bke-device-v1|{normalized}"));
     return Convert.ToHexString(digest).ToLowerInvariant();
 }
 
