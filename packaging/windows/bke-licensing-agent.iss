@@ -42,8 +42,8 @@ Source: "..\..\dist\windows\bke-licensing-agent-service\*"; DestDir: "{app}\serv
 Source: "..\..\dist\windows\bke-licensing-agent-runtime\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs ignoreversion
 ; Native .NET License Center, privileged updater, and provisioner are architecture-specific payloads.
 Source: "..\\..\\dist\\windows\\bke-license-center-x64\\*"; DestDir: "{app}\\license-center"; Flags: recursesubdirs ignoreversion
-Source: "..\\..\\dist\\windows\\bke-updater-core-x64\\bke-updater-core.exe"; DestDir: "{app}\\updater"; Flags: ignoreversion
-Source: "..\\..\\dist\\windows\\bke-privileged-provisioner-x64\\bke-privileged-provisioner.exe"; DestDir: "{app}\\provisioning"; Flags: ignoreversion
+Source: "..\\..\\dist\\windows\\bke-updater-core-x64\\*"; DestDir: "{app}\\updater"; Flags: recursesubdirs ignoreversion
+Source: "..\\..\\dist\\windows\\bke-privileged-provisioner-x64\\*"; DestDir: "{app}\\provisioning"; Flags: recursesubdirs ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-keys\*.pem"; DestDir: "{app}\provisioning\target-keys"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-policies\*.json"; DestDir: "{app}\provisioning\target-policies"; Flags: ignoreversion
 ; Phase 9 update-authority trust contains public verification keys only.
