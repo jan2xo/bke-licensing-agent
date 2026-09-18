@@ -674,7 +674,7 @@ jobs:
 
           dotnet publish dotnet/certification/BKE.LicensingAgent.RuntimeBridgeSeeder/BKE.LicensingAgent.RuntimeBridgeSeeder.csproj `
             --configuration Release --runtime win-x64 --self-contained true `
-            -p:PublishSingleFile=true --verbosity minimal `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true --verbosity minimal `
             --output dist/reboot-seeder-x64
           if ($LASTEXITCODE -ne 0) { throw 'x64 certification seeder publish failed' }
 
@@ -761,7 +761,7 @@ jobs:
         run: |
           dotnet publish dotnet/certification/BKE.LicensingAgent.RuntimeBridgeSeeder/BKE.LicensingAgent.RuntimeBridgeSeeder.csproj `
             --configuration Release --runtime win-arm64 --self-contained true `
-            -p:PublishSingleFile=true --verbosity minimal `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true --verbosity minimal `
             --output dist/reboot-seeder-arm64
           if ($LASTEXITCODE -ne 0) { throw 'ARM64 certification seeder publish failed' }
 
