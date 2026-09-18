@@ -151,7 +151,15 @@ jobs:
           $p=Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log") -Wait -PassThru
           if ($p.ExitCode -ne 0) { if (Test-Path $log) { Get-Content $log }; throw "installer failed: $($p.ExitCode)" }
 
-          $svc=Get-Service -Name $env:SERVICE_NAME -ErrorAction Stop
+          $svc=Get-Service -Name $env:SERVICE_NAME -ErrorAction SilentlyContinue
+          if ($null -eq $svc) {
+            if (Test-Path $log) {
+              Write-Host "===== INNO INSTALL LOG ====="
+              Get-Content $log
+              Write-Host "===== END INNO INSTALL LOG ====="
+            }
+            throw "BKE-Licensing-Agent service is missing after installer exit zero"
+          }
           $svc.WaitForStatus("Running",[TimeSpan]::FromSeconds(30))
           $root=Join-Path $env:ProgramFiles "BKE Digital Solutions\Licensing Agent"
 
