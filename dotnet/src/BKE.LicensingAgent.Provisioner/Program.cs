@@ -116,7 +116,7 @@ internal static class Program
         foreach (var path in Directory.EnumerateFiles(directory, "*.pem").OrderBy(value => value, StringComparer.Ordinal))
         {
             using var reader = new StreamReader(path, Encoding.ASCII, detectEncodingFromByteOrderMarks: true);
-            var pem = new PemReader(reader).ReadObject();
+            var pem = new OpenSslPemReader(reader).ReadObject();
             var key = pem switch
             {
                 Ed25519PublicKeyParameters direct => direct,
@@ -206,7 +206,7 @@ internal static class Program
         if (File.Exists(path))
         {
             using var reader = new StreamReader(path, Encoding.ASCII, detectEncodingFromByteOrderMarks: true);
-            var existing = new PemReader(reader).ReadObject();
+            var existing = new OpenSslPemReader(reader).ReadObject();
             var isEd25519 = existing is Ed25519PrivateKeyParameters ||
                             existing is AsymmetricCipherKeyPair pair && pair.Private is Ed25519PrivateKeyParameters;
             if (!isEd25519)
@@ -225,8 +225,8 @@ internal static class Program
         var temporary = path + "." + Guid.NewGuid().ToString("N");
         using (var stream = File.CreateText(temporary))
         {
-            var writer = new PemWriter(stream);
-            writer.WriteObject(new PemObject("PRIVATE KEY", privateInfo.GetEncoded()));
+            var writer = new OpenSslPemWriter(stream);
+            writer.WriteObject(new BouncyPemObject("PRIVATE KEY", privateInfo.GetEncoded()));
             stream.Flush();
         }
         File.Move(temporary, path);
