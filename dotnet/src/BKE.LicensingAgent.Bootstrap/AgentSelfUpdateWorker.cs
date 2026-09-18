@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -56,13 +57,14 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
     {
         var current = CurrentVersion();
         var currentVersion = SemanticVersion.Parse(current);
+        var targetArchitecture = TargetArchitecture();
         var platformBase = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
         if (!Uri.TryCreate(platformBase, UriKind.Absolute, out var origin) || origin.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("BKE_PLATFORM_BASE_URL must be HTTPS");
 
         var target = new UriBuilder(new Uri(origin, "/api/licensing-agent/update"))
         {
-            Query = $"version={Uri.EscapeDataString(current)}&platform=windows&architecture=x86_64",
+            Query = $"version={Uri.EscapeDataString(current)}&platform=windows&architecture={Uri.EscapeDataString(targetArchitecture.QueryValue)}",
         }.Uri;
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
@@ -125,7 +127,8 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
     {
         var directory = Path.Combine(RuntimeBridgeContract.DataRoot, "self-update", "downloads");
         Directory.CreateDirectory(directory);
-        var destination = Path.Combine(directory, $"BKE-Licensing-Agent-{offer.LatestVersion}-Windows-x64.exe");
+        var targetArchitecture = TargetArchitecture();
+        var destination = Path.Combine(directory, $"BKE-Licensing-Agent-{offer.LatestVersion}-Windows-{targetArchitecture.AssetSuffix}.exe");
         var temporary = destination + ".download";
         if (File.Exists(temporary)) File.Delete(temporary);
 
@@ -227,6 +230,15 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
         var version = Assembly.GetEntryAssembly()?.GetName().Version;
         return version is null ? "1.0.0" : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
     }
+
+    private static (string QueryValue, string AssetSuffix) TargetArchitecture() =>
+        RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.X64 => ("x86_64", "x64"),
+            Architecture.Arm64 => ("arm64", "arm64"),
+            _ => throw new PlatformNotSupportedException(
+                $"BKE Licensing Agent self-update does not support {RuntimeInformation.ProcessArchitecture} on Windows"),
+        };
 
     private static Uri ValidateCatalogUrl(string value)
     {
