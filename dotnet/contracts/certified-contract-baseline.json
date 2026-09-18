@@ -1,0 +1,224 @@
+{
+  "inventory_id": "bke.licensing-agent.certified-contract-baseline",
+  "inventory_version": 2,
+  "local_api": {
+    "contract_id": "bke.licensing-agent.local-api",
+    "contract_version": 1,
+    "bind_host": "127.0.0.1",
+    "default_port": 43873,
+    "max_json_body_bytes": 32768,
+    "max_chunk_line_bytes": 8192,
+    "response_cache_control": "no-store",
+    "routes": [
+      {
+        "method": "GET",
+        "path": "/license-center"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/authorize"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/activate"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/license-center/open"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/notifications/request"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/notifications/feed"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/notifications/mark-read"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/notifications/dismiss"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/notifications/unread-count"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/updates/check"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/update-center/open"
+      }
+    ],
+    "removed_product_update_routes": [
+      "/v1/updates/status",
+      "/v1/updates/refresh",
+      "/v1/updates/dismiss"
+    ],
+    "post_security": {
+      "content_type": "application/json",
+      "reject_browser_origin": true,
+      "accept_transfer_encoding": [
+        "chunked"
+      ],
+      "reject_content_length_with_transfer_encoding": true,
+      "require_content_length_when_not_chunked": true,
+      "reject_negative_or_invalid_content_length": true,
+      "reject_malformed_chunked_encoding": true,
+      "reject_oversized_body": true
+    }
+  },
+  "capabilities": {
+    "updates": {
+      "capability_id": "bke.updates.check",
+      "contract_version": 1
+    },
+    "typed_notifications": {
+      "capability_id": "bke.notifications.typed",
+      "contract_version": 1
+    },
+    "notification_inbox": {
+      "capability_id": "bke.notifications",
+      "contract_version": 1,
+      "feed_limit_min": 1,
+      "feed_limit_max": 200
+    },
+    "product_broadcasts": {
+      "capability_id": "bke.product-broadcasts",
+      "contract_version": 1,
+      "source": "bke-digital-solutions",
+      "delivery_modes": [
+        "ONCE",
+        "EVERY_LAUNCH"
+      ],
+      "remote_arbitrary_presentation_content_allowed": false
+    }
+  },
+  "notifications": {
+    "notification_is_entitlement": false,
+    "presentation_owner": "bke-licensing-agent",
+    "every_launch_semantics": "once per product process launch; provider/campaign policy; not persisted as a notifications.delivery_mode column",
+    "every_launch_read_behavior": "persisted read state may remain read while an active EVERY_LAUNCH campaign is exposed as Unread and counted unread on a later product launch",
+    "withdrawn_campaign_behavior": "deactivate locally",
+    "supported_remote_authority": "typed notification code only"
+  },
+  "storage": {
+    "engine": "sqlite",
+    "schema_version": 8,
+    "tables": {
+      "schema_version": [
+        "version"
+      ],
+      "discovered_products": [
+        "product_id",
+        "display_name",
+        "version",
+        "manifest_path",
+        "product_root",
+        "entry_point_path",
+        "discovered_at"
+      ],
+      "activation_cache": [
+        "product_id",
+        "license_id",
+        "device_id",
+        "activation_id",
+        "status",
+        "updated_at"
+      ],
+      "audit_events": [
+        "id",
+        "event_type",
+        "product_id",
+        "device_id",
+        "activation_id",
+        "result",
+        "created_at"
+      ],
+      "lease_metadata": [
+        "lease_id",
+        "product_id",
+        "installation_id",
+        "device_id",
+        "generation",
+        "status",
+        "issuer",
+        "issued_at",
+        "expires_at",
+        "key_id",
+        "last_verified_at",
+        "server_revision"
+      ],
+      "verified_licenses": [
+        "license_id",
+        "product_id",
+        "product_version",
+        "installation_id",
+        "device_id",
+        "lease_id",
+        "generation",
+        "server_revision",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "status",
+        "key_id",
+        "created_at",
+        "updated_at",
+        "signed_payload",
+        "signed_signature",
+        "signed_algorithm"
+      ],
+      "active_license_bindings": [
+        "product_id",
+        "installation_id",
+        "device_id",
+        "active_license_id",
+        "active_lease_id",
+        "generation",
+        "server_revision",
+        "binding_version",
+        "updated_at"
+      ],
+      "notifications": [
+        "id",
+        "product_id",
+        "code",
+        "severity",
+        "state",
+        "created_at",
+        "expires_at",
+        "dismissed_at"
+      ]
+    },
+    "forbidden_language_migration_side_effects": [
+      "automatic schema bump",
+      "database deletion",
+      "installation identity reset"
+    ]
+  },
+  "outbound_defaults": {
+    "https_required_outside_explicit_local_or_test": true,
+    "connect_timeout_seconds": 5,
+    "read_timeout_seconds": 15,
+    "retry_count": 2,
+    "retry_backoff_seconds": 0.25,
+    "product_broadcast_endpoint": "/api/licensing-agent/notifications",
+    "product_broadcast_redirects_allowed": false
+  },
+  "certification_lineage": {
+    "basis": "Certified local API, capability, wire, and schema contract frozen after Gen2 convergence",
+    "schema_version": 8,
+    "language_neutral": true
+  },
+  "convergence_guardrails": {
+    "stable_machine_contract_required": true,
+    "automatic_schema_bump_allowed": false,
+    "durable_state_reset_allowed": false
+  }
+}

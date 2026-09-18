@@ -4,15 +4,12 @@ using System.Text.Json.Serialization;
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 
-var inventoryPath = Path.Combine(AppContext.BaseDirectory, "gen1-baseline.json");
+var inventoryPath = Path.Combine(AppContext.BaseDirectory, "certified-contract-baseline.json");
 using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
 var root = inventory.RootElement;
 var localApi = root.GetProperty("local_api");
 var capabilities = root.GetProperty("capabilities");
 var storage = root.GetProperty("storage");
-var oracle = root.GetProperty("python_oracle");
-
-Require(oracle.GetProperty("commit").GetString() == "77bdcd0be364192a6c1adea073659c4a462ce0e7", "Python oracle SHA drifted");
 Require(localApi.GetProperty("contract_id").GetString() == LocalAgentContract.ContractId, "contract id mismatch");
 Require(localApi.GetProperty("contract_version").GetInt32() == LocalAgentContract.ContractVersion, "contract version mismatch");
 Require(localApi.GetProperty("bind_host").GetString() == LocalAgentContract.BindHost, "bind host mismatch");
@@ -76,7 +73,6 @@ var notificationColumns = storage.GetProperty("tables").GetProperty("notificatio
 Require(!notificationColumns.Contains("delivery_mode"), "EVERY_LAUNCH must not force a schema-8 delivery_mode column");
 
 Console.WriteLine("BKE Licensing Agent .NET 10 Gen2 contract certification: PASS");
-Console.WriteLine($"Python oracle: {oracle.GetProperty("commit").GetString()}");
 Console.WriteLine($"Routes certified: {contractRoutes.Count}");
 Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVersion}");
 return;

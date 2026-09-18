@@ -6,10 +6,10 @@ internal sealed class UnconnectedAgentDesktopViewSource : IAgentDesktopViewSourc
 {
     public AgentDesktopSnapshot Snapshot { get; } = new(
         RuntimeState: "UI SHELL READY",
-        RuntimeDetail: "The .NET 10 desktop shell is running. Licensing, discovery and updater providers remain fail-closed until each capability is migrated and certified.",
+        RuntimeDetail: "The native .NET 10 License Center is running. Runtime providers remain fail-closed when live state is unavailable.",
         SecurityState: "Fail-closed",
-        SecurityDetail: "No trusted provider is attached to this vNext desktop shell yet. Existing Python Generation 1 remains the shipping authorization runtime.",
-        UpdateState: "Provider pending",
+        SecurityDetail: "No live provider snapshot is attached to this desktop view. The Agent runtime remains the authorization authority.",
+        UpdateState: "Runtime connection pending",
         UpdateDetail: "The presentation boundary is ready for BKE.Updater state. No update authority is implemented in the UI.",
         Products: [],
         Activity: []);

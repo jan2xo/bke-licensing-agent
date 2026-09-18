@@ -62,10 +62,6 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
@@ -98,35 +94,28 @@ jobs:
       - name: Install packaging dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyinstaller
-          python -m pip install -e ".[test]"
           choco install innosetup -y --no-progress
 
       - name: Re-run release-critical certification
         shell: pwsh
         run: |
-          python -m pytest -q tests/unit/test_windows_privileged_packaging.py
           dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed" }
           dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 runtime build failed" }
+          dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw ".NET License Center build failed" }
+          dotnet build dotnet/src/BKE.LicensingAgent.Updater/BKE.LicensingAgent.Updater.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw ".NET updater helper build failed" }
+          dotnet build dotnet/src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw ".NET provisioner build failed" }
           dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "signed self-update certification failed" }
 
-      - name: Build retained support payloads
+      - name: Publish native .NET support payloads
         shell: pwsh
         run: |
-          Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force dist/windows | Out-Null
-          pyinstaller --clean --noconfirm bke-license-center.spec
-          Move-Item dist/bke-license-center dist/windows/bke-license-center
-          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
-          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
-          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
-          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
-          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
-          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:RELEASE_VERSION -Architecture all
 
       - name: Materialize production public trust only
         shell: pwsh

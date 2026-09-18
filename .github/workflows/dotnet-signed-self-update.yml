@@ -75,22 +75,19 @@ jobs:
           dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj             --configuration Release --runtime win-arm64 --self-contained true             -p:PublishSingleFile=true -p:Version=2.0.0             --output "${RUNNER_TEMP}/phase9-win-arm64"
 
       - name: Verify native PE architecture and publish outputs
+        shell: pwsh
         run: |
-          python - <<'PY'
-          import pathlib, struct
-          expected = {
-              pathlib.Path(__import__("os").environ["RUNNER_TEMP"]) / "phase9-win-x64" / "bke-licensing-agent-service.exe": 0x8664,
-              pathlib.Path(__import__("os").environ["RUNNER_TEMP"]) / "phase9-win-arm64" / "bke-licensing-agent-service.exe": 0xAA64,
+          function Assert-PeMachine([string]$Path, [int]$Expected) {
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Path))
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+            $signature = "PE" + [char]0 + [char]0
+            if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne $signature) { throw "invalid PE signature: $Path" }
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne $Expected) { throw ("unexpected PE machine for {0}: 0x{1:X4}" -f $Path, $machine) }
           }
-          for path, machine_expected in expected.items():
-              data = path.read_bytes()
-              pe = struct.unpack_from("<I", data, 0x3C)[0]
-              assert data[pe:pe+4] == b"PE\x00\x00", path
-              machine = struct.unpack_from("<H", data, pe + 4)[0]
-              assert machine == machine_expected, (path, hex(machine), hex(machine_expected))
-              print(f"{path.name}: machine={machine:#06x}, bytes={len(data)}")
-          print("Native Phase 9 bootstrap publish: PASS")
-          PY
+          Assert-PeMachine "$env:RUNNER_TEMP/phase9-win-x64/bke-licensing-agent-service.exe" 0x8664
+          Assert-PeMachine "$env:RUNNER_TEMP/phase9-win-arm64/bke-licensing-agent-service.exe" 0xAA64
+          Write-Host "Native Phase 9 bootstrap publish: PASS"
 
       - name: Upload disposable Phase 9 authority evidence
         uses: actions/upload-artifact@v4

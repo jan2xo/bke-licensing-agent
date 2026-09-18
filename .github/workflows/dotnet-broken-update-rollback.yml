@@ -23,10 +23,6 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
@@ -57,84 +53,18 @@ jobs:
       - name: Install packaging dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyinstaller
-          python -m pip install -e ".[test]"
           choco install innosetup -y --no-progress
 
-      - name: Build retained support payloads and disposable public trust
+      - name: Publish native .NET support payloads
         shell: pwsh
         run: |
-          Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version 2.0.0 -Architecture all
 
-          pyinstaller --clean --noconfirm bke-license-center.spec
-          Move-Item dist/bke-license-center dist/windows/bke-license-center
-
-          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
-          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
-          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
-
-          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
-          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
-          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
-
-          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/update-authority-keys | Out-Null
-
-          @'
-          import base64, json
-          from pathlib import Path
-          from cryptography.hazmat.primitives import serialization
-          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-          root = Path("dist/windows/privileged-payload")
-          target_private = Ed25519PrivateKey.generate()
-          target_public = target_private.public_key()
-          target_key_id = "phase10-target-disposable-v1"
-          (root / "target-keys" / f"{target_key_id}.pem").write_bytes(
-              target_public.public_bytes(
-                  serialization.Encoding.PEM,
-                  serialization.PublicFormat.SubjectPublicKeyInfo,
-              )
-          )
-          unsigned = {
-              "schema": "bke.install-target-policy.v1",
-              "policy_id": "phase10-packaging-only",
-              "revision": 1,
-              "product_id": "bke-certification-product",
-              "platform": "windows",
-              "architecture": "x86_64",
-              "install_root": r"C:\Program Files\BKE Digital Solutions\Certification Product",
-              "entry_point": "product.exe",
-              "signing_key_id": target_key_id,
-              "algorithm": "Ed25519",
-          }
-          canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-          document = dict(unsigned)
-          document["signature"] = base64.b64encode(target_private.sign(canonical)).decode("ascii")
-          (root / "target-policies" / "phase10-packaging-only.json").write_text(
-              json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="utf-8",
-          )
-
-          update_private = Ed25519PrivateKey.generate()
-          raw_public = update_private.public_key().public_bytes(
-              serialization.Encoding.Raw,
-              serialization.PublicFormat.Raw,
-          )
-          update_key = {
-              "schema": "bke.update-authority-key.v1",
-              "key_id": "phase10-update-disposable-v1",
-              "algorithm": "Ed25519",
-              "public_key": base64.b64encode(raw_public).decode("ascii"),
-          }
-          Path("dist/windows/update-authority-keys/phase10-update-disposable-v1.json").write_text(
-              json.dumps(update_key, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="utf-8",
-          )
-          '@ | python -
+      - name: Generate disposable rollback trust with .NET
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id phase10-target-disposable-v1 --policy-id phase10-packaging-only --update-key-id phase10-update-disposable-v1
+          if ($LASTEXITCODE -ne 0) { throw ".NET Phase 10 trust generation failed" }
 
       - name: Publish healthy 2.0.0 baseline
         shell: pwsh

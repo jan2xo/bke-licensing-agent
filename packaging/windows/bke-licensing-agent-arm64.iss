@@ -40,10 +40,10 @@ RestartApplications=no
 Source: "..\..\dist\windows\bke-licensing-agent-service-arm64\*"; DestDir: "{app}\service"; Flags: recursesubdirs ignoreversion
 ; Replaceable implementation-language payload.
 Source: "..\..\dist\windows\bke-licensing-agent-runtime-arm64\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs ignoreversion
-; Existing native user UI and hardened updater assets remain separate migration boundaries.
-Source: "..\..\dist\windows\bke-license-center\*"; DestDir: "{app}\license-center"; Flags: recursesubdirs ignoreversion
-Source: "..\..\dist\windows\bke-updater-core\bke-updater-core.exe"; DestDir: "{app}\updater"; Flags: ignoreversion
-Source: "..\..\dist\windows\bke-privileged-provisioner\bke-privileged-provisioner.exe"; DestDir: "{app}\provisioning"; Flags: ignoreversion
+; Native .NET License Center, privileged updater, and provisioner are architecture-specific payloads.
+Source: "..\\..\\dist\\windows\\bke-license-center-arm64\\*"; DestDir: "{app}\\license-center"; Flags: recursesubdirs ignoreversion
+Source: "..\\..\\dist\\windows\\bke-updater-core-arm64\\*"; DestDir: "{app}\\updater"; Flags: recursesubdirs ignoreversion
+Source: "..\\..\\dist\\windows\\bke-privileged-provisioner-arm64\\*"; DestDir: "{app}\\provisioning"; Flags: recursesubdirs ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-keys\*.pem"; DestDir: "{app}\provisioning\target-keys"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-policies\*.json"; DestDir: "{app}\provisioning\target-policies"; Flags: ignoreversion
 ; Phase 9 update-authority trust contains public verification keys only.
@@ -72,6 +72,10 @@ Type: filesandordirs; Name: "{app}"
 var
   HadPreviousServicePayload: Boolean;
   HadPreviousRuntimePayload: Boolean;
+  HadPreviousLicenseCenterPayload: Boolean;
+  HadPreviousUpdaterPayload: Boolean;
+  HadPreviousProvisioningPayload: Boolean;
+  HadPreviousTrustPayload: Boolean;
 
 function ServiceExists: Boolean;
 begin
@@ -157,76 +161,144 @@ begin
   Log('Existing BKE Licensing Agent service process exited before runtime replacement.');
 end;
 
+procedure RestoreStagedDirectory(const PayloadPath, BackupPath: String);
+begin
+  if DirExists(BackupPath) and (not DirExists(PayloadPath)) then
+  begin
+    if not RenameFile(BackupPath, PayloadPath) then
+      RaiseException('A staged Agent payload could not be restored after backup preparation failed.');
+  end;
+end;
+
 procedure BackupReplaceablePayloads;
 var
   ServicePath: String;
   RuntimePath: String;
+  LicenseCenterPath: String;
+  UpdaterPath: String;
+  ProvisioningPath: String;
+  TrustPath: String;
   ServiceBackup: String;
   RuntimeBackup: String;
+  LicenseCenterBackup: String;
+  UpdaterBackup: String;
+  ProvisioningBackup: String;
+  TrustBackup: String;
 begin
   ServicePath := ExpandConstant('{app}\service');
   RuntimePath := ExpandConstant('{app}\runtime');
+  LicenseCenterPath := ExpandConstant('{app}\license-center');
+  UpdaterPath := ExpandConstant('{app}\updater');
+  ProvisioningPath := ExpandConstant('{app}\provisioning');
+  TrustPath := ExpandConstant('{app}\trust');
+
   ServiceBackup := ExpandConstant('{app}\service.rollback');
   RuntimeBackup := ExpandConstant('{app}\runtime.rollback');
+  LicenseCenterBackup := ExpandConstant('{app}\license-center.rollback');
+  UpdaterBackup := ExpandConstant('{app}\updater.rollback');
+  ProvisioningBackup := ExpandConstant('{app}\provisioning.rollback');
+  TrustBackup := ExpandConstant('{app}\trust.rollback');
 
   DelTree(ServiceBackup, True, True, True);
   DelTree(RuntimeBackup, True, True, True);
+  DelTree(LicenseCenterBackup, True, True, True);
+  DelTree(UpdaterBackup, True, True, True);
+  DelTree(ProvisioningBackup, True, True, True);
+  DelTree(TrustBackup, True, True, True);
 
   HadPreviousServicePayload := DirExists(ServicePath);
   HadPreviousRuntimePayload := DirExists(RuntimePath);
+  HadPreviousLicenseCenterPayload := DirExists(LicenseCenterPath);
+  HadPreviousUpdaterPayload := DirExists(UpdaterPath);
+  HadPreviousProvisioningPayload := DirExists(ProvisioningPath);
+  HadPreviousTrustPayload := DirExists(TrustPath);
 
-  if HadPreviousServicePayload and (not RenameFile(ServicePath, ServiceBackup)) then
-    RaiseException('Existing stable service payload could not be staged for rollback.');
-
-  if HadPreviousRuntimePayload and (not RenameFile(RuntimePath, RuntimeBackup)) then
-  begin
-    if DirExists(ServiceBackup) then
-      RenameFile(ServiceBackup, ServicePath);
-    RaiseException('Existing runtime payload could not be staged for rollback.');
+  try
+    if HadPreviousServicePayload and (not RenameFile(ServicePath, ServiceBackup)) then
+      RaiseException('Existing stable service payload could not be staged for rollback.');
+    if HadPreviousRuntimePayload and (not RenameFile(RuntimePath, RuntimeBackup)) then
+      RaiseException('Existing runtime payload could not be staged for rollback.');
+    if HadPreviousLicenseCenterPayload and (not RenameFile(LicenseCenterPath, LicenseCenterBackup)) then
+      RaiseException('Existing License Center payload could not be staged for rollback.');
+    if HadPreviousUpdaterPayload and (not RenameFile(UpdaterPath, UpdaterBackup)) then
+      RaiseException('Existing updater payload could not be staged for rollback.');
+    if HadPreviousProvisioningPayload and (not RenameFile(ProvisioningPath, ProvisioningBackup)) then
+      RaiseException('Existing provisioner payload could not be staged for rollback.');
+    if HadPreviousTrustPayload and (not RenameFile(TrustPath, TrustBackup)) then
+      RaiseException('Existing Agent trust payload could not be staged for rollback.');
+  except
+    RestoreStagedDirectory(ServicePath, ServiceBackup);
+    RestoreStagedDirectory(RuntimePath, RuntimeBackup);
+    RestoreStagedDirectory(LicenseCenterPath, LicenseCenterBackup);
+    RestoreStagedDirectory(UpdaterPath, UpdaterBackup);
+    RestoreStagedDirectory(ProvisioningPath, ProvisioningBackup);
+    RestoreStagedDirectory(TrustPath, TrustBackup);
+    RaiseException('Existing Agent payload staging failed; staged payloads were restored.');
   end;
 
-  Log('Existing Agent payload staged for automatic rollback.');
+  Log('Existing Agent payloads staged for automatic rollback.');
 end;
 
 procedure ClearReplaceablePayloads;
 begin
-  { The stable paths stay constant; their implementation contents are disposable. }
+  { Stable paths stay constant; implementation payload contents are disposable. }
   DelTree(ExpandConstant('{app}\service'), True, True, True);
   DelTree(ExpandConstant('{app}\runtime'), True, True, True);
+  DelTree(ExpandConstant('{app}\license-center'), True, True, True);
+  DelTree(ExpandConstant('{app}\updater'), True, True, True);
+  DelTree(ExpandConstant('{app}\provisioning'), True, True, True);
+  DelTree(ExpandConstant('{app}\trust'), True, True, True);
 end;
 
 procedure RestoreRollbackPayloads;
 var
   ServicePath: String;
   RuntimePath: String;
+  LicenseCenterPath: String;
+  UpdaterPath: String;
+  ProvisioningPath: String;
+  TrustPath: String;
   ServiceBackup: String;
   RuntimeBackup: String;
+  LicenseCenterBackup: String;
+  UpdaterBackup: String;
+  ProvisioningBackup: String;
+  TrustBackup: String;
 begin
   ServicePath := ExpandConstant('{app}\service');
   RuntimePath := ExpandConstant('{app}\runtime');
+  LicenseCenterPath := ExpandConstant('{app}\license-center');
+  UpdaterPath := ExpandConstant('{app}\updater');
+  ProvisioningPath := ExpandConstant('{app}\provisioning');
+  TrustPath := ExpandConstant('{app}\trust');
+
   ServiceBackup := ExpandConstant('{app}\service.rollback');
   RuntimeBackup := ExpandConstant('{app}\runtime.rollback');
+  LicenseCenterBackup := ExpandConstant('{app}\license-center.rollback');
+  UpdaterBackup := ExpandConstant('{app}\updater.rollback');
+  ProvisioningBackup := ExpandConstant('{app}\provisioning.rollback');
+  TrustBackup := ExpandConstant('{app}\trust.rollback');
 
   ClearReplaceablePayloads;
 
-  if HadPreviousServicePayload then
-  begin
-    if (not DirExists(ServiceBackup)) or (not RenameFile(ServiceBackup, ServicePath)) then
-      RaiseException('Previous stable service payload could not be restored.');
-  end;
-  if HadPreviousRuntimePayload then
-  begin
-    if (not DirExists(RuntimeBackup)) or (not RenameFile(RuntimeBackup, RuntimePath)) then
-      RaiseException('Previous runtime payload could not be restored.');
-  end;
+  if HadPreviousServicePayload then RestoreStagedDirectory(ServicePath, ServiceBackup);
+  if HadPreviousRuntimePayload then RestoreStagedDirectory(RuntimePath, RuntimeBackup);
+  if HadPreviousLicenseCenterPayload then RestoreStagedDirectory(LicenseCenterPath, LicenseCenterBackup);
+  if HadPreviousUpdaterPayload then RestoreStagedDirectory(UpdaterPath, UpdaterBackup);
+  if HadPreviousProvisioningPayload then RestoreStagedDirectory(ProvisioningPath, ProvisioningBackup);
+  if HadPreviousTrustPayload then RestoreStagedDirectory(TrustPath, TrustBackup);
 
-  Log('Previous Agent payload restored from rollback staging.');
+  Log('Previous Agent payloads restored from rollback staging.');
 end;
 
 procedure DiscardRollbackPayloads;
 begin
   DelTree(ExpandConstant('{app}\service.rollback'), True, True, True);
   DelTree(ExpandConstant('{app}\runtime.rollback'), True, True, True);
+  DelTree(ExpandConstant('{app}\license-center.rollback'), True, True, True);
+  DelTree(ExpandConstant('{app}\updater.rollback'), True, True, True);
+  DelTree(ExpandConstant('{app}\provisioning.rollback'), True, True, True);
+  DelTree(ExpandConstant('{app}\trust.rollback'), True, True, True);
 end;
 
 function LocalApiHealthy: Boolean;

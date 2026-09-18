@@ -195,7 +195,7 @@ That private Ed25519 key belongs only in the protected Digital Solutions V2 auth
 Run the checked-in generator from an owner-controlled workstation, but place the output **outside all Git repositories**:
 
 ~~~powershell
-python .\scripts\generate_production_update_authority_key.py --key-id bke-agent-update-prod-v1 --output-dir C:\SECURE\BKE-Agent-Update-Authority-v1 --authorization AUTHORIZE_OFFLINE_PRODUCTION_KEY_GENERATION
+dotnet run --project .\dotnet\tools\BKE.LicensingAgent.ReleaseTooling\BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-production-update-key --key-id bke-agent-update-prod-v1 --output-dir C:\SECURE\BKE-Agent-Update-Authority-v1 --authorization AUTHORIZE_OFFLINE_PRODUCTION_KEY_GENERATION
 ~~~
 
 Expected output files:

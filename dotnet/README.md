@@ -1,34 +1,18 @@
 # BKE Licensing Agent .NET 10 Generation 2
 
-This directory contains the Generation 2 migration of the BKE Licensing Agent.
+Generation 2 is now the active implementation of the BKE Licensing Agent.
 
-## Migration authority
-
-Python at `feat/notification-feed-provider` commit `77bdcd0be364192a6c1adea073659c4a462ce0e7` is the frozen Generation 1 behavioral oracle for this migration wave. The shipping Python runtime is not replaced, deleted, or silently redirected by work in this directory.
-
-The stale `refactor/dotnet10-agent-vnext` branch is archaeology only. Its useful composition-root and certification ideas are retained here because they were already present in the frozen Python baseline; the stale branch itself is not merged into Generation 2.
-
-## Phase 8 candidate boundary
-
-On `feat/production-installer-gen2`, the migration-only Gen2 startup guard has been removed so the canonical Windows installer candidate can run the certified runtime bridge directly.
-
-This is **not** a production cutover. The branch and its stacked PR remain draft/unmerged. Production signing, catalog publication, release/tag creation, and deployment are separate authorization gates.
-
-The canonical candidate keeps these stable machine boundaries:
+The post-certification convergence removes the retired Python runtime/build tree and makes every current Windows Agent executable native .NET 10:
 
 ```text
-BKE-Licensing-Agent
-        ↓
-service\\bke-licensing-agent-service.exe
-        ↓
-runtime\\bke-licensing-agent-runtime.exe
-        ↓
-127.0.0.1 / ::1 :43873
+service\bke-licensing-agent-service.exe        Bootstrap
+runtime\bke-licensing-agent-runtime.exe        Agent Host
+license-center\bke-license-center.exe           Avalonia License Center
+updater\bke-updater-core.exe                    privileged updater helper
+provisioning\bke-privileged-provisioner.exe     machine trust provisioner
 ```
 
-The existing Python/PyInstaller License Center remains a separate UI boundary during Phase 8.
-
-## Boundary rule
+## Architecture rule
 
 Every module must be describable as:
 
@@ -38,61 +22,51 @@ WHAT I DO
 WHAT I GIVE
 ```
 
-The Host is a composition root. It owns loopback transport, lifecycle, dependency composition, and translation between HTTP and capability ports. It does not own licensing policy, notification policy, SQLite policy, update policy, Digital Solutions business rules, or interactive UI policy.
+The Host is a composition root. It owns loopback transport, lifecycle, dependency composition, and translation between HTTP and capability ports. Domain/infrastructure components own licensing, notification, update, persistence, platform, and trusted-execution policy.
 
-## Generation 2 module direction
-
-```text
-BKE.LicensingAgent.Contracts      stable product-facing wire contracts
-BKE.LicensingAgent.Application    capability ports consumed by the Host
-BKE.LicensingAgent.Licensing      authorization/activation/lease policy (later wave)
-BKE.LicensingAgent.Notifications  typed notifications/broadcast policy (later wave)
-BKE.LicensingAgent.Updates        product + Agent update orchestration (later wave)
-BKE.LicensingAgent.Storage        schema-8 compatible persistence (later wave)
-BKE.LicensingAgent.Platform       outbound platform communication (later wave)
-BKE.LicensingAgent.Execution      privileged/process operations (later wave)
-BKE.LicensingAgent.LicenseCenter  interactive recovery presentation (later wave)
-BKE.LicensingAgent.Host           loopback composition boundary
-```
-
-The capability projects are introduced only as their parity waves begin. Do not create fake wrappers that merely relocate Python behavior.
-
-## Current migration scope
-
-The Gen2 migration has progressed through runtime, compatibility, installed-machine, and reboot certification. Phase 8 now migrates the canonical Windows installer while preserving the certified machine contract.
-
-Phase 8 includes:
-
-- canonical Windows x64 Gen2 installer packaging;
-- a separate native Windows ARM64 Gen2 installer;
-- stable SCM bootstrap + replaceable Gen2 runtime packaging;
-- preservation of ProgramData / schema-8 state;
-- transactional service/runtime rollback and local API health checks;
-- architecture-aware Agent self-update discovery;
-- continued Python/PyInstaller License Center packaging;
-- hosted Windows proof of Python production installer → canonical Gen2 in-place migration.
-
-Phase 8 does **not** authorize production signing, catalog publication, release/tag creation, production deployment, License Center language migration, or the Phase 9 production-signed self-update boundary.
-
-## Frozen persistence invariant
-
-Generation 1 currently uses SQLite schema version `8`. The notification campaign delivery mode is intentionally **not** persisted as a `delivery_mode` column in the `notifications` table. `EVERY_LAUNCH` is live campaign policy layered over schema 8.
-
-A language migration alone is not authorization to bump the database schema.
-
-## Certification
-
-Run:
-
-```bash
-bash dotnet/certify.sh
-```
-
-The certification must keep both sides visible during migration:
+## Projects
 
 ```text
-PYTHON ORACLE ✅
-.NET GEN2 ✅
+BKE.LicensingAgent.Contracts
+BKE.LicensingAgent.Application
+BKE.LicensingAgent.Infrastructure
+BKE.LicensingAgent.Host
+BKE.LicensingAgent.Bootstrap
+BKE.LicensingAgent.Presentation
+BKE.LicensingAgent.Desktop
+BKE.LicensingAgent.Updater
+BKE.LicensingAgent.Provisioner
+BKE.LicensingAgent.ReleaseTooling
 ```
 
-Only a later explicitly approved cutover wave may replace the shipping runtime or packaging.
+## Frozen machine/persistence contract
+
+- Windows service: `BKE-Licensing-Agent`
+- Stable service executable: `service\bke-licensing-agent-service.exe`
+- Replaceable Agent runtime: `runtime\bke-licensing-agent-runtime.exe`
+- Durable state: `%ProgramData%\BKE Digital Solutions\Licensing Agent`
+- Local API: loopback-only port `43873`
+- Existing schema-8 durable state remains compatible; language convergence alone does not authorize a schema bump.
+
+## Windows release matrix
+
+- `win-x64` — Intel/AMD 64-bit
+- `win-arm64` — Windows ARM64
+
+32-bit Windows is intentionally out of scope.
+
+## Certification history
+
+Generation 1 behavior and Python→.NET migration evidence remain preserved in Git history and prior GitHub Actions runs. They are no longer active build/runtime dependencies.
+
+The current .NET-only convergence must independently prove:
+
+1. all current .NET projects compile;
+2. x64 and ARM64 native support payloads publish;
+3. the native License Center smoke contract works;
+4. disposable trust is generated by .NET release tooling;
+5. canonical installers compile and pass Defender;
+6. fresh x64 installation recovers the stable service/API;
+7. persistent ARM64 installation preserves durable state and machine contracts.
+
+Production signing, catalog publication, deployment, and merges remain separate owner-controlled gates.
