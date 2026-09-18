@@ -643,3 +643,132 @@ jobs:
           path: dist/BKE-Licensing-Agent-2.0.0-RuntimeBridge-Windows-arm64-Certification-*.zip
           if-no-files-found: error
           retention-days: 14
+      - name: Build and self-test disposable reboot certification seeder
+        shell: pwsh
+        run: |
+          $dataRoot = Join-Path $env:RUNNER_TEMP 'runtime-bridge-seeder-selftest'
+          Remove-Item $dataRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dataRoot | Out-Null
+
+          $env:PYTHONPATH = (Resolve-Path 'src').Path
+          @'
+          import os
+          from pathlib import Path
+          from bke_licensing_agent.storage.database import Database, CURRENT_SCHEMA_VERSION
+
+          root = Path(os.environ['SEEDER_SELFTEST_DATA'])
+          db = Database(root / 'agent.db')
+          version = db.connection.execute('SELECT version FROM schema_version LIMIT 1').fetchone()[0]
+          db.close()
+          if version != CURRENT_SCHEMA_VERSION:
+              raise SystemExit(f'schema mismatch: {version} != {CURRENT_SCHEMA_VERSION}')
+          print(f'Fresh Agent schema ready: v{version}')
+          '@ | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'init-seeder-db.py') -Encoding utf8
+          $env:SEEDER_SELFTEST_DATA = $dataRoot
+          python (Join-Path $env:RUNNER_TEMP 'init-seeder-db.py')
+          if ($LASTEXITCODE -ne 0) { throw 'isolated Agent schema initialization failed' }
+
+          dotnet publish dotnet/certification/BKE.LicensingAgent.RuntimeBridgeSeeder/BKE.LicensingAgent.RuntimeBridgeSeeder.csproj `
+            --configuration Release --runtime win-x64 --self-contained true `
+            -p:PublishSingleFile=true --verbosity minimal `
+            --output dist/reboot-seeder-x64
+          if ($LASTEXITCODE -ne 0) { throw 'x64 certification seeder publish failed' }
+
+          & dist/reboot-seeder-x64/bke-runtime-bridge-cert-seeder.exe --data-root $dataRoot
+          if ($LASTEXITCODE -ne 0) { throw "certification seeder self-test failed: $LASTEXITCODE" }
+
+          @'
+          import os
+          import sqlite3
+          from pathlib import Path
+
+          root = Path(os.environ['SEEDER_SELFTEST_DATA'])
+          db = sqlite3.connect(root / 'agent.db')
+          try:
+              product = db.execute(
+                  'SELECT product_id, version FROM discovered_products WHERE product_id=?',
+                  ('runtime-bridge-cert',),
+              ).fetchone()
+              license_row = db.execute(
+                  'SELECT product_id, product_version, installation_id, signed_payload, signed_signature, signed_algorithm '
+                  'FROM verified_licenses WHERE lease_id=?',
+                  ('runtime-bridge-lease',),
+              ).fetchone()
+              binding = db.execute(
+                  'SELECT product_id, installation_id, active_lease_id FROM active_license_bindings WHERE product_id=?',
+                  ('runtime-bridge-cert',),
+              ).fetchone()
+          finally:
+              db.close()
+
+          if product != ('runtime-bridge-cert', '2.0.0'):
+              raise SystemExit(f'bad product fixture: {product}')
+          if not license_row or license_row[0:3] != ('runtime-bridge-cert', '2.0.0', 'runtime-bridge-installation'):
+              raise SystemExit(f'bad license fixture: {license_row}')
+          if not all(license_row[3:]) or license_row[-1] != 'Ed25519':
+              raise SystemExit('signed authority fields missing')
+          if binding != ('runtime-bridge-cert', 'runtime-bridge-installation', 'runtime-bridge-lease'):
+              raise SystemExit(f'bad binding fixture: {binding}')
+          if not (root / 'trusted-keys' / 'runtime-bridge-state-key.pem').is_file():
+              raise SystemExit('trusted certification key missing')
+          print('Signed certification seeder database fixture: PASS')
+          '@ | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verify-seeder-db.py') -Encoding utf8
+          python (Join-Path $env:RUNNER_TEMP 'verify-seeder-db.py')
+          if ($LASTEXITCODE -ne 0) { throw 'certification seeder database verification failed' }
+
+      - name: Publish native ARM64 reboot certification seeder
+        shell: pwsh
+        run: |
+          dotnet publish dotnet/certification/BKE.LicensingAgent.RuntimeBridgeSeeder/BKE.LicensingAgent.RuntimeBridgeSeeder.csproj `
+            --configuration Release --runtime win-arm64 --self-contained true `
+            -p:PublishSingleFile=true --verbosity minimal `
+            --output dist/reboot-seeder-arm64
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64 certification seeder publish failed' }
+
+          $path = 'dist/reboot-seeder-arm64/bke-runtime-bridge-cert-seeder.exe'
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $path))
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne "PE`0`0") { throw 'invalid ARM64 seeder PE signature' }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0xAA64) { throw ("expected ARM64 PE 0xAA64 but got 0x{0:X4}" -f $machine) }
+          Write-Host 'Native ARM64 certification seeder PE: PASS'
+
+      - name: Assemble ARM64 real-reboot certification kit
+        shell: pwsh
+        run: |
+          $package = 'dist/arm64-reboot-certification-kit'
+          Remove-Item $package -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $package | Out-Null
+          Copy-Item 'dist/reboot-seeder-arm64/bke-runtime-bridge-cert-seeder.exe' $package
+          Copy-Item 'certification/windows_runtime_bridge_seed.ps1' $package
+          Copy-Item 'certification/windows_runtime_bridge_reboot.ps1' $package
+
+          @"
+          BKE Licensing Agent Gen2 - Windows ARM64 Real-Reboot Certification Kit
+          CERTIFICATION ONLY - NOT A PRODUCTION RELEASE
+
+          Source commit:
+          ${{ github.sha }}
+
+          Seeds only disposable runtime-bridge-cert signed authority.
+          Does not alter Render Dock grace.
+          Contains no production signing authority.
+          "@ | Set-Content -LiteralPath (Join-Path $package 'CERTIFICATION-ONLY.txt') -Encoding utf8
+
+          $sum = Join-Path $package 'SHA256SUMS.txt'
+          Get-ChildItem -LiteralPath $package -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Add-Content -LiteralPath $sum -Encoding ascii
+          }
+
+          $zip = "dist/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-Windows-arm64-Real-Reboot-Certification-${{ github.sha }}.zip"
+          Compress-Archive -Path "$package/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List
+
+      - name: Upload ARM64 real-reboot certification kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-Windows-arm64-Real-Reboot-Certification-Kit
+          path: dist/BKE-Licensing-Agent-2.0.0-Windows-arm64-Real-Reboot-Certification-*.zip
+          if-no-files-found: error
+          retention-days: 14
