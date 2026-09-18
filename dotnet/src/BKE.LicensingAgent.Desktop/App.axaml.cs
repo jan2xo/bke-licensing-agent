@@ -17,14 +17,6 @@ public sealed partial class App : Application
         {
             var invocation = LicenseCenterInvocation.Parse(desktop.Args ?? []);
 
-            if (invocation.Mode == LicenseCenterMode.Smoke)
-            {
-                Console.WriteLine("BKE License Center .NET smoke: entrypoint OK");
-                desktop.Shutdown(0);
-                base.OnFrameworkInitializationCompleted();
-                return;
-            }
-
             if (invocation.Mode == LicenseCenterMode.Invalid)
             {
                 desktop.Shutdown(3);
