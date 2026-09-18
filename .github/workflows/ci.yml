@@ -68,8 +68,9 @@ jobs:
       - name: Smoke native x64 License Center
         shell: pwsh
         run: |
-          & .\dist\windows\bke-license-center-x64\bke-license-center.exe --smoke
-          if ($LASTEXITCODE -ne 0) { throw ".NET License Center smoke failed: $LASTEXITCODE" }
+          $process = Start-Process -FilePath ".\dist\windows\bke-license-center-x64\bke-license-center.exe" -ArgumentList "--smoke" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw ".NET License Center smoke failed: $($process.ExitCode)" }
+          Write-Host ".NET License Center smoke: PASS"
 
       - name: Generate disposable trust using .NET tooling
         shell: pwsh
