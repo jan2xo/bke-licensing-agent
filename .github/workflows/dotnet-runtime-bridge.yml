@@ -10,6 +10,14 @@ on:
       - "packaging/windows/bke-licensing-agent-runtime-bridge.iss"
       - ".github/workflows/dotnet-runtime-bridge.yml"
       - "docs/agent-runtime-replacement-contract.md"
+  pull_request:
+    branches:
+      - refactor/dotnet10-agent-gen2
+    paths:
+      - "dotnet/**"
+      - "packaging/windows/bke-licensing-agent-runtime-bridge.iss"
+      - ".github/workflows/dotnet-runtime-bridge.yml"
+      - "docs/agent-runtime-replacement-contract.md"
 
 permissions:
   contents: read
