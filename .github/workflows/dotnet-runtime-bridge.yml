@@ -511,3 +511,51 @@ jobs:
           dotnet $harness $product 'BKE_MediaTools.Licensing.AgentClient' 'EnsureAuthorizedAsync' 'Authorized'
           if ($LASTEXITCODE -ne 0) { throw 'Render Dock actual AgentClient did not authorize through installed Gen2' }
           Write-Host 'Render Dock actual AgentClient -> installed Gen2 authorization: PASS'
+
+      - name: Assemble UTM certification bundle
+        shell: pwsh
+        run: |
+          $package = 'dist/utm-certification-package'
+          Remove-Item $package -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $package | Out-Null
+
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Windows-x64.exe"
+          if (!(Test-Path $installer)) { throw 'certified runtime bridge installer missing' }
+          Copy-Item $installer $package
+          Copy-Item 'certification/windows_runtime_bridge_reboot.ps1' $package
+
+          @"
+          BKE Licensing Agent Gen2 Runtime Bridge
+          CERTIFICATION ONLY - NOT A PRODUCTION RELEASE
+
+          Certified source commit:
+          ${{ github.sha }}
+
+          This bundle was emitted only after the Windows Python -> Gen2 migration,
+          durable licensing state, rollback, Air Stack, and Render Dock gates passed.
+
+          Contents:
+          - BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Windows-x64.exe
+          - windows_runtime_bridge_reboot.ps1
+          - SHA256SUMS.txt
+
+          DO NOT use this installer for production cutover.
+          "@ | Set-Content -LiteralPath (Join-Path $package 'CERTIFICATION-ONLY.txt') -Encoding utf8
+
+          $files = Get-ChildItem -LiteralPath $package -File | Where-Object Name -ne 'SHA256SUMS.txt'
+          foreach ($file in $files) {
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)" | Add-Content -LiteralPath (Join-Path $package 'SHA256SUMS.txt') -Encoding ascii
+          }
+
+          $zip = "dist/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Certification-${{ github.sha }}.zip"
+          Compress-Archive -Path "$package/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List
+
+      - name: Upload certified UTM bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-RuntimeBridge-Certification
+          path: dist/BKE-Licensing-Agent-2.0.0-RuntimeBridge-Certification-*.zip
+          if-no-files-found: error
+          retention-days: 14
