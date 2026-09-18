@@ -189,9 +189,9 @@ if ($Mode -eq 'Verify') {
         if ($after -le $before) {
             throw "Windows boot time did not advance. Before=$before After=$after"
         }
-        $result.checks.boot_time_advanced = $true
-        $result.boot_time_before = $before.ToString('O')
-        $result.boot_time_after = $after.ToString('O')
+        $result.checks['boot_time_advanced'] = $true
+        $result['boot_time_before'] = $before.ToString('O')
+        $result['boot_time_after'] = $after.ToString('O')
 
         $service = Get-Service -Name $ServiceName -ErrorAction Stop
         $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(180))
@@ -205,8 +205,8 @@ if ($Mode -eq 'Verify') {
         if ($record.StartName -notin @('LocalSystem', 'NT AUTHORITY\SYSTEM')) {
             throw "Agent service authority changed across reboot: $($record.StartName)"
         }
-        $result.checks.service_running = $true
-        $result.checks.service_identity_preserved = $true
+        $result.checks['service_running'] = $true
+        $result.checks['service_identity_preserved'] = $true
 
         if ((Get-FileSha256 $ServiceExe) -ne [string]$expected.service_sha256) {
             throw 'Stable bootstrap binary changed across reboot.'
@@ -217,25 +217,25 @@ if ($Mode -eq 'Verify') {
         if ((Get-FileSha256 $BridgeMarker) -ne [string]$expected.bridge_marker_sha256) {
             throw 'Runtime bridge certification marker changed across reboot.'
         }
-        $result.checks.payload_hashes_preserved = $true
+        $result.checks['payload_hashes_preserved'] = $true
 
         if (!(Wait-AgentAuthorized 180)) {
             throw 'Signed runtime-bridge fixture did not authorize after real reboot.'
         }
-        $result.checks.durable_authorization_recovered = $true
+        $result.checks['durable_authorization_recovered'] = $true
 
         if (!(Get-RuntimeProcess)) {
             throw 'Stable bootstrap is not supervising the Gen2 runtime after reboot.'
         }
-        $result.checks.runtime_supervision_recovered = $true
+        $result.checks['runtime_supervision_recovered'] = $true
 
         Assert-LoopbackOnly
-        $result.checks.loopback_boundary_preserved = $true
+        $result.checks['loopback_boundary_preserved'] = $true
 
-        $result.status = 'PASS'
+        $result['status'] = 'PASS'
     }
     catch {
-        $result.error = $_.Exception.Message
+        $result['error'] = $_.Exception.Message
     }
     finally {
         Write-Result $result
