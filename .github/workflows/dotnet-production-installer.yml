@@ -171,8 +171,8 @@ jobs:
             (Join-Path $root "provisioning\bke-privileged-provisioner.exe")
           )) { if (!(Test-Path $path)) { throw "installed .NET payload missing: $path" } }
 
-          & (Join-Path $root "license-center\bke-license-center.exe") --smoke
-          if ($LASTEXITCODE -ne 0) { throw "installed .NET License Center smoke failed" }
+          $licenseCenterSmoke = Start-Process -FilePath (Join-Path $root "license-center\bke-license-center.exe") -ArgumentList "--smoke" -Wait -PassThru
+          if ($licenseCenterSmoke.ExitCode -ne 0) { throw "installed .NET License Center smoke failed: $($licenseCenterSmoke.ExitCode)" }
 
           $deadline=(Get-Date).AddSeconds(45)
           do {
