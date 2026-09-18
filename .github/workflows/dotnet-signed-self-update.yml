@@ -1,0 +1,100 @@
+name: Phase 9 signed Agent self-update certification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/production-signed-self-update
+    paths:
+      - ".github/workflows/dotnet-signed-self-update.yml"
+      - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
+      - "dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/**"
+      - "packaging/windows/bke-licensing-agent.iss"
+      - "packaging/windows/bke-licensing-agent-arm64.iss"
+  pull_request:
+    paths:
+      - ".github/workflows/dotnet-signed-self-update.yml"
+      - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
+      - "dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/**"
+      - "packaging/windows/bke-licensing-agent.iss"
+      - "packaging/windows/bke-licensing-agent-arm64.iss"
+
+permissions:
+  contents: read
+
+jobs:
+  signed-self-update:
+    name: V2 authority -> Gen2 Agent signed-policy proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout exact Agent candidate
+        uses: actions/checkout@v4
+
+      - name: Checkout Digital Solutions V2 authority candidate
+        uses: actions/checkout@v4
+        with:
+          repository: jan2xo/bke-digital-solutions
+          ref: feat/v2-licensing-agent-signed-update-authority
+          path: .ci/bke-digital-solutions
+          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .ci/bke-digital-solutions/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install Digital Solutions dependencies
+        working-directory: .ci/bke-digital-solutions
+        run: npm ci
+
+      - name: Run local .NET signed-policy negative/positive certification
+        run: |
+          dotnet run             --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj             --configuration Release
+
+      - name: Export real V2 signed x64 + ARM64 authority fixtures
+        working-directory: .ci/bke-digital-solutions
+        run: |
+          npx tsx scripts/certify-licensing-agent-signed-update.ts "${RUNNER_TEMP}/phase9-authority-fixture.json"
+          test -s "${RUNNER_TEMP}/phase9-authority-fixture.json"
+
+      - name: Verify V2 signatures and exact artifact identity in .NET Agent
+        run: |
+          dotnet run             --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj             --configuration Release             -- --fixture "${RUNNER_TEMP}/phase9-authority-fixture.json"
+
+      - name: Publish native Windows x64 + ARM64 bootstraps with verifier
+        run: |
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj             --configuration Release --runtime win-x64 --self-contained true             -p:PublishSingleFile=true -p:Version=2.0.0             --output "${RUNNER_TEMP}/phase9-win-x64"
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj             --configuration Release --runtime win-arm64 --self-contained true             -p:PublishSingleFile=true -p:Version=2.0.0             --output "${RUNNER_TEMP}/phase9-win-arm64"
+
+      - name: Verify native PE architecture and publish outputs
+        run: |
+          python - <<'PY'
+          import pathlib, struct
+          expected = {
+              pathlib.Path(__import__("os").environ["RUNNER_TEMP"]) / "phase9-win-x64" / "bke-licensing-agent-service.exe": 0x8664,
+              pathlib.Path(__import__("os").environ["RUNNER_TEMP"]) / "phase9-win-arm64" / "bke-licensing-agent-service.exe": 0xAA64,
+          }
+          for path, machine_expected in expected.items():
+              data = path.read_bytes()
+              pe = struct.unpack_from("<I", data, 0x3C)[0]
+              assert data[pe:pe+4] == b"PE\x00\x00", path
+              machine = struct.unpack_from("<H", data, pe + 4)[0]
+              assert machine == machine_expected, (path, hex(machine), hex(machine_expected))
+              print(f"{path.name}: machine={machine:#06x}, bytes={len(data)}")
+          print("Native Phase 9 bootstrap publish: PASS")
+          PY
+
+      - name: Upload disposable Phase 9 authority evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-Phase9-DISPOSABLE-SIGNED-POLICY-EVIDENCE
+          path: ${{ runner.temp }}/phase9-authority-fixture.json
+          if-no-files-found: error
+          retention-days: 7
