@@ -8,7 +8,7 @@ internal static class RuntimeBridgeContract
     internal const int DefaultPort = 43873;
 
     internal static string InstallRoot =>
-        Directory.GetParent(Path.GetFullPath(AppContext.BaseDirectory))?.FullName
+        Directory.GetParent(Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory)))?.FullName
         ?? throw new InvalidOperationException("Bootstrap install root is unavailable");
 
     internal static string RuntimeExecutable =>
