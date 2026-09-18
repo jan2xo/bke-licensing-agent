@@ -681,6 +681,14 @@ jobs:
           & dist/reboot-seeder-x64/bke-runtime-bridge-cert-seeder.exe --data-root $dataRoot
           if ($LASTEXITCODE -ne 0) { throw "certification seeder self-test failed: $LASTEXITCODE" }
 
+          $isolated = 'dist/reboot-seeder-x64-isolated'
+          Remove-Item $isolated -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $isolated | Out-Null
+          Copy-Item 'dist/reboot-seeder-x64/bke-runtime-bridge-cert-seeder.exe' $isolated
+          & (Join-Path $isolated 'bke-runtime-bridge-cert-seeder.exe') --data-root $dataRoot
+          if ($LASTEXITCODE -ne 0) { throw "isolated single-file certification seeder failed: $LASTEXITCODE" }
+          Write-Host 'Isolated single-file certification seeder: PASS'
+
           @'
           import os
           import sqlite3
