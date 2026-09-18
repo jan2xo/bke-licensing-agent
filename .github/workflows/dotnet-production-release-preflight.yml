@@ -256,6 +256,17 @@ jobs:
           if ($manifest.signing_state -ne "NOT_SIGNED") { throw "preflight unexpectedly contains signed installers" }
           if ($manifest.production_catalog_publication -ne "NOT_AUTHORIZED") { throw "preflight crossed catalog boundary" }
 
+      - name: Build owner-gated production signing request
+        shell: pwsh
+        run: |
+          python scripts/build_production_signing_request.py dist/phase11-preflight/PREFLIGHT-MANIFEST.json dist/phase11-preflight/SIGNING-REQUEST.json
+          if ($LASTEXITCODE -ne 0) { throw "production signing request generation failed" }
+          $request = Get-Content dist/phase11-preflight/SIGNING-REQUEST.json -Raw | ConvertFrom-Json
+          if ($request.signing_authorized -ne $false) { throw "signing request unexpectedly authorizes signing" }
+          if ($request.publish_allowed -ne $false) { throw "signing request unexpectedly authorizes publication" }
+          if ($request.windows_signing.authorization_state -ne "OWNER_AUTHORIZATION_REQUIRED") { throw "Windows signer authorization boundary drifted" }
+          if ($request.update_authority.authorization_state -ne "OWNER_AUTHORIZATION_REQUIRED") { throw "update-authority authorization boundary drifted" }
+
       - name: Upload Phase 11 pre-production release set
         uses: actions/upload-artifact@v4
         with:
