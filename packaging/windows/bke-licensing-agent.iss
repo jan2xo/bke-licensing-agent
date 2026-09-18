@@ -40,10 +40,10 @@ RestartApplications=no
 Source: "..\..\dist\windows\bke-licensing-agent-service\*"; DestDir: "{app}\service"; Flags: recursesubdirs ignoreversion
 ; Replaceable implementation-language payload.
 Source: "..\..\dist\windows\bke-licensing-agent-runtime\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs ignoreversion
-; Existing native user UI and hardened updater assets remain separate migration boundaries.
-Source: "..\..\dist\windows\bke-license-center\*"; DestDir: "{app}\license-center"; Flags: recursesubdirs ignoreversion
-Source: "..\..\dist\windows\bke-updater-core\bke-updater-core.exe"; DestDir: "{app}\updater"; Flags: ignoreversion
-Source: "..\..\dist\windows\bke-privileged-provisioner\bke-privileged-provisioner.exe"; DestDir: "{app}\provisioning"; Flags: ignoreversion
+; Native .NET License Center, privileged updater, and provisioner are architecture-specific payloads.
+Source: "..\\..\\dist\\windows\\bke-license-center-x64\\*"; DestDir: "{app}\\license-center"; Flags: recursesubdirs ignoreversion
+Source: "..\\..\\dist\\windows\\bke-updater-core-x64\\bke-updater-core.exe"; DestDir: "{app}\\updater"; Flags: ignoreversion
+Source: "..\\..\\dist\\windows\\bke-privileged-provisioner-x64\\bke-privileged-provisioner.exe"; DestDir: "{app}\\provisioning"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-keys\*.pem"; DestDir: "{app}\provisioning\target-keys"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-policies\*.json"; DestDir: "{app}\provisioning\target-policies"; Flags: ignoreversion
 ; Phase 9 update-authority trust contains public verification keys only.
