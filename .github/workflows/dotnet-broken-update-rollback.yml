@@ -126,7 +126,8 @@ jobs:
       - name: Build and install healthy canonical baseline
         shell: pwsh
         run: |
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent.iss
+          $iscc = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
+          & $iscc packaging/windows/bke-licensing-agent.iss
           if ($LASTEXITCODE -ne 0) { throw "healthy baseline installer compile failed" }
 
           $installer = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe"
@@ -174,7 +175,8 @@ jobs:
           dotnet publish dotnet/certification/BKE.LicensingAgent.BrokenRuntime/BKE.LicensingAgent.BrokenRuntime.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=2.0.1 --output dist/windows/bke-licensing-agent-runtime
           if ($LASTEXITCODE -ne 0) { throw "broken runtime publish failed" }
 
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=2.0.1" packaging/windows/bke-licensing-agent.iss
+          $iscc = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=2.0.1" packaging/windows/bke-licensing-agent.iss
           if ($LASTEXITCODE -ne 0) { throw "broken 2.0.1 installer compile failed" }
           if (!(Test-Path "dist/installer/BKE-Licensing-Agent-2.0.1-Windows-x64.exe")) { throw "broken installer missing" }
 
