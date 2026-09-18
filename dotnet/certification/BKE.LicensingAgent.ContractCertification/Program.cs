@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 
-var inventoryPath = Path.Combine(AppContext.BaseDirectory, "gen1-baseline.json");
+var inventoryPath = Path.Combine(AppContext.BaseDirectory, "certified-contract-baseline.json");
 using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
 var root = inventory.RootElement;
 var localApi = root.GetProperty("local_api");
