@@ -9,6 +9,8 @@ on:
       - "dotnet/**"
       - "packaging/windows/bke-licensing-agent-runtime-bridge.iss"
       - "packaging/windows/bke-licensing-agent-runtime-bridge-arm64.iss"
+      - "certification/windows_runtime_bridge_seed.ps1"
+      - "certification/windows_runtime_bridge_reboot.ps1"
       - ".github/workflows/dotnet-runtime-bridge.yml"
       - "docs/agent-runtime-replacement-contract.md"
   pull_request:
@@ -18,6 +20,8 @@ on:
       - "dotnet/**"
       - "packaging/windows/bke-licensing-agent-runtime-bridge.iss"
       - "packaging/windows/bke-licensing-agent-runtime-bridge-arm64.iss"
+      - "certification/windows_runtime_bridge_seed.ps1"
+      - "certification/windows_runtime_bridge_reboot.ps1"
       - ".github/workflows/dotnet-runtime-bridge.yml"
       - "docs/agent-runtime-replacement-contract.md"
 
@@ -715,6 +719,42 @@ jobs:
           '@ | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'verify-seeder-db.py') -Encoding utf8
           python (Join-Path $env:RUNNER_TEMP 'verify-seeder-db.py')
           if ($LASTEXITCODE -ne 0) { throw 'certification seeder database verification failed' }
+
+      - name: Prove disposable seeder authorizes through installed Gen2
+        shell: pwsh
+        run: |
+          $liveDataRoot = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+          Stop-Service -Name $env:SERVICE_NAME -Force
+          (Get-Service -Name $env:SERVICE_NAME).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+          try {
+            & dist/reboot-seeder-x64/bke-runtime-bridge-cert-seeder.exe --data-root $liveDataRoot
+            if ($LASTEXITCODE -ne 0) { throw "live certification seeder failed: $LASTEXITCODE" }
+          }
+          finally {
+            Start-Service -Name $env:SERVICE_NAME
+            (Get-Service -Name $env:SERVICE_NAME).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          }
+
+          $body = @{
+            product_id = 'runtime-bridge-cert'
+            version = '2.0.0'
+            installation_id = 'runtime-bridge-installation'
+          } | ConvertTo-Json -Compress
+
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            try {
+              $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:43873/v1/authorize' -ContentType 'application/json' -Body $body -TimeoutSec 3
+              if ($response.authorized -eq $true -and $response.reason -eq 'authorized') {
+                Write-Host 'Disposable certification seeder -> installed Gen2 authorization: PASS'
+                exit 0
+              }
+              Write-Host "Seeder authorization not ready: $($response | ConvertTo-Json -Compress)"
+            } catch {}
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $deadline)
+
+          throw 'Disposable certification seeder did not authorize through installed Gen2'
 
       - name: Publish native ARM64 reboot certification seeder
         shell: pwsh
