@@ -43,7 +43,7 @@ updater\\bke-updater-core.exe
 provisioning\\bke-privileged-provisioner.exe
 ```
 
-All are built natively for x64/AMD64 and ARM64. The .NET-only convergence requires new hosted x64 and persistent ARM64 acceptance before production signing.
+All are built natively for x64/AMD64 and ARM64. The post-certification .NET-only convergence has now passed both hosted x64 acceptance and persistent Windows 11 ARM64 acceptance.
 
 ## Phase 8 hosted result
 
@@ -274,3 +274,166 @@ After replacing only the verifier script from GitHub, Prepare re-established the
 Phase 10 therefore proves automatic rollback from a broken canonical Windows update on both hosted x64 and the persistent native ARM64 machine.
 
 All merge, production deployment, production release/tag, production software-catalog publication, and production signing-key cutover guardrails remain unchanged.
+
+
+## Post-certification .NET-only convergence — CLOSED
+
+The post-certification language convergence is formally closed.
+
+Certified software head:
+
+```text
+48716d34833fb26adc78b14069c01671687d4a0b
+```
+
+Draft convergence PR:
+
+```text
+PR #38
+refactor(gen2): retire Python and converge Agent on .NET 10
+```
+
+The active repository tree at the certified head contains no Python runtime/build sources:
+
+```text
+*.py             0
+*.spec           0
+pyproject.toml    0
+```
+
+The canonical Windows executable set is now native .NET 10:
+
+```text
+service\\bke-licensing-agent-service.exe
+runtime\\bke-licensing-agent-runtime.exe
+license-center\\bke-license-center.exe
+updater\\bke-updater-core.exe
+provisioning\\bke-privileged-provisioner.exe
+```
+
+Hosted exact-head certification passed:
+
+```text
+35387326089  CI push                              SUCCESS
+35387331217  CI PR                                SUCCESS
+35387331304  Phase 9 signed self-update replay    SUCCESS
+35387331231  Phase 11 release preflight           SUCCESS
+35387326051  .NET-only production installer push SUCCESS
+35387331411  .NET-only production installer PR   SUCCESS
+35387331387  Phase 10 rollback replay             SUCCESS
+```
+
+The hosted installer proof established:
+
+- native x64/AMD64 and ARM64 support-payload publication
+- PE machine verification for service, runtime, License Center, updater, and provisioner
+- canonical x64 and ARM64 installer compilation
+- Microsoft Defender scanning
+- fresh hosted x64 installation
+- stable SCM service/runtime/API recovery
+- native .NET License Center smoke
+- .NET privileged updater configuration
+- zero Python/PyInstaller residue under the installed Program Files tree
+- successful automatic rollback from deliberately broken 2.0.1 to healthy 2.0.0 using the expanded install-root transaction
+
+Primary hosted .NET-only artifact:
+
+```text
+artifact id: 10564438481
+digest: sha256:d3570580a337fa987e071b3aa616c6dac8b8e787e066f835708a555bd0be6062
+run: 35387326051
+```
+
+Phase 11 preproduction artifact:
+
+```text
+artifact id: 10564782091
+digest: sha256:48dabd43b3cf294211a778cd01ab35e79dccb704eb770374915a66b71ec9010f
+```
+
+Phase 10 exact-head rollback evidence:
+
+```text
+evidence artifact id: 10564617919
+digest: sha256:5d0facffa0a094152cb8946a7a474967a554e42e3c6fcea9897ecb47558ea15d
+
+ARM64 rollback kit artifact id: 10564632795
+digest: sha256:85608ba27b84df6b448a43a5eeb40afdfe63af4365759ce76797118198d42c26
+```
+
+### Persistent Windows 11 ARM64 acceptance
+
+Machine:
+
+```text
+WIN-J2SML1QDPBD
+```
+
+Verifier:
+
+```text
+certification/windows_dotnet_only_arm64.ps1
+schema: bke.dotnet-only-arm64.v1
+status: PASS
+verified_at: 2026-09-18T20:18:00.2028973+00:00
+installer_exit_code: 0
+```
+
+Prepared installer identity:
+
+```text
+installer_sha256:
+0d72a4ed6bf986394f3173203f81b662cc3bcde0c871787541d7f9336fbb07b2
+```
+
+Baseline and resulting stable service/runtime hashes matched exactly:
+
+```text
+service:
+fba60eb296994d96b95dd4eedd4dc86c3669840cd2b6ad98fc6ed315f80245e0
+
+runtime:
+e4b339103f9cbbe6f31981a0cfeb7d2d48bd7e67a1d181fc769507a184a03afe
+```
+
+Native .NET support executable hashes after convergence:
+
+```text
+license-center:
+a81ee8f14c948ddbffb0b1c164e5b63d380cbb829629d7b92dd93e78475b8b1a
+
+updater:
+de544defa3202f7f028476f6c5f98a349b0f0a3c008e578cf8151aebb8548aa7
+
+provisioner:
+e055248d02e9ec3c14635d199bc6fcce0108fab1b72cc2615e1f30d3fde8a8f0
+```
+
+Every real ARM64 convergence check passed:
+
+- installer identity preserved
+- installer exited zero
+- service running
+- stable SCM identity preserved
+- all five installed executables native ARM64
+- native .NET License Center smoke passed
+- Python/PyInstaller runtime residue removed
+- .NET privileged updater configured
+- durable ProgramData state preserved
+- signed authorization recovered
+- runtime supervision recovered
+- port 43873 loopback boundary preserved
+- rollback staging cleared
+- machine data-root contract preserved
+
+Stable SCM executable after convergence:
+
+```text
+C:\Program Files\BKE Digital Solutions\Licensing Agent\service\bke-licensing-agent-service.exe
+```
+
+The .NET-only convergence is therefore certified on hosted x64/AMD64 and the persistent native Windows ARM64 machine.
+
+Historical Python implementation and migration evidence remain available only through Git history and prior Actions runs; Python/PyInstaller is no longer an active runtime, package, test, or release-tooling dependency on the convergence branch.
+
+Production signing, merge, production tag/release, software-catalog publication, update-authority activation, and deployment remain separate owner-controlled boundaries.
