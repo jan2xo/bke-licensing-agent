@@ -349,3 +349,72 @@ jobs:
             Start-Sleep -Milliseconds 500
           } while ((Get-Date) -lt $deadline)
           throw 'Gen2 local API did not recover after stable service restart'
+
+      - name: Build deliberately broken Gen2 runtime candidate
+        shell: pwsh
+        run: |
+          $runtime = 'dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe'
+          if (!(Test-Path $runtime)) { throw 'runtime executable missing before broken-candidate construction' }
+          Set-Content -LiteralPath $runtime -Value 'deliberately-broken-runtime-bridge-candidate' -Encoding ascii
+
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent-runtime-bridge.iss
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Windows-x64.exe"
+          if (!(Test-Path $installer)) { throw 'broken runtime bridge installer missing' }
+          Write-Host 'Deliberately broken Gen2 runtime candidate built for rollback certification only.'
+
+      - name: Prove automatic rollback to last-known-good runtime
+        shell: pwsh
+        run: |
+          $installRoot = 'C:\Program Files\BKE Digital Solutions\Licensing Agent'
+          $serviceExe = Join-Path $installRoot 'service\bke-licensing-agent-service.exe'
+          $runtimeExe = Join-Path $installRoot 'runtime\bke-licensing-agent-runtime.exe'
+          $serviceHashBefore = (Get-FileHash -Algorithm SHA256 $serviceExe).Hash
+          $runtimeHashBefore = (Get-FileHash -Algorithm SHA256 $runtimeExe).Hash
+          $snapshot = Join-Path $env:RUNNER_TEMP 'runtime-bridge-authority-state.json'
+          $dataRoot = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+
+          $installer = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Windows-x64.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP 'broken-runtime-rollback.log'
+          $process = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$log" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            Get-Content $log -ErrorAction SilentlyContinue
+            throw "broken-candidate installer did not complete rollback cleanly: $($process.ExitCode)"
+          }
+
+          if (!(Select-String -LiteralPath $log -SimpleMatch 'Replacement runtime failed health; previous Agent payload restored automatically.')) {
+            Get-Content $log
+            throw 'installer did not record automatic runtime rollback'
+          }
+
+          $service = Get-Service -Name $env:SERVICE_NAME -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          if ((Get-FileHash -Algorithm SHA256 $serviceExe).Hash -ne $serviceHashBefore) {
+            throw 'stable bootstrap payload was not restored exactly after broken candidate'
+          }
+          if ((Get-FileHash -Algorithm SHA256 $runtimeExe).Hash -ne $runtimeHashBefore) {
+            throw 'last-known-good runtime payload was not restored exactly after broken candidate'
+          }
+
+          python dotnet/certification/runtime_bridge_state_fixture.py assert --data-root "$dataRoot" --snapshot "$snapshot"
+
+          $uri = 'http://127.0.0.1:43873/v1/authorize'
+          $body = @{
+            product_id = 'runtime-bridge-cert'
+            version = '2.0.0'
+            installation_id = 'runtime-bridge-installation'
+          } | ConvertTo-Json -Compress
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            try {
+              $response = Invoke-RestMethod -Method Post -Uri $uri -ContentType 'application/json' -Body $body -TimeoutSec 2
+              if ($response.authorized -eq $true -and $response.reason -eq 'authorized') {
+                $runtime = Get-CimInstance Win32_Process |
+                  Where-Object { $_.ExecutablePath -like '*\Licensing Agent\runtime\bke-licensing-agent-runtime.exe' }
+                if (!$runtime) { throw 'restored bootstrap is not supervising the last-known-good runtime' }
+                Write-Host 'Broken Gen2 candidate -> automatic last-known-good rollback: PASS'
+                exit 0
+              }
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+          throw 'last-known-good Gen2 runtime did not recover authorization after automatic rollback'
