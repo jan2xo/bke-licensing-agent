@@ -1,0 +1,73 @@
+name: .NET historical lease compatibility diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/historical-lease-compatibility-diagnostic
+    paths:
+      - ".github/workflows/dotnet-historical-lease-diagnostic.yml"
+      - "dotnet/Directory.Build.props"
+      - "dotnet/tools/BKE.LicensingAgent.LeaseDiagnostic/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build read-only diagnostic
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build diagnostic
+        shell: pwsh
+        run: |
+          dotnet build dotnet/tools/BKE.LicensingAgent.LeaseDiagnostic/BKE.LicensingAgent.LeaseDiagnostic.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "diagnostic build failed" }
+
+      - name: Publish x64 + ARM64
+        shell: pwsh
+        run: |
+          dotnet publish dotnet/tools/BKE.LicensingAgent.LeaseDiagnostic/BKE.LicensingAgent.LeaseDiagnostic.csproj --configuration Release --runtime win-x64 --self-contained true --output dist/lease-diagnostic-x64
+          if ($LASTEXITCODE -ne 0) { throw "x64 diagnostic publish failed" }
+
+          dotnet publish dotnet/tools/BKE.LicensingAgent.LeaseDiagnostic/BKE.LicensingAgent.LeaseDiagnostic.csproj --configuration Release --runtime win-arm64 --self-contained true --output dist/lease-diagnostic-arm64
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 diagnostic publish failed" }
+
+      - name: Smoke x64 diagnostic startup
+        shell: pwsh
+        run: |
+          $probe = Start-Process -FilePath ".\dist\lease-diagnostic-x64\bke-lease-diagnostic.exe" -ArgumentList @(
+            "--data-root", "$env:RUNNER_TEMP\missing-agent-data",
+            "--product-id", "bke-render-dock",
+            "--version", "1.0.2",
+            "--installation-id", "diagnostic-smoke"
+          ) -Wait -PassThru -NoNewWindow
+          if ($probe.ExitCode -ne 1) { throw "diagnostic fail-closed smoke returned unexpected exit code $($probe.ExitCode)" }
+
+      - name: Verify ARM64 executable architecture
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path ".\dist\lease-diagnostic-arm64\bke-lease-diagnostic.exe").Path
+          $bytes = [IO.File]::ReadAllBytes($path)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          $signature = "PE" + [char]0 + [char]0
+          if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne $signature) { throw "invalid ARM64 diagnostic PE" }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0xAA64) { throw ("unexpected ARM64 diagnostic machine: 0x{0:X4}" -f $machine) }
+
+      - name: Upload native diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Historical-Lease-Diagnostic-\${{ github.sha }}
+          path: |
+            dist/lease-diagnostic-x64/**
+            dist/lease-diagnostic-arm64/**
+          if-no-files-found: error
+          retention-days: 7
