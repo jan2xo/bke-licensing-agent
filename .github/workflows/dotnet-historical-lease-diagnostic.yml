@@ -65,7 +65,7 @@ jobs:
       - name: Upload native diagnostic
         uses: actions/upload-artifact@v4
         with:
-          name: BKE-Historical-Lease-Diagnostic-\${{ github.sha }}
+          name: BKE-Historical-Lease-Diagnostic
           path: |
             dist/lease-diagnostic-x64/**
             dist/lease-diagnostic-arm64/**
