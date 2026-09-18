@@ -380,6 +380,17 @@ jobs:
           foreach ($path in @($serviceExe,$runtimeExe,(Join-Path $installRoot "license-center\bke-license-center.exe"),(Join-Path $installRoot "updater\bke-updater-core.exe"))) {
             if (!(Test-Path $path)) { throw "installed Phase 8 asset missing: $path" }
           }
+
+          $updateKey = Join-Path $installRoot "trust\update-authority-keys\phase9-ci-disposable-v1.json"
+          if (!(Test-Path $updateKey)) { throw "installed Phase 9 public update-authority key is missing" }
+          $updateKeyDocument = Get-Content -LiteralPath $updateKey -Raw | ConvertFrom-Json
+          if ($updateKeyDocument.schema -ne "bke.update-authority-key.v1") { throw "installed update-authority key schema mismatch" }
+          if ($updateKeyDocument.key_id -ne "phase9-ci-disposable-v1") { throw "installed update-authority key id mismatch" }
+          if ($updateKeyDocument.algorithm -ne "Ed25519") { throw "installed update-authority key algorithm mismatch" }
+          if ([Convert]::FromBase64String([string]$updateKeyDocument.public_key).Length -ne 32) { throw "installed update-authority public key is not 32 bytes" }
+          $updateKeyRaw = Get-Content -LiteralPath $updateKey -Raw
+          if ($updateKeyRaw -match "PRIVATE|private_key") { throw "private update signing material leaked into installed trust bundle" }
+
           if (Test-Path (Join-Path $installRoot "bridge-cert.enable")) { throw "canonical installer emitted/preserved certification marker" }
           if (Test-Path (Join-Path $installRoot "service.rollback")) { throw "service rollback staging leaked after successful migration" }
           if (Test-Path (Join-Path $installRoot "runtime.rollback")) { throw "runtime rollback staging leaked after successful migration" }
