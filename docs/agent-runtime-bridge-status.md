@@ -10,7 +10,7 @@ This branch proves a language-independent BKE Licensing Agent machine boundary w
 - Durable machine state: `%ProgramData%\\BKE Digital Solutions\\Licensing Agent`
 - Local API: `127.0.0.1:43873`
 
-The bootstrap owns process supervision and Agent-release polling. The runtime owns licensing capabilities. A future runtime may be .NET, Python, Rust, or another implementation as long as it preserves the runtime contract.
+The bootstrap owns process supervision and Agent-release polling. The .NET 10 runtime owns licensing capabilities. The stable machine contract remains implementation-separated so service/runtime replacement stays transactional, but the current supported Agent implementation is .NET 10.
 
 ## Certification and canonical-installer boundaries
 
@@ -26,7 +26,24 @@ Phase 8 migrates the canonical Windows installer definitions on the stacked cand
 - `packaging/windows/bke-licensing-agent.iss` → native Gen2 x64
 - `packaging/windows/bke-licensing-agent-arm64.iss` → native Gen2 ARM64
 
-Canonical installers delete any stale `bridge-cert.enable` marker and never create one. The existing Python/PyInstaller License Center, updater-core, privileged provisioner, and trust payload remain separate packaging boundaries.
+Canonical installers delete any stale `bridge-cert.enable` marker and never create one. After the certified Phase 8–10 waves, the License Center, updater helper, privileged provisioner, and release tooling were migrated to native .NET 10. Python/PyInstaller is no longer an active packaging/runtime dependency.
+
+
+## Post-certification .NET-only convergence
+
+After Phases 8–10 passed, the active Agent tree was converged to .NET 10-only execution and build tooling. Historical Python migration evidence remains preserved in Git history and the cited workflow runs, but the current branch no longer ships or builds the Python runtime.
+
+Current Windows executable set:
+
+```text
+service\\bke-licensing-agent-service.exe
+runtime\\bke-licensing-agent-runtime.exe
+license-center\\bke-license-center.exe
+updater\\bke-updater-core.exe
+provisioning\\bke-privileged-provisioner.exe
+```
+
+All are built natively for x64/AMD64 and ARM64. The .NET-only convergence requires new hosted x64 and persistent ARM64 acceptance before production signing.
 
 ## Phase 8 hosted result
 
