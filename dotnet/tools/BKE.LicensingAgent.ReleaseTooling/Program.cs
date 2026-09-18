@@ -56,9 +56,9 @@ internal static class Program
 
         using (var stream = File.CreateText(Path.Combine(targetKeys, targetKeyId + ".pem")))
         {
-            var writer = new PemWriter(stream);
+            var writer = new OpenSslPemWriter(stream);
             var info = SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(targetPublic);
-            writer.WriteObject(new PemObject("PUBLIC KEY", info.GetEncoded()));
+            writer.WriteObject(new BouncyPemObject("PUBLIC KEY", info.GetEncoded()));
         }
 
         var unsigned = new SortedDictionary<string, object?>(StringComparer.Ordinal)
@@ -135,8 +135,8 @@ internal static class Program
         var privatePath = Path.Combine(output, "BKE-UPDATE-AUTHORITY-PRIVATE.pem");
         using (var stream = File.CreateText(privatePath))
         {
-            var writer = new PemWriter(stream);
-            writer.WriteObject(new PemObject("PRIVATE KEY", privateInfo.GetEncoded()));
+            var writer = new OpenSslPemWriter(stream);
+            writer.WriteObject(new BouncyPemObject("PRIVATE KEY", privateInfo.GetEncoded()));
         }
 
         var publicDocument = new SortedDictionary<string, object?>(StringComparer.Ordinal)
