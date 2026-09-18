@@ -51,7 +51,7 @@ internal static class Program
         var dataRoot = Path.Combine(programData, "BKE Digital Solutions", "Licensing Agent");
         var privileged = Path.Combine(dataRoot, "privileged");
         var runtimeRoot = Path.Combine(privileged, "runtime");
-        var helperExecutable = Path.Combine(installRoot, "updater", "bke-privileged-updater.exe");
+        var helperExecutable = Path.Combine(installRoot, "updater", "bke-updater-core.exe");
         var signingPrivateKey = Path.Combine(privileged, "agent-request-signing.pem");
         var targetKeysDirectory = Path.Combine(privileged, "target-keys");
         var targetPoliciesDirectory = Path.Combine(privileged, "target-policies");
@@ -62,7 +62,7 @@ internal static class Program
 
         if (!File.Exists(helperExecutable))
         {
-            throw new InvalidDataException("trusted .NET privileged updater helper is missing");
+            throw new InvalidDataException("trusted .NET updater helper is missing");
         }
 
         var keys = ValidatePublicKeys(sourceKeys);
