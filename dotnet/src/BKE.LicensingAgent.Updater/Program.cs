@@ -1,0 +1,750 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Crypto.Signers;
+
+namespace BKE.LicensingAgent.Updater;
+
+internal static class Program
+{
+    private static readonly HashSet<string> RequestFields = new(StringComparer.Ordinal)
+    {
+        "schema","request_id","product_id","current_version","target_version","platform","architecture",
+        "install_root","entry_point","artifact_sha256","artifact_size","update_policy_sha256",
+        "target_policy_sha256","issued_at","expires_at","signing_key_id","algorithm","signature",
+    };
+
+    private static readonly HashSet<string> UpdateFields = new(StringComparer.Ordinal)
+    {
+        "schema","product_id","current_version","latest_version","minimum_supported_version","channel",
+        "platform","architecture","release_id","artifact_id","artifact_sha256","artifact_size","content_type",
+        "published_at","issued_at","revision","signing_key_id","algorithm","signature",
+    };
+
+    private static readonly HashSet<string> TargetFields = new(StringComparer.Ordinal)
+    {
+        "schema","policy_id","revision","product_id","platform","architecture","install_root","entry_point",
+        "signing_key_id","algorithm","signature",
+    };
+
+    private static readonly HashSet<string> TrustFields = new(StringComparer.Ordinal)
+    {
+        "schema","agent_keys","digital_keys","target_keys","approved_install_roots","expected_channel",
+        "last_update_policy_revision","last_target_policy_revision",
+    };
+
+    private static readonly Regex HashPattern = new("^[a-f0-9]{64}$", RegexOptions.CultureInvariant);
+    private static readonly Regex RequestIdPattern = new("^[A-Za-z0-9_.-]{16,128}$", RegexOptions.CultureInvariant);
+    private static readonly Regex PolicyIdPattern = new("^[A-Za-z0-9_.-]{8,128}$", RegexOptions.CultureInvariant);
+
+    public static int Main(string[] args)
+    {
+        try
+        {
+            var options = Parse(args);
+            Execute(options);
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"BKE privileged update failed: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static void Execute(Options options)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Windows privileged updater must run on Windows");
+
+        var runtimeRoot = ResolveDirectory(options.RuntimeRoot, "runtime_root");
+        var requestPath = ResolveUnder(runtimeRoot, options.Request, "request");
+        var updatePath = ResolveUnder(runtimeRoot, options.UpdatePolicy, "update_policy");
+        var targetPath = ResolveUnder(runtimeRoot, options.TargetPolicy, "target_policy");
+        var artifactPath = ResolveUnder(runtimeRoot, options.Artifact, "artifact");
+        var stagedRoot = ResolveUnder(runtimeRoot, options.StagedRoot, "staged_root");
+        var backupRoot = ResolveUnder(runtimeRoot, options.BackupRoot, "backup_root", mustExist: false);
+        var transactionRoot = options.TransactionRoot is null
+            ? null
+            : ResolveUnder(runtimeRoot, options.TransactionRoot, "transaction_root", mustExist: false);
+
+        var trust = LoadTrust(runtimeRoot);
+        using var requestDocument = JsonDocument.Parse(File.ReadAllText(requestPath));
+        using var updateDocument = JsonDocument.Parse(File.ReadAllText(updatePath));
+        using var targetDocument = JsonDocument.Parse(File.ReadAllText(targetPath));
+
+        var request = VerifyRequest(requestDocument.RootElement, trust, runtimeRoot);
+        var update = VerifyUpdate(updateDocument.RootElement, trust, request);
+        var target = VerifyTarget(targetDocument.RootElement, trust);
+
+        ComposeAuthority(request, update, target, artifactPath, updateDocument.RootElement, targetDocument.RootElement);
+        var plan = ComposePlan(target, stagedRoot, backupRoot, transactionRoot, options.TransactionId, options.LaunchArgs, options.ReadyMarker, options.StartupTimeout);
+        ReplaceAndLaunch(plan, options.WaitPid);
+    }
+
+    private static Options Parse(string[] args)
+    {
+        var values = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var privileged = false;
+        for (var index = 0; index < args.Length; index++)
+        {
+            var current = args[index];
+            if (current == "--privileged-update")
+            {
+                privileged = true;
+                continue;
+            }
+            if (!current.StartsWith("--", StringComparison.Ordinal) || index + 1 >= args.Length)
+                throw new InvalidDataException($"invalid privileged updater argument: {current}");
+            var value = args[++index];
+            if (!values.TryGetValue(current, out var list))
+            {
+                list = [];
+                values[current] = list;
+            }
+            list.Add(value);
+        }
+
+        if (!privileged) throw new InvalidDataException("--privileged-update is required");
+        string Required(string name) =>
+            values.TryGetValue(name, out var list) && list.Count == 1 && !string.IsNullOrWhiteSpace(list[0])
+                ? list[0]
+                : throw new InvalidDataException($"{name} is required");
+        string? Optional(string name) =>
+            values.TryGetValue(name, out var list) && list.Count == 1 ? list[0] : null;
+
+        int? waitPid = null;
+        if (Optional("--wait-pid") is { } wait)
+        {
+            if (!int.TryParse(wait, out var parsed) || parsed <= 0) throw new InvalidDataException("wait_pid must be positive");
+            waitPid = parsed;
+        }
+
+        var timeout = 10d;
+        if (Optional("--startup-timeout") is { } timeoutRaw &&
+            (!double.TryParse(timeoutRaw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out timeout) || timeout <= 0))
+        {
+            throw new InvalidDataException("startup_timeout must be positive");
+        }
+
+        return new Options(
+            Required("--runtime-root"),
+            Required("--request"),
+            Required("--update-policy"),
+            Required("--target-policy"),
+            Required("--artifact"),
+            Required("--staged-root"),
+            Required("--backup-root"),
+            Optional("--transaction-root"),
+            Optional("--transaction-id"),
+            waitPid,
+            values.TryGetValue("--launch-arg", out var launch) ? launch.ToArray() : [],
+            Optional("--ready-marker"),
+            timeout);
+    }
+
+    private static TrustedRuntime LoadTrust(string runtimeRoot)
+    {
+        var trustPath = Path.Combine(runtimeRoot, "trust.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(trustPath));
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.Ordinal).SetEquals(TrustFields) ||
+            RequiredString(root, "schema") != "bke.updater-trust.v1")
+        {
+            throw new InvalidDataException("unsupported trusted runtime configuration");
+        }
+
+        var approvedNode = root.GetProperty("approved_install_roots");
+        if (approvedNode.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("invalid approved_install_roots");
+        var approved = approvedNode.EnumerateArray().Select(item => item.GetString())
+            .Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().Select(Path.GetFullPath).ToArray();
+        if (approved.Length == 0 || approved.Length != approvedNode.GetArrayLength())
+            throw new InvalidDataException("invalid approved_install_roots");
+
+        return new TrustedRuntime(
+            DecodeKeys(root.GetProperty("agent_keys"), "agent_keys"),
+            DecodeKeys(root.GetProperty("digital_keys"), "digital_keys"),
+            DecodeKeys(root.GetProperty("target_keys"), "target_keys"),
+            approved,
+            RequiredString(root, "expected_channel"),
+            OptionalRevision(root, "last_update_policy_revision"),
+            OptionalRevision(root, "last_target_policy_revision"));
+    }
+
+    private static VerifiedRequest VerifyRequest(JsonElement root, TrustedRuntime trust, string runtimeRoot)
+    {
+        RequireExact(root, RequestFields, "privileged request");
+        if (RequiredString(root, "schema") != "bke.privileged-update-request.v1" ||
+            RequiredString(root, "algorithm") != "Ed25519")
+            throw new InvalidDataException("unsupported privileged request contract");
+
+        var requestId = RequiredString(root, "request_id");
+        if (!RequestIdPattern.IsMatch(requestId)) throw new InvalidDataException("invalid request_id");
+
+        var artifactHash = RequiredHash(root, "artifact_sha256");
+        var updateHash = RequiredHash(root, "update_policy_sha256");
+        var targetHash = RequiredHash(root, "target_policy_sha256");
+        var artifactSize = RequiredLong(root, "artifact_size");
+        if (artifactSize < 0) throw new InvalidDataException("invalid artifact_size");
+
+        var issued = RequiredTime(root, "issued_at");
+        var expires = RequiredTime(root, "expires_at");
+        var lifetime = expires - issued;
+        if (lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromMinutes(5))
+            throw new InvalidDataException("invalid request lifetime");
+        var now = DateTimeOffset.UtcNow;
+        if (issued - now > TimeSpan.FromSeconds(30)) throw new InvalidDataException("request issued in the future");
+        if (now >= expires) throw new InvalidDataException("privileged request expired");
+
+        var keyId = RequiredString(root, "signing_key_id");
+        if (!trust.AgentKeys.TryGetValue(keyId, out var key))
+            throw new InvalidDataException("unknown Agent signing key");
+        VerifySignature(root, key, "invalid privileged request signature");
+
+        var replay = Path.Combine(runtimeRoot, "replay");
+        Directory.CreateDirectory(replay);
+        var replayPath = Path.Combine(replay, requestId);
+        try
+        {
+            using var stream = new FileStream(replayPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            stream.Write(Encoding.ASCII.GetBytes("consumed\n"));
+        }
+        catch (IOException)
+        {
+            throw new InvalidDataException("privileged request already consumed");
+        }
+
+        return new VerifiedRequest(
+            requestId,
+            RequiredString(root, "product_id"),
+            RequiredString(root, "current_version"),
+            RequiredString(root, "target_version"),
+            RequiredString(root, "platform"),
+            RequiredString(root, "architecture"),
+            Path.GetFullPath(RequiredString(root, "install_root")),
+            RequiredRelativePath(root, "entry_point"),
+            artifactHash,
+            artifactSize,
+            updateHash,
+            targetHash);
+    }
+
+    private static VerifiedUpdate VerifyUpdate(JsonElement root, TrustedRuntime trust, VerifiedRequest request)
+    {
+        RequireExact(root, UpdateFields, "update policy");
+        if (RequiredString(root, "schema") != "bke.update-policy.v1" ||
+            RequiredString(root, "algorithm") != "Ed25519")
+            throw new InvalidDataException("unsupported update policy contract");
+
+        if (RequiredString(root, "product_id") != request.ProductId) throw new InvalidDataException("product_id mismatch");
+        if (RequiredString(root, "platform") != request.Platform) throw new InvalidDataException("platform mismatch");
+        if (RequiredString(root, "architecture") != request.Architecture) throw new InvalidDataException("architecture mismatch");
+        if (RequiredString(root, "channel") != trust.ExpectedChannel) throw new InvalidDataException("channel mismatch");
+
+        var current = SemanticVersion.Parse(RequiredString(root, "current_version"));
+        var latest = SemanticVersion.Parse(RequiredString(root, "latest_version"));
+        var minimum = SemanticVersion.Parse(RequiredString(root, "minimum_supported_version"));
+        if (minimum.CompareTo(latest) > 0) throw new InvalidDataException("minimum version exceeds latest version");
+        _ = current;
+
+        var revision = RequiredInt(root, "revision");
+        if (revision < 0) throw new InvalidDataException("invalid policy revision");
+        if (trust.LastUpdateRevision is not null && revision <= trust.LastUpdateRevision)
+            throw new InvalidDataException("stale policy");
+
+        var keyId = RequiredString(root, "signing_key_id");
+        if (!trust.DigitalKeys.TryGetValue(keyId, out var key))
+            throw new InvalidDataException("unknown signing key");
+        VerifySignature(root, key, "invalid policy signature");
+
+        return new VerifiedUpdate(
+            RequiredString(root, "product_id"),
+            RequiredString(root, "current_version"),
+            RequiredString(root, "latest_version"),
+            RequiredString(root, "platform"),
+            RequiredString(root, "architecture"),
+            RequiredHash(root, "artifact_sha256"),
+            RequiredLong(root, "artifact_size"));
+    }
+
+    private static VerifiedTarget VerifyTarget(JsonElement root, TrustedRuntime trust)
+    {
+        RequireExact(root, TargetFields, "target policy");
+        if (RequiredString(root, "schema") != "bke.install-target-policy.v1" ||
+            RequiredString(root, "algorithm") != "Ed25519")
+            throw new InvalidDataException("unsupported target policy contract");
+
+        var policyId = RequiredString(root, "policy_id");
+        if (!PolicyIdPattern.IsMatch(policyId)) throw new InvalidDataException("invalid policy_id");
+        var revision = RequiredInt(root, "revision");
+        if (revision < 1) throw new InvalidDataException("invalid revision");
+        if (trust.LastTargetRevision is not null && revision <= trust.LastTargetRevision)
+            throw new InvalidDataException("stale target policy");
+        if (RequiredString(root, "platform") != "windows")
+            throw new InvalidDataException("target policy is not for Windows");
+
+        var installRoot = Path.GetFullPath(RequiredString(root, "install_root"));
+        if (!trust.ApprovedRoots.Any(rootPath => IsUnder(rootPath, installRoot)))
+            throw new InvalidDataException("install root is outside approved BKE roots");
+
+        var entryPoint = RequiredRelativePath(root, "entry_point");
+        var executable = Path.GetFullPath(Path.Combine(installRoot, entryPoint));
+        if (!IsUnder(installRoot, executable))
+            throw new InvalidDataException("entry point escapes install root");
+
+        var keyId = RequiredString(root, "signing_key_id");
+        if (!trust.TargetKeys.TryGetValue(keyId, out var key))
+            throw new InvalidDataException("unknown BKE signing key");
+        VerifySignature(root, key, "invalid target policy signature");
+
+        return new VerifiedTarget(
+            RequiredString(root, "product_id"),
+            RequiredString(root, "platform"),
+            RequiredString(root, "architecture"),
+            installRoot,
+            entryPoint,
+            Sha256(Canonical(root)));
+    }
+
+    private static void ComposeAuthority(
+        VerifiedRequest request,
+        VerifiedUpdate update,
+        VerifiedTarget target,
+        string artifactPath,
+        JsonElement updateDocument,
+        JsonElement targetDocument)
+    {
+        if (request.ProductId != update.ProductId || request.ProductId != target.ProductId)
+            throw new InvalidDataException("product identity mismatch");
+        if (request.CurrentVersion != update.CurrentVersion)
+            throw new InvalidDataException("current version mismatch");
+        if (request.TargetVersion != update.LatestVersion)
+            throw new InvalidDataException("target version mismatch");
+        if (request.Platform != update.Platform || request.Platform != target.Platform)
+            throw new InvalidDataException("platform mismatch");
+        if (request.Architecture != update.Architecture || request.Architecture != target.Architecture)
+            throw new InvalidDataException("architecture mismatch");
+        if (!PathEquals(request.InstallRoot, target.InstallRoot))
+            throw new InvalidDataException("install root mismatch");
+        if (!string.Equals(request.EntryPoint, target.EntryPoint, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("entry point mismatch");
+        if (!string.Equals(request.ArtifactSha256, update.ArtifactSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("artifact hash mismatch");
+        if (request.ArtifactSize != update.ArtifactSize)
+            throw new InvalidDataException("artifact size mismatch");
+        if (request.UpdatePolicySha256 != Sha256(Canonical(updateDocument)))
+            throw new InvalidDataException("update policy hash mismatch");
+        if (request.TargetPolicySha256 != Sha256(Canonical(targetDocument)))
+            throw new InvalidDataException("target policy hash mismatch");
+
+        var info = new FileInfo(artifactPath);
+        if (!info.Exists || info.Length != request.ArtifactSize)
+            throw new InvalidDataException("artifact size mismatch");
+        using var stream = File.OpenRead(artifactPath);
+        var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (!string.Equals(digest, request.ArtifactSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("artifact hash mismatch");
+    }
+
+    private static Plan ComposePlan(
+        VerifiedTarget target,
+        string stagedRoot,
+        string backupRoot,
+        string? transactionRoot,
+        string? transactionId,
+        IReadOnlyList<string> launchArgs,
+        string? readyMarker,
+        double startupTimeout)
+    {
+        var installRoot = Path.GetFullPath(target.InstallRoot);
+        var stage = Path.GetFullPath(stagedRoot);
+        var backup = Path.GetFullPath(backupRoot);
+        RequireDistinctNonOverlapping(installRoot, stage, backup);
+
+        var stagedExecutable = Path.GetFullPath(Path.Combine(stage, target.EntryPoint));
+        if (!IsUnder(stage, stagedExecutable) || !File.Exists(stagedExecutable))
+            throw new InvalidDataException("authorized staged executable is missing");
+
+        var executable = Path.GetFullPath(Path.Combine(installRoot, target.EntryPoint));
+        if (!IsUnder(installRoot, executable))
+            throw new InvalidDataException("authorized entry point escapes install root");
+
+        return new Plan(installRoot, stage, backup, executable, transactionRoot, transactionId, launchArgs, readyMarker, startupTimeout);
+    }
+
+    private static void ReplaceAndLaunch(Plan plan, int? waitPid)
+    {
+        WaitForExit(waitPid, TimeSpan.FromSeconds(30));
+        if (Directory.Exists(plan.BackupRoot)) Directory.Delete(plan.BackupRoot, true);
+        CopyDirectory(plan.InstallRoot, plan.BackupRoot);
+
+        Process? launched = null;
+        try
+        {
+            Directory.Delete(plan.InstallRoot, true);
+            CopyDirectory(plan.StagedRoot, plan.InstallRoot);
+            launched = LaunchAndVerify(plan.Executable, plan.LaunchArgs, plan.ReadyMarker, plan.StartupTimeout);
+            WriteTransaction(plan, "COMMITTED", null);
+        }
+        catch (Exception exception)
+        {
+            Stop(launched);
+            if (Directory.Exists(plan.InstallRoot)) Directory.Delete(plan.InstallRoot, true);
+            CopyDirectory(plan.BackupRoot, plan.InstallRoot);
+            try
+            {
+                _ = LaunchAndVerify(plan.Executable, plan.LaunchArgs, plan.ReadyMarker, plan.StartupTimeout);
+            }
+            catch (Exception restore)
+            {
+                WriteTransaction(plan, "FAILED", $"{exception.Message}; restoration failed: {restore.Message}");
+                throw;
+            }
+            WriteTransaction(plan, "ROLLED_BACK", exception.Message);
+            throw;
+        }
+    }
+
+    private static Process? LaunchAndVerify(string executable, IReadOnlyList<string> args, string? readyMarker, double startupTimeout)
+    {
+        var start = new ProcessStartInfo
+        {
+            FileName = executable,
+            UseShellExecute = false,
+            RedirectStandardOutput = readyMarker is not null,
+            RedirectStandardError = readyMarker is not null,
+        };
+        foreach (var argument in args) start.ArgumentList.Add(argument);
+        var process = Process.Start(start) ?? throw new InvalidOperationException("updated process could not start");
+
+        var deadline = DateTime.UtcNow.AddSeconds(startupTimeout);
+        if (readyMarker is null)
+        {
+            while (DateTime.UtcNow < deadline)
+            {
+                if (process.HasExited)
+                {
+                    if (process.ExitCode != 0) throw new InvalidOperationException($"updated process failed startup: {process.ExitCode}");
+                    return process;
+                }
+                Thread.Sleep(50);
+            }
+            return process;
+        }
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (process.HasExited) throw new InvalidOperationException($"updated process exited before readiness: {process.ExitCode}");
+            var line = process.StandardOutput.ReadLine();
+            if (line is not null && line.Contains(readyMarker, StringComparison.Ordinal))
+            {
+                Thread.Sleep(200);
+                if (process.HasExited) throw new InvalidOperationException($"updated process exited after readiness: {process.ExitCode}");
+                return process;
+            }
+            Thread.Sleep(50);
+        }
+        throw new TimeoutException("updated process did not report readiness");
+    }
+
+    private static void Stop(Process? process)
+    {
+        if (process is null || process.HasExited) return;
+        process.Kill(entireProcessTree: true);
+        process.WaitForExit(3000);
+    }
+
+    private static void WaitForExit(int? pid, TimeSpan timeout)
+    {
+        if (pid is null) return;
+        try
+        {
+            using var process = Process.GetProcessById(pid.Value);
+            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+                throw new TimeoutException("target process did not exit");
+        }
+        catch (ArgumentException)
+        {
+            // Already exited.
+        }
+    }
+
+    private static void WriteTransaction(Plan plan, string state, string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(plan.TransactionRoot) || string.IsNullOrWhiteSpace(plan.TransactionId)) return;
+        var folder = Path.Combine(plan.TransactionRoot, plan.TransactionId);
+        Directory.CreateDirectory(folder);
+        var document = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["transaction_id"] = plan.TransactionId,
+            ["state"] = state,
+            ["target_version"] = plan.TransactionId,
+        };
+        if (reason is not null) document["reason"] = reason;
+        var temporary = Path.Combine(folder, "state.json.tmp");
+        File.WriteAllText(temporary, JsonSerializer.Serialize(document), new UTF8Encoding(false));
+        File.Move(temporary, Path.Combine(folder, "state.json"), true);
+    }
+
+    private static Dictionary<string, byte[]> DecodeKeys(JsonElement root, string field)
+    {
+        if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"invalid {field}");
+        var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(property.Name))
+                throw new InvalidDataException($"invalid {field}");
+            byte[] raw;
+            try { raw = Convert.FromBase64String(property.Value.GetString()!); }
+            catch (FormatException exception) { throw new InvalidDataException($"invalid {field}", exception); }
+            if (raw.Length != 32) throw new InvalidDataException($"invalid {field}");
+            result[property.Name] = raw;
+        }
+        if (result.Count == 0) throw new InvalidDataException($"invalid {field}");
+        return result;
+    }
+
+    private static void VerifySignature(JsonElement root, byte[] rawKey, string error)
+    {
+        byte[] signature;
+        try { signature = Convert.FromBase64String(RequiredString(root, "signature")); }
+        catch (FormatException exception) { throw new InvalidDataException(error, exception); }
+        var canonical = Canonical(root, "signature");
+        var verifier = new Ed25519Signer();
+        verifier.Init(false, new Ed25519PublicKeyParameters(rawKey));
+        verifier.BlockUpdate(canonical, 0, canonical.Length);
+        if (!verifier.VerifySignature(signature)) throw new InvalidDataException(error);
+    }
+
+    private static byte[] Canonical(JsonElement root, string? exclude = null)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+               {
+                   Indented = false,
+                   Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+               }))
+        {
+            WriteCanonical(writer, root, exclude);
+        }
+        return stream.ToArray();
+    }
+
+    private static void WriteCanonical(Utf8JsonWriter writer, JsonElement element, string? exclude)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject()
+                             .Where(property => property.Name != exclude)
+                             .OrderBy(property => property.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonical(writer, property.Value, null);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray()) WriteCanonical(writer, item, null);
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(element.GetString());
+                break;
+            case JsonValueKind.Number:
+                writer.WriteRawValue(element.GetRawText(), skipInputValidation: true);
+                break;
+            case JsonValueKind.True:
+                writer.WriteBooleanValue(true);
+                break;
+            case JsonValueKind.False:
+                writer.WriteBooleanValue(false);
+                break;
+            case JsonValueKind.Null:
+                writer.WriteNullValue();
+                break;
+            default:
+                throw new InvalidDataException("unsupported canonical JSON value");
+        }
+    }
+
+    private static string ResolveDirectory(string value, string field)
+    {
+        var path = Path.GetFullPath(value);
+        if (!Directory.Exists(path) || Path.GetPathRoot(path) == path) throw new InvalidDataException($"invalid {field} root");
+        return path;
+    }
+
+    private static string ResolveUnder(string root, string value, string field, bool mustExist = true)
+    {
+        var path = Path.GetFullPath(value);
+        if (!IsUnder(root, path)) throw new InvalidDataException($"{field} must be inside the helper-owned runtime root");
+        if (mustExist && !File.Exists(path) && !Directory.Exists(path))
+            throw new InvalidDataException($"{field} is unavailable");
+        return path;
+    }
+
+    private static bool IsUnder(string root, string child)
+    {
+        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var normalizedChild = Path.GetFullPath(child);
+        return normalizedChild.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalizedChild.TrimEnd(Path.DirectorySeparatorChar), normalizedRoot.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathEquals(string left, string right) =>
+        string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+
+    private static void RequireDistinctNonOverlapping(params string[] paths)
+    {
+        for (var left = 0; left < paths.Length; left++)
+        for (var right = left + 1; right < paths.Length; right++)
+        {
+            if (PathEquals(paths[left], paths[right]) || IsUnder(paths[left], paths[right]) || IsUnder(paths[right], paths[left]))
+                throw new InvalidDataException("helper roots overlap");
+        }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        if (!Directory.Exists(source)) throw new DirectoryNotFoundException(source);
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source))
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
+        foreach (var directory in Directory.EnumerateDirectories(source))
+            CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+    }
+
+    private static void RequireExact(JsonElement root, HashSet<string> expected, string contract)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.Ordinal).SetEquals(expected))
+            throw new InvalidDataException($"unsupported {contract} contract");
+    }
+
+    private static string RequiredString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
+            throw new InvalidDataException($"invalid {name}");
+        var result = value.GetString()!;
+        if (result.Length > 1024) throw new InvalidDataException($"invalid {name}");
+        return result;
+    }
+
+    private static string RequiredRelativePath(JsonElement root, string name)
+    {
+        var value = RequiredString(root, name).Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+        if (Path.IsPathRooted(value) || value.Split(Path.DirectorySeparatorChar).Any(part => part is "" or "." or ".."))
+            throw new InvalidDataException($"invalid {name}");
+        return value;
+    }
+
+    private static string RequiredHash(JsonElement root, string name)
+    {
+        var value = RequiredString(root, name);
+        if (!HashPattern.IsMatch(value)) throw new InvalidDataException($"invalid {name}");
+        return value;
+    }
+
+    private static long RequiredLong(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out var result))
+            throw new InvalidDataException($"invalid {name}");
+        return result;
+    }
+
+    private static int RequiredInt(JsonElement root, string name)
+    {
+        var value = RequiredLong(root, name);
+        if (value is < int.MinValue or > int.MaxValue) throw new InvalidDataException($"invalid {name}");
+        return (int)value;
+    }
+
+    private static DateTimeOffset RequiredTime(JsonElement root, string name)
+    {
+        var raw = RequiredString(root, name);
+        if (!DateTimeOffset.TryParse(raw, out var value)) throw new InvalidDataException($"invalid {name}");
+        return value.ToUniversalTime();
+    }
+
+    private static int? OptionalRevision(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var revision))
+            throw new InvalidDataException($"invalid {name}");
+        return revision;
+    }
+
+    private static string Sha256(byte[] data) => Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+
+    private sealed record Options(
+        string RuntimeRoot, string Request, string UpdatePolicy, string TargetPolicy, string Artifact,
+        string StagedRoot, string BackupRoot, string? TransactionRoot, string? TransactionId, int? WaitPid,
+        IReadOnlyList<string> LaunchArgs, string? ReadyMarker, double StartupTimeout);
+
+    private sealed record TrustedRuntime(
+        IReadOnlyDictionary<string, byte[]> AgentKeys,
+        IReadOnlyDictionary<string, byte[]> DigitalKeys,
+        IReadOnlyDictionary<string, byte[]> TargetKeys,
+        IReadOnlyList<string> ApprovedRoots,
+        string ExpectedChannel,
+        int? LastUpdateRevision,
+        int? LastTargetRevision);
+
+    private sealed record VerifiedRequest(
+        string RequestId, string ProductId, string CurrentVersion, string TargetVersion,
+        string Platform, string Architecture, string InstallRoot, string EntryPoint,
+        string ArtifactSha256, long ArtifactSize, string UpdatePolicySha256, string TargetPolicySha256);
+
+    private sealed record VerifiedUpdate(
+        string ProductId, string CurrentVersion, string LatestVersion, string Platform,
+        string Architecture, string ArtifactSha256, long ArtifactSize);
+
+    private sealed record VerifiedTarget(
+        string ProductId, string Platform, string Architecture, string InstallRoot,
+        string EntryPoint, string PolicySha256);
+
+    private sealed record Plan(
+        string InstallRoot, string StagedRoot, string BackupRoot, string Executable,
+        string? TransactionRoot, string? TransactionId, IReadOnlyList<string> LaunchArgs,
+        string? ReadyMarker, double StartupTimeout);
+
+    private sealed record SemanticVersion(int Major, int Minor, int Patch, string? PreRelease) : IComparable<SemanticVersion>
+    {
+        private static readonly Regex Pattern = new(
+            "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\\+[0-9A-Za-z.-]+)?$",
+            RegexOptions.CultureInvariant);
+
+        internal static SemanticVersion Parse(string value)
+        {
+            var match = Pattern.Match(value);
+            if (!match.Success) throw new InvalidDataException("invalid semantic version");
+            return new(
+                int.Parse(match.Groups[1].Value),
+                int.Parse(match.Groups[2].Value),
+                int.Parse(match.Groups[3].Value),
+                match.Groups[4].Success ? match.Groups[4].Value : null);
+        }
+
+        public int CompareTo(SemanticVersion? other)
+        {
+            if (other is null) return 1;
+            var compared = Major.CompareTo(other.Major);
+            if (compared == 0) compared = Minor.CompareTo(other.Minor);
+            if (compared == 0) compared = Patch.CompareTo(other.Patch);
+            if (compared != 0) return compared;
+            if (PreRelease is null) return other.PreRelease is null ? 0 : 1;
+            if (other.PreRelease is null) return -1;
+            return string.CompareOrdinal(PreRelease, other.PreRelease);
+        }
+    }
+}
