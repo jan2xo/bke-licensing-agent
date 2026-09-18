@@ -153,7 +153,7 @@ internal static class LicenseCenterWindows
         };
         var key = new TextBox
         {
-            Watermark = "License key",
+            PlaceholderText = "License key",
             PasswordChar = '•',
             MinWidth = 420,
         };
