@@ -7,6 +7,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/BKE.LicensingAgent.Contracts/BKE.LicensingAgent.Contracts.csproj" />
     <ProjectReference Include="../../src/BKE.LicensingAgent.Application/BKE.LicensingAgent.Application.csproj" />
-    <Content Include="../../contracts/gen1-baseline.json" Link="gen1-baseline.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../contracts/certified-contract-baseline.json" Link="certified-contract-baseline.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
