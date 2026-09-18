@@ -9,6 +9,7 @@ on:
       - "packaging/windows/bke-licensing-agent.iss"
       - "packaging/windows/bke-licensing-agent-arm64.iss"
       - "tests/unit/test_windows_privileged_packaging.py"
+      - "certification/windows_production_installer_arm64.ps1"
   push:
     branches:
       - feat/production-installer-gen2
@@ -19,6 +20,7 @@ on:
       - "packaging/windows/bke-licensing-agent.iss"
       - "packaging/windows/bke-licensing-agent-arm64.iss"
       - "tests/unit/test_windows_privileged_packaging.py"
+      - "certification/windows_production_installer_arm64.ps1"
   workflow_dispatch:
 
 permissions:
@@ -47,6 +49,33 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+
+      - name: Validate ARM64 real-machine certification script
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path "certification/windows_production_installer_arm64.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "ARM64 certification script has PowerShell parse errors."
+          }
+
+          $source = Get-Content -LiteralPath $path -Raw
+          foreach ($required in @(
+            "bke.production-installer-arm64.v1",
+            "Expected native ARM64 PE 0xAA64",
+            "bridge-cert.enable",
+            "signed_authorization_recovered",
+            "loopback_boundary_preserved",
+            "data_root_contract_preserved"
+          )) {
+            if (!$source.Contains($required)) {
+              throw "ARM64 certification script is missing required contract marker: $required"
+            }
+          }
+          Write-Host "ARM64 real-machine certification script static validation: PASS"
 
       - name: Install build dependencies
         shell: pwsh
@@ -195,6 +224,66 @@ jobs:
           Get-FileHash -Algorithm SHA256 $x64
           Get-FileHash -Algorithm SHA256 $arm64
 
+      - name: Assemble canonical ARM64 UTM acceptance kit
+        shell: pwsh
+        run: |
+          $package = "dist/phase8-arm64-utm-kit"
+          Remove-Item $package -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $package | Out-Null
+
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-arm64.exe"
+          $script = "certification/windows_production_installer_arm64.ps1"
+          if (!(Test-Path $installer)) { throw "canonical ARM64 installer missing for UTM kit" }
+          if (!(Test-Path $script)) { throw "ARM64 certification script missing for UTM kit" }
+
+          Copy-Item $installer $package
+          Copy-Item $script $package
+
+          @"
+          BKE Licensing Agent 2.0.0 - Phase 8 Windows ARM64 Canonical Installer Acceptance Kit
+
+          SOURCE COMMIT:
+          ${{ github.sha }}
+
+          THIS IS AN UNSIGNED PHASE 8 CERTIFICATION CANDIDATE.
+          IT IS NOT A PRODUCTION RELEASE.
+          DO NOT PUBLISH IT TO PRODUCTION UPDATE AUTHORITY.
+
+          Preconditions:
+          - persistent Windows 11 ARM64 UTM machine
+          - Phase 7 ARM64 runtime-bridge certification is still installed and healthy
+          - bridge-cert.enable is still present before migration
+          - signed runtime-bridge-cert authorization fixture still returns authorized
+
+          Run from an ELEVATED PowerShell in this extracted directory:
+
+          1. Capture and validate the existing Phase 7 machine:
+             powershell -ExecutionPolicy Bypass -File .\windows_production_installer_arm64.ps1 -Mode Prepare
+
+          2. Install the canonical ARM64 Phase 8 candidate and verify migration:
+             powershell -ExecutionPolicy Bypass -File .\windows_production_installer_arm64.ps1 -Mode Install
+
+          3. Print the machine-readable result:
+             powershell -ExecutionPolicy Bypass -File .\windows_production_installer_arm64.ps1 -Mode Collect
+
+          PASS is required before Phase 8 can be formally closed.
+
+          NO MERGE.
+          NO PRODUCTION RELEASE/TAG.
+          NO PRODUCTION CATALOG PUBLICATION.
+          NO PRODUCTION SIGNING CUTOVER.
+          "@ | Set-Content -LiteralPath (Join-Path $package "README-PHASE8-ARM64.txt") -Encoding utf8
+
+          $sum = Join-Path $package "SHA256SUMS.txt"
+          Get-ChildItem -LiteralPath $package -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Add-Content -LiteralPath $sum -Encoding ascii
+          }
+
+          $zip = "dist/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-arm64-Phase8-UTM-Acceptance-${{ github.sha }}.zip"
+          Compress-Archive -Path "$package/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List
+
       - name: Scan Gen2 payloads and installers with Microsoft Defender
         shell: pwsh
         run: |
@@ -313,6 +402,14 @@ jobs:
           if ($env:PHASE8_UPGRADE_LOG -and (Test-Path $env:PHASE8_UPGRADE_LOG)) { Get-Content $env:PHASE8_UPGRADE_LOG }
           Get-CimInstance Win32_Service -Filter "Name='${env:SERVICE_NAME}'" -ErrorAction SilentlyContinue | Format-List *
           Get-Process bke-licensing-agent-service,bke-licensing-agent-runtime -ErrorAction SilentlyContinue | Format-List *
+
+      - name: Upload ARM64 UTM acceptance kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-2.0.0-Windows-arm64-Phase8-UTM-Acceptance
+          path: dist/BKE-Licensing-Agent-2.0.0-Windows-arm64-Phase8-UTM-Acceptance-*.zip
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload unsigned Phase 8 installer candidates
         uses: actions/upload-artifact@v4
