@@ -56,10 +56,17 @@ var manifestPath = Path.Combine(productRoot, "bke.manifest.json");
 var entryPointPath = Path.Combine(productRoot, "product.exe");
 File.WriteAllText(entryPointPath, "BKE runtime bridge durable product fixture\n", new UTF8Encoding(false));
 
-var architecture = (Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")
-                    ?? RuntimeInformation.OSArchitecture.ToString())
+var rawArchitecture = (Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")
+                       ?? RuntimeInformation.OSArchitecture.ToString())
     .Trim()
     .ToLowerInvariant();
+var manifestArchitecture = rawArchitecture switch
+{
+    "amd64" or "x86_64" => "x64",
+    "x86" or "i386" or "i686" => "x86",
+    "arm64" or "aarch64" => "arm64",
+    _ => throw new PlatformNotSupportedException($"Unsupported Windows architecture: {rawArchitecture}"),
+};
 
 var manifest = new Dictionary<string, object?>
 {
@@ -71,7 +78,7 @@ var manifest = new Dictionary<string, object?>
     ["updateChannel"] = "stable",
     ["minimumAgentVersion"] = "1.0.0",
     ["platform"] = "windows",
-    ["architecture"] = architecture,
+    ["architecture"] = manifestArchitecture,
 };
 File.WriteAllText(
     manifestPath,
@@ -245,7 +252,7 @@ Console.WriteLine(JsonSerializer.Serialize(new
     version = Version,
     installation_id = InstallationId,
     device_id = deviceId,
-    architecture,
+    architecture = manifestArchitecture,
     expires_at = expiresAt,
     trusted_key = trustedKeyPath,
 }));
