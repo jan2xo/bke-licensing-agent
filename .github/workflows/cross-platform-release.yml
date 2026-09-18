@@ -1,10 +1,6 @@
-name: Cross-platform release candidate
+name: Legacy Python cross-platform release candidate (manual)
 
 on:
-  pull_request:
-  push:
-    branches:
-      - release/v1.0.0-rc.1
   workflow_dispatch:
 
 permissions:
@@ -19,7 +15,7 @@ concurrency:
 env:
   RELEASE_VERSION: "1.0.0"
   RELEASE_TAG: "v1.0.0-rc.1"
-  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  SOURCE_SHA: "a4e7ac56547c74bd89b8a9dba43d725d771cce27"
 
 jobs:
   linux:
