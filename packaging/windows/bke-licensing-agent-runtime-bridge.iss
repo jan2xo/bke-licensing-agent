@@ -144,11 +144,88 @@ begin
   Log('Existing BKE Licensing Agent service process exited before runtime replacement.');
 end;
 
+procedure BackupReplaceablePayloads;
+var
+  ServicePath: String;
+  RuntimePath: String;
+  ServiceBackup: String;
+  RuntimeBackup: String;
+begin
+  ServicePath := ExpandConstant('{app}\service');
+  RuntimePath := ExpandConstant('{app}\runtime');
+  ServiceBackup := ExpandConstant('{app}\service.rollback');
+  RuntimeBackup := ExpandConstant('{app}\runtime.rollback');
+
+  DelTree(ServiceBackup, True, True, True);
+  DelTree(RuntimeBackup, True, True, True);
+
+  if DirExists(ServicePath) and (not RenameFile(ServicePath, ServiceBackup)) then
+    RaiseException('Existing stable service payload could not be staged for rollback.');
+
+  if DirExists(RuntimePath) and (not RenameFile(RuntimePath, RuntimeBackup)) then
+  begin
+    if DirExists(ServiceBackup) then
+      RenameFile(ServiceBackup, ServicePath);
+    RaiseException('Existing runtime payload could not be staged for rollback.');
+  end;
+
+  Log('Existing Agent payload staged for automatic rollback.');
+end;
+
 procedure ClearReplaceablePayloads;
 begin
   { The stable paths stay constant; their implementation contents are disposable. }
   DelTree(ExpandConstant('{app}\service'), True, True, True);
   DelTree(ExpandConstant('{app}\runtime'), True, True, True);
+end;
+
+procedure RestoreRollbackPayloads;
+var
+  ServicePath: String;
+  RuntimePath: String;
+  ServiceBackup: String;
+  RuntimeBackup: String;
+begin
+  ServicePath := ExpandConstant('{app}\service');
+  RuntimePath := ExpandConstant('{app}\runtime');
+  ServiceBackup := ExpandConstant('{app}\service.rollback');
+  RuntimeBackup := ExpandConstant('{app}\runtime.rollback');
+
+  ClearReplaceablePayloads;
+
+  if DirExists(ServiceBackup) and (not RenameFile(ServiceBackup, ServicePath)) then
+    RaiseException('Previous stable service payload could not be restored.');
+  if DirExists(RuntimeBackup) and (not RenameFile(RuntimeBackup, RuntimePath)) then
+    RaiseException('Previous runtime payload could not be restored.');
+
+  Log('Previous Agent payload restored from rollback staging.');
+end;
+
+procedure DiscardRollbackPayloads;
+begin
+  DelTree(ExpandConstant('{app}\service.rollback'), True, True, True);
+  DelTree(ExpandConstant('{app}\runtime.rollback'), True, True, True);
+end;
+
+function LocalApiHealthy: Boolean;
+var
+  ResultCode: Integer;
+  PowerShell: String;
+  Parameters: String;
+begin
+  PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
+    '$deadline=[DateTime]::UtcNow.AddSeconds(60); ' +
+    '$uri=''http://127.0.0.1:43873/license-center?product_id=runtime-bridge-health&version=2.0.0&installation_id=installer-health''; ' +
+    'while ([DateTime]::UtcNow -lt $deadline) { try { ' +
+    '$response=Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 2; ' +
+    'if ($response.StatusCode -eq 200) { exit 0 } } catch {}; Start-Sleep -Milliseconds 500 }; exit 1"';
+  if not Exec(PowerShell, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  Result := ResultCode = 0;
 end;
 
 procedure ProvisionPrivilegedRuntime;
@@ -184,6 +261,7 @@ begin
   begin
     StopExistingLicenseCenter;
     StopExistingService;
+    BackupReplaceablePayloads;
     ClearReplaceablePayloads;
   end;
 
@@ -195,6 +273,23 @@ begin
     ConfigureStableService;
     RunSc('start "{#ServiceName}"', 'BKE Licensing Agent service startup');
     WaitForServiceStatus('Running', 'BKE Licensing Agent service');
-    Log('Runtime-neutral BKE Licensing Agent service running after payload replacement.');
+
+    if LocalApiHealthy then
+    begin
+      DiscardRollbackPayloads;
+      Log('Runtime-neutral BKE Licensing Agent local API healthy after payload replacement.');
+    end
+    else
+    begin
+      Log('Replacement runtime failed local API health; restoring previous Agent payload.');
+      StopExistingService;
+      RestoreRollbackPayloads;
+      ConfigureStableService;
+      RunSc('start "{#ServiceName}"', 'BKE Licensing Agent rollback startup');
+      WaitForServiceStatus('Running', 'BKE Licensing Agent rollback service');
+      if not LocalApiHealthy then
+        RaiseException('Replacement runtime failed and the previous Agent payload did not recover local API health.');
+      Log('Replacement runtime failed health; previous Agent payload restored automatically.');
+    end;
   end;
 end;
