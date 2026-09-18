@@ -144,3 +144,84 @@ Even a successful production-signing run does not authorize:
 - customer publication.
 
 Those remain separate owner-controlled gates.
+
+
+## Loading protected signing inputs with GitHub CLI
+
+Do this only from an owner-controlled workstation after the approved production credentials exist.
+
+Create/configure the protected environment in GitHub first and require owner approval for deployments to it.
+
+The commands below send secret values through stdin; they do not print the secret values.
+
+~~~powershell
+$repo = "jan2xo/bke-licensing-agent"
+$environment = "production-signing"
+
+# Approved Windows code-signing PFX.
+$pfxPath = "C:\SECURE\BKE-Code-Signing.pfx"
+[Convert]::ToBase64String([IO.File]::ReadAllBytes($pfxPath)) |
+  gh secret set BKE_WINDOWS_CODESIGN_PFX_B64 --env $environment --repo $repo
+
+# PFX password: read interactively, do not place it in shell history.
+$secure = Read-Host "Code-signing PFX password" -AsSecureString
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {
+  [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) |
+    gh secret set BKE_WINDOWS_CODESIGN_PFX_PASSWORD --env $environment --repo $repo
+}
+finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+}
+
+# Production privileged-target public verification material.
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\SECURE\production-target-key.pem")) |
+  gh secret set BKE_PRODUCTION_TARGET_KEY_PEM_B64 --env $environment --repo $repo
+
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\SECURE\production-target-policy.json")) |
+  gh secret set BKE_PRODUCTION_TARGET_POLICY_JSON_B64 --env $environment --repo $repo
+
+# Production update-authority PUBLIC key JSON only.
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\SECURE\bke-agent-update-prod-v1.json")) |
+  gh secret set BKE_PRODUCTION_UPDATE_AUTHORITY_KEY_JSON_B64 --env $environment --repo $repo
+~~~
+
+Never load BKE-UPDATE-AUTHORITY-PRIVATE.pem into the Licensing Agent repository or its signing environment.
+
+That private Ed25519 key belongs only in the protected Digital Solutions V2 authority boundary.
+
+## Generating the production update-authority identity offline
+
+Run the checked-in generator from an owner-controlled workstation, but place the output **outside all Git repositories**:
+
+~~~powershell
+python .\scripts\generate_production_update_authority_key.py ^
+  --key-id bke-agent-update-prod-v1 ^
+  --output-dir C:\SECURE\BKE-Agent-Update-Authority-v1 ^
+  --authorization AUTHORIZE_OFFLINE_PRODUCTION_KEY_GENERATION
+~~~
+
+Expected output files:
+
+~~~text
+C:\SECURE\BKE-Agent-Update-Authority-v1\
+├── BKE-UPDATE-AUTHORITY-PRIVATE.pem
+├── bke-agent-update-prod-v1.json
+├── PUBLIC-KEY-SHA256.txt
+└── README-PRIVATE-KEY.txt
+~~~
+
+The generator refuses to write the private key under any Git working tree and never prints the private key.
+
+## Signing-provider note
+
+The current workflow adapter consumes an approved PFX because that is provider-neutral and testable on a hosted Windows runner.
+
+If the approved BKE code-signing identity is non-exportable, HSM-backed, or provided through a cloud signing service, **do not export or weaken that key**. Replace only the Windows signing adapter steps while preserving:
+
+- exact approved signer identity,
+- SHA-256 file digest,
+- trusted RFC3161 timestamping,
+- Get-AuthenticodeSignature.Status == Valid,
+- final signed SHA-256 recomputation,
+- the signed-but-unpublished boundary.
