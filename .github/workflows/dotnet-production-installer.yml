@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/dotnet-production-installer.yml"
       - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
+      - "dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/**"
       - "dotnet/src/BKE.LicensingAgent.Host/**"
       - "packaging/windows/bke-licensing-agent.iss"
       - "packaging/windows/bke-licensing-agent-arm64.iss"
@@ -96,6 +97,9 @@ jobs:
           dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed: $LASTEXITCODE" }
 
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Phase 9 signed self-update certification failed: $LASTEXITCODE" }
+
           dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 contract certification failed: $LASTEXITCODE" }
 
@@ -126,6 +130,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
           New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/update-authority-keys | Out-Null
           @'
           import base64, json
           from pathlib import Path
@@ -158,7 +163,26 @@ jobs:
           (root / "target-policies" / "phase8-packaging-only.json").write_text(
               json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
-          print("Phase 8 disposable packaging trust generated.")
+
+          update_private = Ed25519PrivateKey.generate()
+          update_public = update_private.public_key()
+          update_key_id = "phase9-ci-disposable-v1"
+          raw_public = update_public.public_bytes(
+              serialization.Encoding.Raw,
+              serialization.PublicFormat.Raw,
+          )
+          update_key = {
+              "schema": "bke.update-authority-key.v1",
+              "key_id": update_key_id,
+              "algorithm": "Ed25519",
+              "public_key": base64.b64encode(raw_public).decode("ascii"),
+          }
+          Path("dist/windows/update-authority-keys").mkdir(parents=True, exist_ok=True)
+          Path("dist/windows/update-authority-keys", f"{update_key_id}.json").write_text(
+              json.dumps(update_key, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          print("Phase 8 disposable packaging trust + Phase 9 disposable public update key generated.")
           '@ | python -
 
       - name: Build exact Phase 7 Python baseline installer
