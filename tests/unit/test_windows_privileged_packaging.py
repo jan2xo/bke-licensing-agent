@@ -38,7 +38,9 @@ def test_windows_installer_stops_before_replace_and_waits_for_restart():
 def test_windows_legacy_recovery_never_kills_agent_by_process_name():
     source = (Path(__file__).parents[2] / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
 
-    assert "exact SCM PID termination" in source
+    assert "$servicePid=[int]$legacy.ProcessId" in source
+    assert "Get-Process -Id $servicePid -ErrorAction SilentlyContinue" in source
+    assert "Stop-Process -Id $servicePid -Force" in source
     assert "Stop-Process -Name" not in source
     assert "/IM bke-licensing-agent-service.exe" not in source
 
