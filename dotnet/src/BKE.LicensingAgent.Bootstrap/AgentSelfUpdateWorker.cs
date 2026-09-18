@@ -85,7 +85,7 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
         return new UpdateOffer(
             policy,
             UpdatePolicyVerifier.CatalogAssetUri(policy),
-            releaseNotes: null);
+            null);
     }
 
     private static string Prompt(UpdateOffer offer, CancellationToken cancellationToken)
