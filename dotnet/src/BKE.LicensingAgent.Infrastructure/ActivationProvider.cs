@@ -480,6 +480,7 @@ public sealed class ActivationProvider : IActivationService
             architecture.Trim().ToLowerInvariant());
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     private static string LegacyWindowsRelease(Version osVersion)
     {
         var productName = Microsoft.Win32.Registry.GetValue(
