@@ -213,8 +213,67 @@ jobs:
             Start-Sleep -Milliseconds 500
           } while ((Get-Date) -lt $deadline)
           if (!$healthy) {
+            $installRoot = 'C:\\Program Files\\BKE Digital Solutions\\Licensing Agent'
+            $dataRoot = Join-Path $env:ProgramData 'BKE Digital Solutions\\Licensing Agent'
+            $runtimeExe = Join-Path $installRoot 'runtime\\bke-licensing-agent-runtime.exe'
+
+            Write-Host '=== service ==='
             Get-CimInstance Win32_Service -Filter "Name='$env:SERVICE_NAME'" | Format-List *
-            Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*BKE Digital Solutions*Licensing Agent*' } | Format-Table ProcessId,Name,ExecutablePath
+
+            Write-Host '=== Agent processes ==='
+            Get-CimInstance Win32_Process |
+              Where-Object { $_.ExecutablePath -like '*BKE Digital Solutions*Licensing Agent*' } |
+              Format-Table ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine -Wrap
+
+            Write-Host '=== installed payload ==='
+            Get-ChildItem $installRoot -Recurse -Force |
+              Select-Object FullName,Length,LastWriteTime |
+              Format-Table -AutoSize
+
+            Write-Host '=== port 43873 ==='
+            Get-NetTCPConnection -LocalPort 43873 -ErrorAction SilentlyContinue |
+              Format-Table LocalAddress,LocalPort,State,OwningProcess -AutoSize
+
+            Write-Host '=== recent Application events ==='
+            Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-5)} -ErrorAction SilentlyContinue |
+              Where-Object { $_.ProviderName -match 'BKE|\.NET Runtime|Application Error' -or $_.Message -match 'BKE Licensing Agent|bke-licensing-agent-runtime' } |
+              Select-Object TimeCreated,ProviderName,Id,LevelDisplayName,Message |
+              Format-List
+
+            if (Test-Path $runtimeExe) {
+              Write-Host '=== direct Gen2 runtime probe ==='
+              Stop-Service -Name $env:SERVICE_NAME -Force -ErrorAction SilentlyContinue
+              (Get-Service -Name $env:SERVICE_NAME).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+
+              $stdout = Join-Path $env:RUNNER_TEMP 'gen2-runtime.stdout.log'
+              $stderr = Join-Path $env:RUNNER_TEMP 'gen2-runtime.stderr.log'
+              Remove-Item $stdout,$stderr -Force -ErrorAction SilentlyContinue
+
+              $savedVnext = $env:BKE_AGENT_VNEXT_ENABLE
+              $savedDataRoot = $env:BKE_AGENT_DATA_DIR
+              try {
+                $env:BKE_AGENT_VNEXT_ENABLE = '1'
+                $env:BKE_AGENT_DATA_DIR = $dataRoot
+                $probe = Start-Process $runtimeExe -WorkingDirectory (Split-Path $runtimeExe) -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+                Start-Sleep -Seconds 5
+                if (!$probe.HasExited) {
+                  Write-Host "Direct runtime stayed alive for 5s (pid=$($probe.Id)); stopping diagnostic probe."
+                  Stop-Process -Id $probe.Id -Force
+                  $probe.WaitForExit()
+                } else {
+                  Write-Host "Direct runtime exited with code $($probe.ExitCode)."
+                }
+              } finally {
+                $env:BKE_AGENT_VNEXT_ENABLE = $savedVnext
+                $env:BKE_AGENT_DATA_DIR = $savedDataRoot
+              }
+
+              Write-Host '--- direct runtime stdout ---'
+              Get-Content $stdout -ErrorAction SilentlyContinue
+              Write-Host '--- direct runtime stderr ---'
+              Get-Content $stderr -ErrorAction SilentlyContinue
+            }
+
             throw 'Gen2 local API did not become healthy behind the stable bootstrap service'
           }
 
