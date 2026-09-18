@@ -3,12 +3,20 @@ param(
     [ValidateSet('Prepare', 'Install', 'Collect')]
     [string]$Mode,
 
-    [string]$InstallerPath = (Join-Path $PSScriptRoot 'BKE-Licensing-Agent-2.0.0-Windows-arm64.exe'),
+    [string]$InstallerPath = '',
 
     [string]$EvidenceRoot = "$env:ProgramData\BKE Digital Solutions\Licensing Agent\phase8-arm64-certification"
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
+    if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        throw 'Unable to resolve the certification script directory.'
+    }
+    $InstallerPath = Join-Path $PSScriptRoot 'BKE-Licensing-Agent-2.0.0-Windows-arm64.exe'
+}
+
 $ServiceName = 'BKE-Licensing-Agent'
 $InstallRoot = 'C:\Program Files\BKE Digital Solutions\Licensing Agent'
 $DataRoot = "$env:ProgramData\BKE Digital Solutions\Licensing Agent"
