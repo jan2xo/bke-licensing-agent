@@ -8,7 +8,7 @@ namespace BKE.LicensingAgent.Bootstrap;
 
 internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logger) : BackgroundService
 {
-    private const long MaxInstallerBytes = 512L * 1024L * 1024L;
+    private const long MaxInstallerBytes = UpdatePolicyVerifier.MaxArtifactBytes;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(6);
     private static readonly TimeSpan RemindAfter = TimeSpan.FromHours(24);
@@ -56,7 +56,7 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
     private async Task<UpdateOffer?> CheckAsync(CancellationToken cancellationToken)
     {
         var current = CurrentVersion();
-        var currentVersion = SemanticVersion.Parse(current);
+        _ = SemanticVersion.Parse(current);
         var targetArchitecture = TargetArchitecture();
         var platformBase = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
         if (!Uri.TryCreate(platformBase, UriKind.Absolute, out var origin) || origin.Scheme != Uri.UriSchemeHttps)
@@ -74,32 +74,18 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
         using var response = await client.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-        var root = document.RootElement;
 
-        RequireString(root, "productId", RuntimeBridgeContract.AgentProductId);
-        RequireString(root, "source", "bke-software-catalog");
-        RequireString(root, "currentVersion", current);
-        var latest = RequiredString(root, "latestVersion");
-        var latestVersion = SemanticVersion.Parse(latest);
-        if (!root.TryGetProperty("updateAvailable", out var availableValue) || availableValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-            throw new InvalidDataException("Agent update response is malformed");
-        var available = availableValue.GetBoolean();
-        if (!available)
-        {
-            if (latestVersion.CompareTo(currentVersion) > 0) throw new InvalidDataException("Agent update authority returned an inconsistent decision");
-            return null;
-        }
-        if (latestVersion.CompareTo(currentVersion) <= 0) throw new InvalidDataException("Agent update authority returned an invalid newer-version decision");
+        var policy = UpdatePolicyVerifier.ParseAndVerify(
+            document.RootElement,
+            current,
+            targetArchitecture.QueryValue);
+        UpdatePolicyRevisionStore.Accept(policy);
 
-        var download = ValidateCatalogUrl(RequiredString(root, "downloadUrl"));
-        string? notes = null;
-        if (root.TryGetProperty("releaseNotes", out var notesValue) && notesValue.ValueKind != JsonValueKind.Null)
-        {
-            if (notesValue.ValueKind != JsonValueKind.String) throw new InvalidDataException("Agent update release notes are malformed");
-            notes = notesValue.GetString();
-        }
-        var required = root.TryGetProperty("required", out var requiredValue) && requiredValue.ValueKind == JsonValueKind.True;
-        return new UpdateOffer(current, latest, download, notes, required);
+        if (!policy.UpdateAvailable) return null;
+        return new UpdateOffer(
+            policy,
+            UpdatePolicyVerifier.CatalogAssetUri(policy),
+            releaseNotes: null);
     }
 
     private static string Prompt(UpdateOffer offer, CancellationToken cancellationToken)
@@ -140,8 +126,13 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
         response.EnsureSuccessStatusCode();
         if (response.RequestMessage?.RequestUri is not Uri finalUri || !ApprovedRedirect(finalUri))
             throw new InvalidDataException("GitHub release redirected outside approved asset hosts");
-        if (response.Content.Headers.ContentLength is long announced && announced > MaxInstallerBytes)
-            throw new InvalidDataException("Agent installer exceeds the download limit");
+        if (response.Content.Headers.ContentLength is long announced)
+        {
+            if (announced > MaxInstallerBytes)
+                throw new InvalidDataException("Agent installer exceeds the download limit");
+            if (announced != offer.Policy.ArtifactSize)
+                throw new InvalidDataException("Agent installer Content-Length does not match signed update policy");
+        }
 
         try
         {
@@ -155,15 +146,20 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
                     var read = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
                     if (read == 0) break;
                     total += read;
-                    if (total > MaxInstallerBytes) throw new InvalidDataException("Agent installer exceeds the download limit");
+                    if (total > MaxInstallerBytes || total > offer.Policy.ArtifactSize)
+                        throw new InvalidDataException("Agent installer exceeds the signed download size");
                     await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
                 }
                 if (total < 2) throw new InvalidDataException("downloaded Agent installer is empty");
             }
+
+            UpdatePolicyVerifier.VerifyArtifact(temporary, offer.Policy);
             await using (var payload = File.OpenRead(temporary))
             {
-                if (payload.ReadByte() != 'M' || payload.ReadByte() != 'Z') throw new InvalidDataException("downloaded Agent installer is not a Windows executable");
+                if (payload.ReadByte() != 'M' || payload.ReadByte() != 'Z')
+                    throw new InvalidDataException("downloaded Agent installer is not a Windows executable");
             }
+
             File.Move(temporary, destination, true);
             return destination;
         }
@@ -240,31 +236,13 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
                 $"BKE Licensing Agent self-update does not support {RuntimeInformation.ProcessArchitecture} on Windows"),
         };
 
-    private static Uri ValidateCatalogUrl(string value)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
-            !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
-            !uri.AbsolutePath.StartsWith($"/{RuntimeBridgeContract.CatalogRepository}/releases/download/", StringComparison.Ordinal) ||
-            !uri.AbsolutePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("Agent update URL is outside the BKE software catalog");
-        return uri;
-    }
-
     private static bool ApprovedRedirect(Uri uri) => uri.Scheme == Uri.UriSchemeHttps &&
         (string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase));
 
-    private static string RequiredString(JsonElement root, string name)
+    private sealed record UpdateOffer(SignedUpdatePolicy Policy, Uri DownloadUrl, string? ReleaseNotes)
     {
-        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
-            throw new InvalidDataException($"Agent update response is missing {name}");
-        return value.GetString()!;
+        internal string CurrentVersion => Policy.CurrentVersion;
+        internal string LatestVersion => Policy.LatestVersion;
+        internal bool Required => Policy.Required;
     }
-
-    private static void RequireString(JsonElement root, string name, string expected)
-    {
-        if (!string.Equals(RequiredString(root, name), expected, StringComparison.Ordinal))
-            throw new InvalidDataException($"Agent update response {name} mismatch");
-    }
-
-    private sealed record UpdateOffer(string CurrentVersion, string LatestVersion, Uri DownloadUrl, string? ReleaseNotes, bool Required);
 }
