@@ -31,14 +31,16 @@ def test_windows_installer_stops_before_replace_and_waits_for_restart():
     assert "/IM bke-license-center.exe" in source
     assert "CloseApplications=yes" in source
     assert "RestartApplications=no" in source
-    assert "process exited before payload replacement" in source
-    assert "running after payload replacement" in source
+    assert "process exited before runtime replacement" in source
+    assert "local API healthy after payload replacement" in source
 
 
 def test_windows_legacy_recovery_never_kills_agent_by_process_name():
     source = (Path(__file__).parents[2] / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
 
-    assert "exact SCM PID termination" in source
+    assert "$servicePid=[int]$legacy.ProcessId" in source
+    assert "Get-Process -Id $servicePid -ErrorAction SilentlyContinue" in source
+    assert "Stop-Process -Id $servicePid -Force" in source
     assert "Stop-Process -Name" not in source
     assert "/IM bke-licensing-agent-service.exe" not in source
 
@@ -66,3 +68,45 @@ def test_windows_license_center_installer_layout_matches_runtime_locator():
     assert 'startup.lpDesktop = "winsta0\\\\default"' in launcher
     assert "CreateProcessAsUserW" in launcher
     assert "Session 0" in launcher
+
+
+def test_windows_canonical_installer_is_gen2_runtime_bridge_without_cert_marker():
+    root = Path(__file__).parents[2]
+    x64 = (root / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
+    arm64 = (root / "packaging" / "windows" / "bke-licensing-agent-arm64.iss").read_text(encoding="utf-8")
+
+    for source in (x64, arm64):
+        assert '#define AppVersion "2.0.0"' in source
+        assert "bke-licensing-agent-runtime" in source
+        assert "HadPreviousServicePayload" in source
+        assert "LocalApiHealthy" in source
+        assert "RestoreRollbackPayloads" in source
+        assert "DeleteFile(ExpandConstant('{app}\\bridge-cert.enable'))" in source
+        assert "SaveStringToFile(ExpandConstant('{app}\\bridge-cert.enable')" not in source
+        assert 'sc.exe' in source
+        assert 'BKE_AGENT_DATA_DIR' in source
+
+    assert "bke-licensing-agent-service\\*" in x64
+    assert "bke-licensing-agent-runtime\\*" in x64
+    assert "Windows-x64" in x64
+    assert "ArchitecturesAllowed=x64compatible" in x64
+
+    assert "bke-licensing-agent-service-arm64\\*" in arm64
+    assert "bke-licensing-agent-runtime-arm64\\*" in arm64
+    assert "Windows-arm64" in arm64
+    assert "ArchitecturesAllowed=arm64" in arm64
+
+
+def test_windows_gen2_self_update_is_native_architecture_aware():
+    source = (
+        Path(__file__).parents[2]
+        / "dotnet"
+        / "src"
+        / "BKE.LicensingAgent.Bootstrap"
+        / "AgentSelfUpdateWorker.cs"
+    ).read_text(encoding="utf-8")
+
+    assert 'Architecture.X64 => ("x86_64", "x64")' in source
+    assert 'Architecture.Arm64 => ("arm64", "arm64")' in source
+    assert "targetArchitecture.QueryValue" in source
+    assert "targetArchitecture.AssetSuffix" in source

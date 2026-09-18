@@ -12,21 +12,104 @@ This branch proves a language-independent BKE Licensing Agent machine boundary w
 
 The bootstrap owns process supervision and Agent-release polling. The runtime owns licensing capabilities. A future runtime may be .NET, Python, Rust, or another implementation as long as it preserves the runtime contract.
 
-## Certification-only boundary
+## Certification and canonical-installer boundaries
 
-`packaging/windows/bke-licensing-agent-runtime-bridge.iss` is not a production installer. It emits an admin-only `bridge-cert.enable` marker under Program Files so the bootstrap can start the migration-guarded Gen2 host in GitHub Actions while disabling external self-update polling during the proof.
+The Phase 5–7 bridge installers remain certification-only artifacts:
 
-The canonical production Windows installer remains unchanged.
+- `packaging/windows/bke-licensing-agent-runtime-bridge.iss`
+- `packaging/windows/bke-licensing-agent-runtime-bridge-arm64.iss`
 
-## Required proof before cutover
+Their `bridge-cert.enable` marker now serves only as a certification self-update suppressor.
 
-1. Install the existing Python Windows service.
-2. Preserve ProgramData state.
-3. Replace only the service/runtime payload with the stable bootstrap and Gen2 runtime.
-4. Preserve the same SCM service name and executable path.
-5. Recover the local API on port 43873.
-6. Preserve ProgramData through the language transition.
-7. Recover the local API after a service stop/start cycle.
-8. Run the full Gen2 differential suite against the frozen Python oracle.
+Phase 8 migrates the canonical Windows installer definitions on the stacked candidate branch:
 
-A real reboot, production-signed release package, and production update-authority publication remain separate release gates.
+- `packaging/windows/bke-licensing-agent.iss` → native Gen2 x64
+- `packaging/windows/bke-licensing-agent-arm64.iss` → native Gen2 ARM64
+
+Canonical installers delete any stale `bridge-cert.enable` marker and never create one. The existing Python/PyInstaller License Center, updater-core, privileged provisioner, and trust payload remain separate packaging boundaries.
+
+## Phase 8 hosted result
+
+GitHub Actions workflow `.github/workflows/dotnet-production-installer.yml` first passed the executable migration candidate at `f71f5cd1444f68027d15510f243151ea99a8190c`; the final PowerShell 5.1-safe Phase 8 head `1ec04a603eaa913e452ca9389b164ee25be4bdfe` also passed hosted replay run `35371763991`.
+
+The hosted Windows proof established:
+
+1. Windows-compatible Gen2 build/contract checks passed.
+2. The exact Phase 7 Python production installer was reconstructed from `a4e7ac56547c74bd89b8a9dba43d725d771cce27`.
+3. Native x64 and ARM64 service/runtime payloads published successfully.
+4. PE machine checks passed for x64 and ARM64.
+5. Canonical x64 and ARM64 installers compiled.
+6. Microsoft Defender scanning passed.
+7. The Phase 7 Python production installer installed and recovered the local API.
+8. The canonical Gen2 x64 installer upgraded that installed machine in place.
+9. ProgramData and `agent.db` survived the migration.
+10. SCM remained `BKE-Licensing-Agent`, Automatic, LocalSystem, with the stable service executable path.
+11. The stable service supervised the Gen2 runtime child.
+12. Port 43873 remained loopback-only and owned by the Gen2 runtime.
+13. No certification marker or successful-migration rollback staging leaked into the canonical installation.
+
+Unsigned candidate artifact:
+
+```text
+BKE-Licensing-Agent-2.0.0-Windows-Phase8-UNSIGNED-CANDIDATES
+artifact id: 10550863758
+digest: sha256:b968215cf9c305a807796f891785d1a6a0728b4686876c35bc00fd32140df500
+```
+
+## Phase 8 final acceptance — CLOSED
+
+Phase 8 is formally closed.
+
+The PowerShell 5.1-safe certification-script fix at `1ec04a603eaa913e452ca9389b164ee25be4bdfe` passed the hosted production-installer workflow:
+
+```text
+run: 35371763991
+result: SUCCESS
+```
+
+The persistent Windows 11 ARM64 UTM machine `WIN-J2SML1QDPBD` then completed the canonical ARM64 installer acceptance with:
+
+```text
+schema: bke.production-installer-arm64.v1
+status: PASS
+installer_exit_code: 0
+installer_sha256: df00858459d58c36b270999f3dad784998eceae4d6864210b1a34579dc30d1cb
+```
+
+Every machine acceptance check passed:
+
+- installer identity preserved
+- service running
+- stable SCM identity preserved
+- canonical assets present
+- native ARM64 service/runtime payloads
+- certification marker removed
+- successful-install rollback staging discarded
+- durable ProgramData state preserved
+- signed authorization recovered
+- runtime supervision recovered
+- port 43873 remained loopback-only and owned by the Gen2 runtime
+- machine data-root contract preserved
+
+Resulting machine hashes:
+
+```text
+service:
+f119486c5bf0b98b636a3291a638a71ff9762a7b8f5c7c5390c16bc424cc689e
+
+runtime:
+fb7799db6dec72c45d2c0ef10fad91ba744296f0c1c778c2088bdfbc4a212610
+
+agent.db:
+e00994231d220e1d671d99986a353badb3062ba237ae9cb2fb069c8580cd7ed5
+```
+
+Stable SCM executable after migration:
+
+```text
+C:\Program Files\BKE Digital Solutions\Licensing Agent\service\bke-licensing-agent-service.exe
+```
+
+Phase 8 therefore proves the canonical Windows Gen2 installer migration on hosted x64 and the persistent native ARM64 machine.
+
+Production signing, production catalog/update-authority publication, release/tag creation, deployment, and merges remain unauthorized. Production-signed self-update is Phase 9; broken production update rollback remains Phase 10.

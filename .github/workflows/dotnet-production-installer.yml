@@ -1,0 +1,423 @@
+name: .NET Gen2 production installer candidate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/dotnet-production-installer.yml"
+      - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
+      - "dotnet/src/BKE.LicensingAgent.Host/**"
+      - "packaging/windows/bke-licensing-agent.iss"
+      - "packaging/windows/bke-licensing-agent-arm64.iss"
+      - "tests/unit/test_windows_privileged_packaging.py"
+      - "certification/windows_production_installer_arm64.ps1"
+  push:
+    branches:
+      - feat/production-installer-gen2
+    paths:
+      - ".github/workflows/dotnet-production-installer.yml"
+      - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
+      - "dotnet/src/BKE.LicensingAgent.Host/**"
+      - "packaging/windows/bke-licensing-agent.iss"
+      - "packaging/windows/bke-licensing-agent-arm64.iss"
+      - "tests/unit/test_windows_privileged_packaging.py"
+      - "certification/windows_production_installer_arm64.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-production-installer:
+    name: Windows Gen2 production-installer migration
+    runs-on: windows-latest
+    timeout-minutes: 50
+    env:
+      GEN2_VERSION: "2.0.0"
+      PHASE7_SHA: "a4e7ac56547c74bd89b8a9dba43d725d771cce27"
+      SERVICE_NAME: "BKE-Licensing-Agent"
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Validate ARM64 real-machine certification script
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path "certification/windows_production_installer_arm64.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "ARM64 certification script has PowerShell parse errors."
+          }
+
+          $source = Get-Content -LiteralPath $path -Raw
+          foreach ($required in @(
+            "bke.production-installer-arm64.v1",
+            "Expected native ARM64 PE 0xAA64",
+            "bridge-cert.enable",
+            "signed_authorization_recovered",
+            "loopback_boundary_preserved",
+            "data_root_contract_preserved"
+          )) {
+            if (!$source.Contains($required)) {
+              throw "ARM64 certification script is missing required contract marker: $required"
+            }
+          }
+          Write-Host "ARM64 real-machine certification script static validation: PASS"
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+          choco install innosetup -y --no-progress
+
+      - name: Run Windows-compatible Gen2 and production-packaging tests
+        shell: pwsh
+        run: |
+          python -m pytest -q tests/unit/test_windows_privileged_packaging.py
+
+          dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 host build failed: $LASTEXITCODE" }
+
+          dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed: $LASTEXITCODE" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 contract certification failed: $LASTEXITCODE" }
+
+          Write-Host "Full Python-oracle differentials are enforced by the dedicated .NET 10 Agent Gen2 Linux gate; the License Center differential is intentionally POSIX-only."
+
+      - name: Build Python baseline support payloads
+        shell: pwsh
+        run: |
+          Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+
+          pyinstaller --clean --noconfirm --hidden-import win32timezone --name bke-licensing-agent-service packaging/windows/service_entry.py
+          Move-Item dist/bke-licensing-agent-service dist/windows/bke-licensing-agent-service
+
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          Move-Item dist/bke-license-center dist/windows/bke-license-center
+
+          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
+          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
+          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
+
+          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
+          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
+          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
+
+      - name: Generate disposable packaging trust
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
+          @'
+          import base64, json
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+          root = Path("dist/windows/privileged-payload")
+          private = Ed25519PrivateKey.generate()
+          public = private.public_key()
+          key_id = "phase8-packaging-only-v1"
+          (root / "target-keys" / f"{key_id}.pem").write_bytes(public.public_bytes(
+              serialization.Encoding.PEM,
+              serialization.PublicFormat.SubjectPublicKeyInfo,
+          ))
+          unsigned = {
+              "schema": "bke.install-target-policy.v1",
+              "policy_id": "phase8-packaging-only",
+              "revision": 1,
+              "product_id": "bke-certification-product",
+              "platform": "windows",
+              "architecture": "x86_64",
+              "install_root": r"C:\\Program Files\\BKE Digital Solutions\\Certification Product",
+              "entry_point": "product.exe",
+              "signing_key_id": key_id,
+              "algorithm": "Ed25519",
+          }
+          canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+          document = dict(unsigned)
+          document["signature"] = base64.b64encode(private.sign(canonical)).decode("ascii")
+          (root / "target-policies" / "phase8-packaging-only.json").write_text(
+              json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print("Phase 8 disposable packaging trust generated.")
+          '@ | python -
+
+      - name: Build exact Phase 7 Python baseline installer
+        shell: pwsh
+        run: |
+          $legacyIss = "packaging/windows/bke-licensing-agent-phase7-python.iss"
+          git show "${env:PHASE7_SHA}:packaging/windows/bke-licensing-agent.iss" | Set-Content -LiteralPath $legacyIss -Encoding utf8
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" $legacyIss
+          if ($LASTEXITCODE -ne 0) { throw "Phase 7 Python baseline installer compile failed" }
+          $baseline = "dist/installer/BKE-Licensing-Agent-1.0.0-Windows-x64.exe"
+          if (!(Test-Path $baseline)) { throw "Phase 7 Python baseline installer missing" }
+          Copy-Item $baseline (Join-Path $env:RUNNER_TEMP "BKE-Licensing-Agent-1.0.0-Windows-x64-Phase7.exe")
+          Remove-Item $legacyIss -Force
+
+      - name: Publish native Gen2 x64 and ARM64 payloads
+        shell: pwsh
+        run: |
+          Remove-Item dist/windows/bke-licensing-agent-service -Recurse -Force
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service-arm64 | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime-arm64 | Out-Null
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=${env:GEN2_VERSION} --output dist/windows/bke-licensing-agent-service
+          if ($LASTEXITCODE -ne 0) { throw "x64 bootstrap publish failed" }
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=${env:GEN2_VERSION} --output dist/windows/bke-licensing-agent-runtime
+          if ($LASTEXITCODE -ne 0) { throw "x64 runtime publish failed" }
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:Version=${env:GEN2_VERSION} --output dist/windows/bke-licensing-agent-service-arm64
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 bootstrap publish failed" }
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=${env:GEN2_VERSION} --output dist/windows/bke-licensing-agent-runtime-arm64
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 runtime publish failed" }
+
+      - name: Verify native payload PE machines
+        shell: pwsh
+        run: |
+          function Assert-PeMachine([string]$Path, [int]$Expected) {
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Path))
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+            if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne "PE`0`0") { throw "invalid PE signature: $Path" }
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne $Expected) { throw ("unexpected PE machine for {0}: 0x{1:X4}" -f $Path, $machine) }
+          }
+
+          Assert-PeMachine "dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe" 0x8664
+          Assert-PeMachine "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe" 0x8664
+          Assert-PeMachine "dist/windows/bke-licensing-agent-service-arm64/bke-licensing-agent-service.exe" 0xAA64
+          Assert-PeMachine "dist/windows/bke-licensing-agent-runtime-arm64/bke-licensing-agent-runtime.exe" 0xAA64
+          Write-Host "Native x64 + ARM64 Gen2 payloads: PASS"
+
+      - name: Build canonical x64 and ARM64 installers
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "canonical x64 installer compile failed" }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent-arm64.iss
+          if ($LASTEXITCODE -ne 0) { throw "canonical ARM64 installer compile failed" }
+
+          $x64 = "dist/installer/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-x64.exe"
+          $arm64 = "dist/installer/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-arm64.exe"
+          if (!(Test-Path $x64)) { throw "canonical x64 installer missing" }
+          if (!(Test-Path $arm64)) { throw "canonical ARM64 installer missing" }
+          Get-FileHash -Algorithm SHA256 $x64
+          Get-FileHash -Algorithm SHA256 $arm64
+
+      - name: Assemble canonical ARM64 UTM acceptance kit
+        shell: pwsh
+        run: |
+          $package = "dist/phase8-arm64-utm-kit"
+          Remove-Item $package -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $package | Out-Null
+
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-arm64.exe"
+          $script = "certification/windows_production_installer_arm64.ps1"
+          if (!(Test-Path $installer)) { throw "canonical ARM64 installer missing for UTM kit" }
+          if (!(Test-Path $script)) { throw "ARM64 certification script missing for UTM kit" }
+
+          Copy-Item $installer $package
+          Copy-Item $script $package
+
+          @"
+          BKE Licensing Agent 2.0.0 - Phase 8 Windows ARM64 Canonical Installer Acceptance Kit
+
+          SOURCE COMMIT:
+          ${{ github.sha }}
+
+          THIS IS AN UNSIGNED PHASE 8 CERTIFICATION CANDIDATE.
+          IT IS NOT A PRODUCTION RELEASE.
+          DO NOT PUBLISH IT TO PRODUCTION UPDATE AUTHORITY.
+
+          Preconditions:
+          - persistent Windows 11 ARM64 UTM machine
+          - Phase 7 ARM64 runtime-bridge certification is still installed and healthy
+          - bridge-cert.enable is still present before migration
+          - signed runtime-bridge-cert authorization fixture still returns authorized
+
+          Run from an ELEVATED PowerShell in this extracted directory:
+
+          1. Capture and validate the existing Phase 7 machine:
+             powershell -ExecutionPolicy Bypass -File .\windows_production_installer_arm64.ps1 -Mode Prepare
+
+          2. Install the canonical ARM64 Phase 8 candidate and verify migration:
+             powershell -ExecutionPolicy Bypass -File .\windows_production_installer_arm64.ps1 -Mode Install
+
+          3. Print the machine-readable result:
+             powershell -ExecutionPolicy Bypass -File .\windows_production_installer_arm64.ps1 -Mode Collect
+
+          PASS is required before Phase 8 can be formally closed.
+
+          NO MERGE.
+          NO PRODUCTION RELEASE/TAG.
+          NO PRODUCTION CATALOG PUBLICATION.
+          NO PRODUCTION SIGNING CUTOVER.
+          "@ | Set-Content -LiteralPath (Join-Path $package "README-PHASE8-ARM64.txt") -Encoding utf8
+
+          $sum = Join-Path $package "SHA256SUMS.txt"
+          Get-ChildItem -LiteralPath $package -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Add-Content -LiteralPath $sum -Encoding ascii
+          }
+
+          $zip = "dist/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-arm64-Phase8-UTM-Acceptance-${{ github.sha }}.zip"
+          Compress-Archive -Path "$package/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List
+
+      - name: Scan Gen2 payloads and installers with Microsoft Defender
+        shell: pwsh
+        run: |
+          $platformRoot = Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform"
+          $mpCmd = Get-ChildItem -Path $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $mpCmd) {
+            $fallback = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
+            if (Test-Path $fallback) { $mpCmd = Get-Item $fallback }
+          }
+          if ($null -eq $mpCmd) { throw "Microsoft Defender scanner unavailable" }
+
+          & $mpCmd.FullName -Scan -ScanType 3 -File (Resolve-Path "dist/windows").Path -DisableRemediation
+          if ($LASTEXITCODE -ne 0) { throw "Defender payload scan failed: $LASTEXITCODE" }
+          foreach ($installer in @(
+            "dist/installer/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-x64.exe",
+            "dist/installer/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-arm64.exe"
+          )) {
+            & $mpCmd.FullName -Scan -ScanType 3 -File (Resolve-Path $installer).Path -DisableRemediation
+            if ($LASTEXITCODE -ne 0) { throw "Defender installer scan failed: $LASTEXITCODE" }
+          }
+
+      - name: Install Phase 7 Python baseline
+        shell: pwsh
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP "BKE-Licensing-Agent-1.0.0-Windows-x64-Phase7.exe"
+          $log = Join-Path $env:RUNNER_TEMP "phase7-python-install.log"
+          $p = Start-Process -FilePath $baseline -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log") -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "Phase 7 Python baseline install failed: $($p.ExitCode)"
+          }
+
+          (Get-Service -Name $env:SERVICE_NAME -ErrorAction Stop).WaitForStatus("Running",[TimeSpan]::FromSeconds(30))
+          $deadline=(Get-Date).AddSeconds(45)
+          do {
+            try {
+              $response=Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:43873/license-center?product_id=phase8-baseline&version=1.0.0&installation_id=phase8" -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { break }
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+          if ($response.StatusCode -ne 200) { throw "Phase 7 Python baseline local API did not become healthy" }
+
+          $dataRoot = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent"
+          New-Item -ItemType Directory -Force $dataRoot | Out-Null
+          Set-Content -LiteralPath (Join-Path $dataRoot "phase8-state-marker.txt") -Value "preserve-through-canonical-gen2" -Encoding ascii
+          if (!(Test-Path (Join-Path $dataRoot "agent.db"))) { throw "Python baseline did not create agent.db" }
+
+      - name: Upgrade baseline with canonical Gen2 x64 installer
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/installer/BKE-Licensing-Agent-${env:GEN2_VERSION}-Windows-x64.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP "phase8-gen2-upgrade.log"
+          "PHASE8_UPGRADE_LOG=$log" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $p = Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log") -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "canonical Gen2 migration installer failed: $($p.ExitCode)"
+          }
+
+      - name: Verify canonical Gen2 installed-machine contract
+        shell: pwsh
+        run: |
+          $installRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Licensing Agent"
+          $serviceExe = Join-Path $installRoot "service\bke-licensing-agent-service.exe"
+          $runtimeExe = Join-Path $installRoot "runtime\bke-licensing-agent-runtime.exe"
+          $dataRoot = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent"
+
+          foreach ($path in @($serviceExe,$runtimeExe,(Join-Path $installRoot "license-center\bke-license-center.exe"),(Join-Path $installRoot "updater\bke-updater-core.exe"))) {
+            if (!(Test-Path $path)) { throw "installed Phase 8 asset missing: $path" }
+          }
+          if (Test-Path (Join-Path $installRoot "bridge-cert.enable")) { throw "canonical installer emitted/preserved certification marker" }
+          if (Test-Path (Join-Path $installRoot "service.rollback")) { throw "service rollback staging leaked after successful migration" }
+          if (Test-Path (Join-Path $installRoot "runtime.rollback")) { throw "runtime rollback staging leaked after successful migration" }
+
+          $service = Get-Service -Name $env:SERVICE_NAME -ErrorAction Stop
+          $service.WaitForStatus("Running",[TimeSpan]::FromSeconds(30))
+          $cim = Get-CimInstance Win32_Service -Filter "Name='${env:SERVICE_NAME}'"
+          if ($cim.StartMode -ne "Auto") { throw "service start mode is not Auto: $($cim.StartMode)" }
+          if ($cim.StartName -ne "LocalSystem") { throw "service account is not LocalSystem: $($cim.StartName)" }
+          if ($cim.PathName.Trim('"') -ne $serviceExe) { throw "SCM executable path changed: $($cim.PathName)" }
+
+          $deadline=(Get-Date).AddSeconds(45)
+          $runtime=$null
+          do {
+            $cim = Get-CimInstance Win32_Service -Filter "Name='${env:SERVICE_NAME}'"
+            $runtime = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($cim.ProcessId)" -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -eq "bke-licensing-agent-runtime.exe" } | Select-Object -First 1
+            if ($runtime) { break }
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+          if ($null -eq $runtime) { throw "Gen2 runtime child was not supervised by the stable service" }
+
+          $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:43873/license-center?product_id=phase8-canonical&version=2.0.0&installation_id=phase8" -TimeoutSec 3
+          if ($response.StatusCode -ne 200) { throw "canonical Gen2 local API unhealthy" }
+
+          $listeners = Get-NetTCPConnection -State Listen -LocalPort 43873 -ErrorAction Stop
+          if (@($listeners).Count -eq 0) { throw "no listener on 43873" }
+          foreach ($listener in @($listeners)) {
+            if ($listener.LocalAddress -notin @("127.0.0.1","::1")) { throw "non-loopback listener found: $($listener.LocalAddress)" }
+            if ([int]$listener.OwningProcess -ne [int]$runtime.ProcessId) { throw "43873 is not owned by Gen2 runtime" }
+          }
+
+          $marker = Join-Path $dataRoot "phase8-state-marker.txt"
+          if (!(Test-Path $marker)) { throw "ProgramData state marker was lost" }
+          if ((Get-Content $marker -Raw).Trim() -ne "preserve-through-canonical-gen2") { throw "ProgramData state marker changed" }
+          if (!(Test-Path (Join-Path $dataRoot "agent.db"))) { throw "agent.db was lost during canonical migration" }
+
+          Write-Host "Phase 7 Python -> canonical Gen2 x64 production-installer migration: PASS"
+
+      - name: Show installer diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          if ($env:PHASE8_UPGRADE_LOG -and (Test-Path $env:PHASE8_UPGRADE_LOG)) { Get-Content $env:PHASE8_UPGRADE_LOG }
+          Get-CimInstance Win32_Service -Filter "Name='${env:SERVICE_NAME}'" -ErrorAction SilentlyContinue | Format-List *
+          Get-Process bke-licensing-agent-service,bke-licensing-agent-runtime -ErrorAction SilentlyContinue | Format-List *
+
+      - name: Upload ARM64 UTM acceptance kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-2.0.0-Windows-arm64-Phase8-UTM-Acceptance
+          path: dist/BKE-Licensing-Agent-2.0.0-Windows-arm64-Phase8-UTM-Acceptance-*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload unsigned Phase 8 installer candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-2.0.0-Windows-Phase8-UNSIGNED-CANDIDATES
+          path: |
+            dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe
+            dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe
+            ${{ runner.temp }}/phase8-gen2-upgrade.log
+          if-no-files-found: error
+          retention-days: 14

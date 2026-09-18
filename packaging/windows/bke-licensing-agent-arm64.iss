@@ -17,9 +17,9 @@ AppPublisher={#AppPublisher}
 DefaultDirName={#InstallDir}
 DefaultGroupName={#AppName}
 OutputDir=..\..\dist\installer
-OutputBaseFilename=BKE-Licensing-Agent-{#AppVersion}-Windows-x64
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+OutputBaseFilename=BKE-Licensing-Agent-{#AppVersion}-Windows-arm64
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
 PrivilegesRequired=admin
 UninstallDisplayName={#AppName}
 LicenseFile=..\..\LICENSE
@@ -35,9 +35,9 @@ RestartApplications=no
 
 [Files]
 ; Stable SCM host. Its filename/path is a permanent machine compatibility boundary.
-Source: "..\..\dist\windows\bke-licensing-agent-service\*"; DestDir: "{app}\service"; Flags: recursesubdirs ignoreversion
+Source: "..\..\dist\windows\bke-licensing-agent-service-arm64\*"; DestDir: "{app}\service"; Flags: recursesubdirs ignoreversion
 ; Replaceable implementation-language payload.
-Source: "..\..\dist\windows\bke-licensing-agent-runtime\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs ignoreversion
+Source: "..\..\dist\windows\bke-licensing-agent-runtime-arm64\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs ignoreversion
 ; Existing native user UI and hardened updater assets remain separate migration boundaries.
 Source: "..\..\dist\windows\bke-license-center\*"; DestDir: "{app}\license-center"; Flags: recursesubdirs ignoreversion
 Source: "..\..\dist\windows\bke-updater-core\bke-updater-core.exe"; DestDir: "{app}\updater"; Flags: ignoreversion
