@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>BKE.LicensingAgent.SelfUpdateCertification</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.SelfUpdateCertification</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj" />
+    <PackageReference Include="NSec.Cryptography" Version="26.4.0" />
+  </ItemGroup>
+</Project>

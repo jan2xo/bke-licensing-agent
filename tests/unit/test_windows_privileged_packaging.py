@@ -97,6 +97,38 @@ def test_windows_canonical_installer_is_gen2_runtime_bridge_without_cert_marker(
     assert "ArchitecturesAllowed=arm64" in arm64
 
 
+def test_windows_canonical_installer_packages_public_update_authority_keys_only():
+    root = Path(__file__).parents[2]
+    x64 = (root / "packaging" / "windows" / "bke-licensing-agent.iss").read_text(encoding="utf-8")
+    arm64 = (root / "packaging" / "windows" / "bke-licensing-agent-arm64.iss").read_text(encoding="utf-8")
+
+    expected_source = 'dist\\windows\\update-authority-keys\\*.json'
+    expected_destination = '{app}\\trust\\update-authority-keys'
+    for source in (x64, arm64):
+        assert expected_source in source
+        assert expected_destination in source
+        assert "update-authority-keys" in source
+
+
+def test_gen2_self_update_requires_signed_policy_and_exact_artifact_identity():
+    root = Path(__file__).parents[2]
+    verifier = (
+        root / "dotnet" / "src" / "BKE.LicensingAgent.Bootstrap" / "SignedUpdatePolicy.cs"
+    ).read_text(encoding="utf-8")
+    worker = (
+        root / "dotnet" / "src" / "BKE.LicensingAgent.Bootstrap" / "AgentSelfUpdateWorker.cs"
+    ).read_text(encoding="utf-8")
+
+    assert 'SignatureAlgorithm.Ed25519' in verifier
+    assert 'bke.update-policy.v1' in verifier
+    assert 'UpdatePolicyRevisionStore' in verifier
+    assert 'VerifyArtifact' in verifier
+    assert 'FixedTimeEquals' in verifier
+    assert 'UpdatePolicyVerifier.ParseAndVerify' in worker
+    assert 'UpdatePolicyVerifier.VerifyArtifact' in worker
+    assert 'ValidateCatalogUrl' not in worker
+
+
 def test_windows_gen2_self_update_is_native_architecture_aware():
     source = (
         Path(__file__).parents[2]

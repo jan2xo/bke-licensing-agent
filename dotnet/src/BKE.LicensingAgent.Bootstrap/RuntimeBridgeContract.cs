@@ -23,4 +23,8 @@ internal static class RuntimeBridgeContract
         Environment.GetEnvironmentVariable("BKE_AGENT_DATA_DIR")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "BKE Digital Solutions", "Licensing Agent");
+
+    internal static string UpdateAuthorityKeyDirectory =>
+        Environment.GetEnvironmentVariable("BKE_AGENT_UPDATE_AUTHORITY_KEY_DIR")
+        ?? Path.Combine(InstallRoot, "trust", "update-authority-keys");
 }

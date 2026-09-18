@@ -44,6 +44,8 @@ Source: "..\..\dist\windows\bke-updater-core\bke-updater-core.exe"; DestDir: "{a
 Source: "..\..\dist\windows\bke-privileged-provisioner\bke-privileged-provisioner.exe"; DestDir: "{app}\provisioning"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-keys\*.pem"; DestDir: "{app}\provisioning\target-keys"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-policies\*.json"; DestDir: "{app}\provisioning\target-policies"; Flags: ignoreversion
+; Phase 9 update-authority trust contains public verification keys only.
+Source: "..\..\dist\windows\update-authority-keys\*.json"; DestDir: "{app}\trust\update-authority-keys"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Dirs]

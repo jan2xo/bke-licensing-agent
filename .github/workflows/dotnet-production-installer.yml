@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/dotnet-production-installer.yml"
       - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
+      - "dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/**"
       - "dotnet/src/BKE.LicensingAgent.Host/**"
       - "packaging/windows/bke-licensing-agent.iss"
       - "packaging/windows/bke-licensing-agent-arm64.iss"
@@ -96,6 +97,9 @@ jobs:
           dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed: $LASTEXITCODE" }
 
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Phase 9 signed self-update certification failed: $LASTEXITCODE" }
+
           dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 contract certification failed: $LASTEXITCODE" }
 
@@ -126,6 +130,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
           New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/update-authority-keys | Out-Null
           @'
           import base64, json
           from pathlib import Path
@@ -158,7 +163,26 @@ jobs:
           (root / "target-policies" / "phase8-packaging-only.json").write_text(
               json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
-          print("Phase 8 disposable packaging trust generated.")
+
+          update_private = Ed25519PrivateKey.generate()
+          update_public = update_private.public_key()
+          update_key_id = "phase9-ci-disposable-v1"
+          raw_public = update_public.public_bytes(
+              serialization.Encoding.Raw,
+              serialization.PublicFormat.Raw,
+          )
+          update_key = {
+              "schema": "bke.update-authority-key.v1",
+              "key_id": update_key_id,
+              "algorithm": "Ed25519",
+              "public_key": base64.b64encode(raw_public).decode("ascii"),
+          }
+          Path("dist/windows/update-authority-keys").mkdir(parents=True, exist_ok=True)
+          Path("dist/windows/update-authority-keys", f"{update_key_id}.json").write_text(
+              json.dumps(update_key, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          print("Phase 8 disposable packaging trust + Phase 9 disposable public update key generated.")
           '@ | python -
 
       - name: Build exact Phase 7 Python baseline installer
@@ -356,6 +380,17 @@ jobs:
           foreach ($path in @($serviceExe,$runtimeExe,(Join-Path $installRoot "license-center\bke-license-center.exe"),(Join-Path $installRoot "updater\bke-updater-core.exe"))) {
             if (!(Test-Path $path)) { throw "installed Phase 8 asset missing: $path" }
           }
+
+          $updateKey = Join-Path $installRoot "trust\update-authority-keys\phase9-ci-disposable-v1.json"
+          if (!(Test-Path $updateKey)) { throw "installed Phase 9 public update-authority key is missing" }
+          $updateKeyDocument = Get-Content -LiteralPath $updateKey -Raw | ConvertFrom-Json
+          if ($updateKeyDocument.schema -ne "bke.update-authority-key.v1") { throw "installed update-authority key schema mismatch" }
+          if ($updateKeyDocument.key_id -ne "phase9-ci-disposable-v1") { throw "installed update-authority key id mismatch" }
+          if ($updateKeyDocument.algorithm -ne "Ed25519") { throw "installed update-authority key algorithm mismatch" }
+          if ([Convert]::FromBase64String([string]$updateKeyDocument.public_key).Length -ne 32) { throw "installed update-authority public key is not 32 bytes" }
+          $updateKeyRaw = Get-Content -LiteralPath $updateKey -Raw
+          if ($updateKeyRaw -match "PRIVATE|private_key") { throw "private update signing material leaked into installed trust bundle" }
+
           if (Test-Path (Join-Path $installRoot "bridge-cert.enable")) { throw "canonical installer emitted/preserved certification marker" }
           if (Test-Path (Join-Path $installRoot "service.rollback")) { throw "service rollback staging leaked after successful migration" }
           if (Test-Path (Join-Path $installRoot "runtime.rollback")) { throw "runtime rollback staging leaked after successful migration" }
