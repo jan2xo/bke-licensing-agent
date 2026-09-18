@@ -39,6 +39,12 @@ jobs:
       - name: Repository hygiene
         run: |
           git diff --check
+          forbidden="$(find . -path './.git' -prune -o -type f \( -name '*.py' -o -name '*.spec' -o -name 'pyproject.toml' \) -print)"
+          if [ -n "$forbidden" ]; then
+            echo "Retired Python source/build files reappeared:"
+            echo "$forbidden"
+            exit 1
+          fi
           if grep -RIn --exclude-dir=.git --exclude='*.md' -E 'pyinstaller|setup-python|python -m pip|python -m pytest' .github/workflows; then
             echo "Python build/runtime dependency remains in active workflows."
             exit 1
