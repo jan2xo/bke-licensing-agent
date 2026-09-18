@@ -75,12 +75,6 @@ internal sealed class AgentRuntimeSupervisor(ILogger<AgentRuntimeSupervisor> log
             CreateNoWindow = true,
         };
 
-        // Migration-only bridge. Production cutover removes the Gen2 guard instead
-        // of making this a permanent authority bypass.
-        if (Environment.GetEnvironmentVariable("BKE_AGENT_BOOTSTRAP_ALLOW_GEN2") == "1")
-        {
-            start.Environment["BKE_AGENT_VNEXT_ENABLE"] = "1";
-        }
         start.Environment["BKE_AGENT_DATA_DIR"] = RuntimeBridgeContract.DataRoot;
         return Process.Start(start) ?? throw new InvalidOperationException("Agent runtime process did not start");
     }
