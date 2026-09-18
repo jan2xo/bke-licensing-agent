@@ -3,6 +3,12 @@ using System.Text.Json;
 using BKE.LicensingAgent.Bootstrap;
 using NSec.Cryptography;
 
+if (args.Length == 2 && args[0] == "--fixture")
+{
+    RunExternalFixture(args[1]);
+    return;
+}
+
 var root = Path.Combine(Path.GetTempPath(), "bke-phase9-self-update-" + Guid.NewGuid().ToString("N"));
 var trust = Path.Combine(root, "trust");
 var data = Path.Combine(root, "data");
@@ -179,6 +185,81 @@ static string SerializePolicy(SignedUpdatePolicy policy) =>
         ["algorithm"] = policy.Algorithm,
         ["signature"] = policy.Signature,
     });
+
+static void RunExternalFixture(string fixturePath)
+{
+    using var source = JsonDocument.Parse(File.ReadAllText(fixturePath));
+    var root = source.RootElement;
+    if (root.GetProperty("schema").GetString() != "bke.phase9-cross-repository-fixture.v1")
+        throw new InvalidDataException("unexpected cross-repository fixture schema");
+    if (root.GetProperty("source").GetString() != "bke-digital-solutions-v2")
+        throw new InvalidDataException("unexpected cross-repository fixture source");
+
+    var temp = Path.Combine(Path.GetTempPath(), "bke-phase9-cross-repo-" + Guid.NewGuid().ToString("N"));
+    var trust = Path.Combine(temp, "trust");
+    var data = Path.Combine(temp, "data");
+    Directory.CreateDirectory(trust);
+    Directory.CreateDirectory(data);
+    Environment.SetEnvironmentVariable("BKE_AGENT_UPDATE_AUTHORITY_KEY_DIR", trust);
+    Environment.SetEnvironmentVariable("BKE_AGENT_DATA_DIR", data);
+
+    try
+    {
+        var count = 0;
+        foreach (var fixture in root.GetProperty("fixtures").EnumerateArray())
+        {
+            var architecture = fixture.GetProperty("architecture").GetString()
+                ?? throw new InvalidDataException("fixture architecture is missing");
+            var policyElement = fixture.GetProperty("policy");
+            var currentVersion = policyElement.GetProperty("current_version").GetString()
+                ?? throw new InvalidDataException("fixture current version is missing");
+            var keyId = policyElement.GetProperty("signing_key_id").GetString()
+                ?? throw new InvalidDataException("fixture signing key id is missing");
+            var publicKey = fixture.GetProperty("public_key").GetString()
+                ?? throw new InvalidDataException("fixture public key is missing");
+
+            File.WriteAllText(
+                Path.Combine(trust, keyId + ".json"),
+                JsonSerializer.Serialize(new Dictionary<string, object?>
+                {
+                    ["schema"] = UpdatePolicyVerifier.KeySchema,
+                    ["key_id"] = keyId,
+                    ["algorithm"] = "Ed25519",
+                    ["public_key"] = publicKey,
+                }));
+
+            var verified = UpdatePolicyVerifier.ParseAndVerify(
+                policyElement,
+                currentVersion,
+                architecture);
+            UpdatePolicyRevisionStore.Accept(verified);
+
+            var expectedUrl = fixture.GetProperty("expected_catalog_url").GetString()
+                ?? throw new InvalidDataException("fixture catalog URL is missing");
+            if (UpdatePolicyVerifier.CatalogAssetUri(verified).AbsoluteUri != expectedUrl)
+                throw new InvalidDataException("cross-repository catalog URL mismatch");
+
+            var artifact = Convert.FromBase64String(
+                fixture.GetProperty("artifact_base64").GetString()
+                ?? throw new InvalidDataException("fixture artifact is missing"));
+            var artifactPath = Path.Combine(temp, verified.ArtifactId);
+            File.WriteAllBytes(artifactPath, artifact);
+            UpdatePolicyVerifier.VerifyArtifact(artifactPath, verified);
+            count++;
+        }
+
+        if (count != 2)
+            throw new InvalidDataException($"expected x64 + ARM64 fixtures, got {count}");
+
+        Console.WriteLine("BKE Licensing Agent Phase 9 cross-repository signature certification: PASS");
+        Console.WriteLine("Authority: BKE Digital Solutions V2");
+        Console.WriteLine("Architectures: x86_64, arm64");
+    }
+    finally
+    {
+        try { Directory.Delete(temp, recursive: true); } catch { }
+    }
+}
 
 static void ExpectFailure(Action action, string message)
 {
