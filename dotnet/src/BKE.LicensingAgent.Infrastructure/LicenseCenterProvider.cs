@@ -174,6 +174,12 @@ public sealed class LicenseCenterProvider : ILicenseCenterService
 
     private static string ResolveExecutablePath()
     {
+        var configured = Environment.GetEnvironmentVariable("BKE_LICENSE_CENTER_EXECUTABLE");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return Path.GetFullPath(configured);
+        }
+
         var name = OperatingSystem.IsWindows() ? "bke-license-center.exe" : "bke-license-center";
         var agentDirectory = Path.GetFullPath(AppContext.BaseDirectory);
         var parent = Directory.GetParent(agentDirectory)?.FullName;
