@@ -1,6 +1,10 @@
 name: Production Windows signing gate
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/dotnet-production-signing.yml"
+      - "docs/production-signing-setup.md"
   workflow_dispatch:
     inputs:
       release_version:
@@ -26,6 +30,7 @@ permissions:
 jobs:
   sign-windows:
     name: Rebuild and sign x64 + ARM64 production installers
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 50
     environment: production-signing
