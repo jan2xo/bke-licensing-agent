@@ -140,6 +140,14 @@ jobs:
           Stop-Service -Name $env:SERVICE_NAME -Force
           (Get-Service -Name $env:SERVICE_NAME).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
 
+      - name: Seed and freeze real legacy licensing state
+        shell: pwsh
+        run: |
+          $dataRoot = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+          $snapshot = Join-Path $env:RUNNER_TEMP 'runtime-bridge-authority-state.json'
+          python dotnet/certification/runtime_bridge_state_fixture.py seed --data-root "$dataRoot" --snapshot "$snapshot"
+          if (!(Test-Path $snapshot)) { throw 'durable authority snapshot was not created' }
+
       - name: Prepare .NET runtime bridge publish directories
         shell: pwsh
         run: |
@@ -206,6 +214,37 @@ jobs:
           $oldPythonArtifacts = Get-ChildItem 'C:\Program Files\BKE Digital Solutions\Licensing Agent\service','C:\Program Files\BKE Digital Solutions\Licensing Agent\runtime' -Recurse -File |
             Where-Object { $_.Name -match '^python\d*\.dll$|^base_library\.zip$|^python\d+\._pth$' }
           if ($oldPythonArtifacts) { $oldPythonArtifacts | Format-Table FullName; throw 'Python runtime artifacts remain in service/runtime payload' }
+
+      - name: Prove durable state and product authorization after migration
+        shell: pwsh
+        run: |
+          $dataRoot = Join-Path $env:ProgramData 'BKE Digital Solutions\Licensing Agent'
+          $snapshot = Join-Path $env:RUNNER_TEMP 'runtime-bridge-authority-state.json'
+          python dotnet/certification/runtime_bridge_state_fixture.py assert --data-root "$dataRoot" --snapshot "$snapshot"
+
+          $uri = 'http://127.0.0.1:43873/v1/authorize'
+          $body = @{
+            product_id = 'runtime-bridge-cert'
+            version = '2.0.0'
+            installation_id = 'runtime-bridge-installation'
+          } | ConvertTo-Json -Compress
+          $deadline = (Get-Date).AddSeconds(60)
+          $authorized = $false
+          do {
+            try {
+              $response = Invoke-RestMethod -Method Post -Uri $uri -ContentType 'application/json' -Body $body -TimeoutSec 2
+              if ($response.authorized -eq $true -and $response.reason -eq 'authorized') {
+                $authorized = $true
+                break
+              }
+              Write-Host "Gen2 authorization not ready: $($response | ConvertTo-Json -Compress)"
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+          if (!$authorized) {
+            throw 'preserved Python licensing/trust state did not authorize through migrated Gen2 runtime'
+          }
+          Write-Host 'Preserved Python state -> Gen2 product authorization: PASS'
 
       - name: Prove Gen2 local API behind stable service
         shell: pwsh
