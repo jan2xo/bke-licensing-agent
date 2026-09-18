@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>bke-licensing-agent-runtime</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.BrokenRuntime</RootNamespace>
+  </PropertyGroup>
+</Project>
