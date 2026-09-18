@@ -1,0 +1,309 @@
+name: Production Windows signing gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Exact production version
+        required: true
+        default: "2.0.0"
+      approved_signer_thumbprint:
+        description: Approved Authenticode certificate thumbprint
+        required: true
+      approved_signer_subject:
+        description: Approved Authenticode certificate subject
+        required: true
+      production_update_key_id:
+        description: Production Ed25519 update-authority key ID
+        required: true
+      authorization:
+        description: Type AUTHORIZE_PRODUCTION_SIGNING to proceed
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sign-windows:
+    name: Rebuild and sign x64 + ARM64 production installers
+    runs-on: windows-latest
+    timeout-minutes: 50
+    environment: production-signing
+    env:
+      RELEASE_VERSION: ${{ inputs.release_version }}
+      APPROVED_SIGNER_THUMBPRINT: ${{ inputs.approved_signer_thumbprint }}
+      APPROVED_SIGNER_SUBJECT: ${{ inputs.approved_signer_subject }}
+      PRODUCTION_UPDATE_KEY_ID: ${{ inputs.production_update_key_id }}
+      WINDOWS_CODESIGN_PFX_B64: ${{ secrets.BKE_WINDOWS_CODESIGN_PFX_B64 }}
+      WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.BKE_WINDOWS_CODESIGN_PFX_PASSWORD }}
+      PRODUCTION_TARGET_KEY_PEM_B64: ${{ secrets.BKE_PRODUCTION_TARGET_KEY_PEM_B64 }}
+      PRODUCTION_TARGET_POLICY_JSON_B64: ${{ secrets.BKE_PRODUCTION_TARGET_POLICY_JSON_B64 }}
+      PRODUCTION_UPDATE_AUTHORITY_KEY_JSON_B64: ${{ secrets.BKE_PRODUCTION_UPDATE_AUTHORITY_KEY_JSON_B64 }}
+
+    steps:
+      - name: Enforce explicit signing authorization
+        shell: pwsh
+        run: |
+          if ("${{ inputs.authorization }}" -ne "AUTHORIZE_PRODUCTION_SIGNING") {
+            throw "Production signing requires the exact authorization token."
+          }
+          if ($env:RELEASE_VERSION -ne "2.0.0") {
+            throw "This production signing gate is currently locked to 2.0.0."
+          }
+
+      - name: Checkout exact signing candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Validate required protected inputs
+        shell: pwsh
+        run: |
+          foreach ($name in @(
+            "WINDOWS_CODESIGN_PFX_B64",
+            "WINDOWS_CODESIGN_PFX_PASSWORD",
+            "PRODUCTION_TARGET_KEY_PEM_B64",
+            "PRODUCTION_TARGET_POLICY_JSON_B64",
+            "PRODUCTION_UPDATE_AUTHORITY_KEY_JSON_B64"
+          )) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "Required production signing input is missing: $name"
+            }
+          }
+          if ($env:APPROVED_SIGNER_THUMBPRINT -notmatch '^[A-Fa-f0-9]{40,64}$') {
+            throw "Approved signer thumbprint is malformed."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:APPROVED_SIGNER_SUBJECT)) {
+            throw "Approved signer subject is missing."
+          }
+          if ($env:PRODUCTION_UPDATE_KEY_ID -notmatch '^[A-Za-z0-9._-]{1,160}$') {
+            throw "Production update-authority key ID is malformed."
+          }
+
+      - name: Install packaging dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e ".[test]"
+          choco install innosetup -y --no-progress
+
+      - name: Re-run release-critical certification
+        shell: pwsh
+        run: |
+          python -m pytest -q tests/unit/test_windows_privileged_packaging.py
+          dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed" }
+          dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 runtime build failed" }
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "signed self-update certification failed" }
+
+      - name: Build retained support payloads
+        shell: pwsh
+        run: |
+          Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          pyinstaller --clean --noconfirm bke-license-center.spec
+          Move-Item dist/bke-license-center dist/windows/bke-license-center
+          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
+          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
+          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
+          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
+          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
+          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
+
+      - name: Materialize production public trust only
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/update-authority-keys | Out-Null
+
+          [IO.File]::WriteAllBytes("dist/windows/privileged-payload/target-keys/production.pem",[Convert]::FromBase64String($env:PRODUCTION_TARGET_KEY_PEM_B64))
+          [IO.File]::WriteAllBytes("dist/windows/privileged-payload/target-policies/production.json",[Convert]::FromBase64String($env:PRODUCTION_TARGET_POLICY_JSON_B64))
+          [IO.File]::WriteAllBytes("dist/windows/update-authority-keys/$($env:PRODUCTION_UPDATE_KEY_ID).json",[Convert]::FromBase64String($env:PRODUCTION_UPDATE_AUTHORITY_KEY_JSON_B64))
+
+          $updateKeyPath = "dist/windows/update-authority-keys/$($env:PRODUCTION_UPDATE_KEY_ID).json"
+          $updateKey = Get-Content -LiteralPath $updateKeyPath -Raw | ConvertFrom-Json
+          if ($updateKey.schema -ne "bke.update-authority-key.v1") { throw "production update key schema mismatch" }
+          if ($updateKey.key_id -ne $env:PRODUCTION_UPDATE_KEY_ID) { throw "production update key ID mismatch" }
+          if ($updateKey.algorithm -ne "Ed25519") { throw "production update key algorithm mismatch" }
+          if ([Convert]::FromBase64String([string]$updateKey.public_key).Length -ne 32) { throw "production Ed25519 public key must be 32 bytes" }
+
+          foreach ($path in @(
+            "dist/windows/privileged-payload/target-keys/production.pem",
+            "dist/windows/privileged-payload/target-policies/production.json",
+            $updateKeyPath
+          )) {
+            $raw = Get-Content -LiteralPath $path -Raw
+            if ($raw -match "PRIVATE KEY|private_key|secret") {
+              throw "Private/secret material detected in production package trust input: $path"
+            }
+          }
+
+      - name: Publish native x64 + ARM64 Gen2 payloads
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service-arm64 | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime-arm64 | Out-Null
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-service
+          if ($LASTEXITCODE -ne 0) { throw "x64 bootstrap publish failed" }
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-runtime
+          if ($LASTEXITCODE -ne 0) { throw "x64 runtime publish failed" }
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-service-arm64
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 bootstrap publish failed" }
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-runtime-arm64
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 runtime publish failed" }
+
+      - name: Verify native PE machines
+        shell: pwsh
+        run: |
+          function Assert-PeMachine([string]$Path, [int]$Expected) {
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Path))
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+            $signature = "PE" + [char]0 + [char]0
+            if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne $signature) { throw "invalid PE signature: $Path" }
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne $Expected) { throw ("unexpected PE machine for {0}: 0x{1:X4}" -f $Path, $machine) }
+          }
+          Assert-PeMachine "dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe" 0x8664
+          Assert-PeMachine "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe" 0x8664
+          Assert-PeMachine "dist/windows/bke-licensing-agent-service-arm64/bke-licensing-agent-service.exe" 0xAA64
+          Assert-PeMachine "dist/windows/bke-licensing-agent-runtime-arm64/bke-licensing-agent-runtime.exe" 0xAA64
+
+      - name: Build canonical x64 + ARM64 installers with production public trust
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
+          & $iscc packaging/windows/bke-licensing-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "x64 installer compile failed" }
+          & $iscc packaging/windows/bke-licensing-agent-arm64.iss
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 installer compile failed" }
+
+      - name: Defender scan unsigned production-trust installers
+        shell: pwsh
+        run: |
+          $platformRoot = Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform"
+          $mpCmd = Get-ChildItem -Path $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $mpCmd) {
+            $fallback = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
+            if (Test-Path $fallback) { $mpCmd = Get-Item $fallback }
+          }
+          if ($null -eq $mpCmd) { throw "Microsoft Defender scanner unavailable" }
+          foreach ($installer in @(
+            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe",
+            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe"
+          )) {
+            & $mpCmd.FullName -Scan -ScanType 3 -File (Resolve-Path $installer).Path -DisableRemediation
+            if ($LASTEXITCODE -ne 0) { throw "Defender scan failed for $installer" }
+          }
+
+      - name: Import approved Windows signing identity
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP "bke-production-codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_B64))
+          $securePassword = ConvertTo-SecureString $env:WINDOWS_CODESIGN_PFX_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword -Exportable:$false
+          if ($null -eq $certificate) { throw "failed to import production code-signing certificate" }
+
+          $actualThumbprint = ($certificate.Thumbprint -replace '\s','').ToUpperInvariant()
+          $expectedThumbprint = ($env:APPROVED_SIGNER_THUMBPRINT -replace '\s','').ToUpperInvariant()
+          if ($actualThumbprint -ne $expectedThumbprint) { throw "imported signer thumbprint does not match approved thumbprint" }
+          if ($certificate.Subject -ne $env:APPROVED_SIGNER_SUBJECT) { throw "imported signer subject does not match approved subject" }
+
+          "SIGNER_THUMBPRINT=$actualThumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Remove-Item -LiteralPath $pfxPath -Force
+
+      - name: Authenticode sign x64 + ARM64 installers
+        shell: pwsh
+        run: |
+          $windowsKits = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Windows Kits\10\bin"
+          $signtool = Get-ChildItem $windowsKits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signtool) { throw "signtool.exe not found" }
+
+          foreach ($installer in @(
+            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe",
+            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe"
+          )) {
+            & $signtool.FullName sign /fd SHA256 /sha1 $env:SIGNER_THUMBPRINT /tr http://timestamp.digicert.com /td SHA256 $installer
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $installer" }
+          }
+
+      - name: Verify signed publisher identity and generate final signed manifest
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/production-signed | Out-Null
+          $manifest = [ordered]@{
+            schema = "bke.production-release-manifest.v1"
+            status = "SIGNED_VERIFIED"
+            source_sha = $env:GITHUB_SHA
+            version = $env:RELEASE_VERSION
+            update_authority_key_id = $env:PRODUCTION_UPDATE_KEY_ID
+            signer_subject = $env:APPROVED_SIGNER_SUBJECT
+            signer_thumbprint = ($env:APPROVED_SIGNER_THUMBPRINT -replace '\s','').ToUpperInvariant()
+            defender = "PASS"
+            installers = [ordered]@{}
+            catalog_publication = "NOT_AUTHORIZED"
+            deployment = "NOT_AUTHORIZED"
+            publish_allowed = $false
+          }
+
+          foreach ($entry in @(
+            @{ architecture = "x64"; path = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe" },
+            @{ architecture = "arm64"; path = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe" }
+          )) {
+            $signature = Get-AuthenticodeSignature -FilePath $entry.path
+            if ($signature.Status -ne "Valid") { throw "Authenticode status is not Valid for $($entry.path): $($signature.Status)" }
+            $actualThumbprint = ($signature.SignerCertificate.Thumbprint -replace '\s','').ToUpperInvariant()
+            $expectedThumbprint = ($env:APPROVED_SIGNER_THUMBPRINT -replace '\s','').ToUpperInvariant()
+            if ($actualThumbprint -ne $expectedThumbprint) { throw "signed file thumbprint mismatch" }
+            if ($signature.SignerCertificate.Subject -ne $env:APPROVED_SIGNER_SUBJECT) { throw "signed file subject mismatch" }
+
+            $manifest.installers[$entry.architecture] = [ordered]@{
+              file = [IO.Path]::GetFileName($entry.path)
+              sha256 = (Get-FileHash -LiteralPath $entry.path -Algorithm SHA256).Hash.ToLowerInvariant()
+              bytes = (Get-Item $entry.path).Length
+              authenticode_status = [string]$signature.Status
+              signer_subject = [string]$signature.SignerCertificate.Subject
+              signer_thumbprint = [string]$signature.SignerCertificate.Thumbprint
+            }
+            Copy-Item $entry.path dist/production-signed/
+          }
+
+          $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath dist/production-signed/PRODUCTION-RELEASE-MANIFEST.json -Encoding utf8
+          Get-Content dist/production-signed/PRODUCTION-RELEASE-MANIFEST.json
+
+      - name: Enforce signed-but-not-published boundary
+        shell: pwsh
+        run: |
+          $manifest = Get-Content dist/production-signed/PRODUCTION-RELEASE-MANIFEST.json -Raw | ConvertFrom-Json
+          if ($manifest.status -ne "SIGNED_VERIFIED") { throw "signed release manifest status mismatch" }
+          if ($manifest.publish_allowed -ne $false) { throw "signing gate unexpectedly authorizes publication" }
+          if ($manifest.catalog_publication -ne "NOT_AUTHORIZED") { throw "signing gate crossed catalog boundary" }
+          if ($manifest.deployment -ne "NOT_AUTHORIZED") { throw "signing gate crossed deployment boundary" }
+
+      - name: Upload signed-but-unpublished production candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-2.0.0-Windows-PRODUCTION-SIGNED-UNPUBLISHED
+          path: dist/production-signed/**
+          if-no-files-found: error
+          retention-days: 7
