@@ -1,13 +1,11 @@
 using BKE.LicensingAgent.Bootstrap;
 
-// Certification-only seam for proving an installed legacy Python Agent can hand off
-// to the guarded .NET Gen2 runtime without weakening the canonical production path.
-// The marker lives under Program Files and is emitted only by the bridge candidate
-// installer. Production cutover removes the Gen2 guard instead of shipping this marker.
+// The runtime bridge is canonical on this production-installer candidate branch.
+// The certification marker remains only to suppress external self-update polling
+// while isolated bridge tests run; production packaging deletes it before startup.
 var bridgeCertificationMarker = Path.Combine(RuntimeBridgeContract.InstallRoot, "bridge-cert.enable");
 if (File.Exists(bridgeCertificationMarker))
 {
-    Environment.SetEnvironmentVariable("BKE_AGENT_BOOTSTRAP_ALLOW_GEN2", "1");
     Environment.SetEnvironmentVariable("BKE_AGENT_SELF_UPDATE_DISABLE", "1");
 }
 
