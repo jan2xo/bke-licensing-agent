@@ -188,8 +188,26 @@ jobs:
           if ($record.StartMode -ne "Auto") { throw "service is not Automatic" }
           if ($record.StartName -notin @("LocalSystem","NT AUTHORITY\SYSTEM")) { throw "service identity drifted" }
 
-          if (!(Test-Path (Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\privileged-update.json"))) {
+          $privilegedConfigPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\privileged-update.json"
+          if (!(Test-Path $privilegedConfigPath)) {
             throw ".NET provisioner did not create privileged-update.json"
+          }
+
+          $privilegedConfig = Get-Content $privilegedConfigPath -Raw | ConvertFrom-Json
+          $expectedUpdater = Join-Path $root "updater\bke-updater-core.exe"
+          if ([IO.Path]::GetFullPath([string]$privilegedConfig.helper_executable) -ne [IO.Path]::GetFullPath($expectedUpdater)) {
+            throw "privileged updater helper path drifted: $($privilegedConfig.helper_executable)"
+          }
+
+          $pythonResidue = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop |
+            Where-Object {
+              $_.Extension -in @(".py",".pyc",".pyd") -or
+              $_.Name -match "^python\d+(?:\.\d+)?\.dll$" -or
+              $_.Name -eq "base_library.zip"
+            }
+          if ($pythonResidue) {
+            $pythonResidue | ForEach-Object { Write-Error "Retired Python residue: $($_.FullName)" }
+            throw "Python/PyInstaller residue remains in canonical .NET-only installation"
           }
 
           Write-Host ".NET-only canonical x64 fresh install: PASS"
