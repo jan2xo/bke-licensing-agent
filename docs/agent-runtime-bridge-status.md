@@ -30,7 +30,7 @@ Canonical installers delete any stale `bridge-cert.enable` marker and never crea
 
 ## Phase 8 hosted result
 
-GitHub Actions workflow `.github/workflows/dotnet-production-installer.yml` has passed for candidate head `f71f5cd1444f68027d15510f243151ea99a8190c`.
+GitHub Actions workflow `.github/workflows/dotnet-production-installer.yml` first passed the executable migration candidate at `f71f5cd1444f68027d15510f243151ea99a8190c`; the final PowerShell 5.1-safe Phase 8 head `1ec04a603eaa913e452ca9389b164ee25be4bdfe` also passed hosted replay run `35371763991`.
 
 The hosted Windows proof established:
 
@@ -56,10 +56,60 @@ artifact id: 10550863758
 digest: sha256:b968215cf9c305a807796f891785d1a6a0728b4686876c35bc00fd32140df500
 ```
 
-## Remaining Phase 8 acceptance boundary
+## Phase 8 final acceptance — CLOSED
 
-Hosted x64 migration and native ARM64 packaging are certified, but Phase 8 is not yet formally closed.
+Phase 8 is formally closed.
 
-The remaining acceptance step is to install the **canonical ARM64 Phase 8 candidate** on the persistent Windows 11 ARM64 UTM machine and verify the same installed-machine contract there. Do not disturb the already-certified machine until that explicit test is performed.
+The PowerShell 5.1-safe certification-script fix at `1ec04a603eaa913e452ca9389b164ee25be4bdfe` passed the hosted production-installer workflow:
 
-Production signing, production catalog/update-authority publication, release/tag creation, and deployment remain unauthorized. Production-signed self-update is Phase 9; broken production update rollback is Phase 10.
+```text
+run: 35371763991
+result: SUCCESS
+```
+
+The persistent Windows 11 ARM64 UTM machine `WIN-J2SML1QDPBD` then completed the canonical ARM64 installer acceptance with:
+
+```text
+schema: bke.production-installer-arm64.v1
+status: PASS
+installer_exit_code: 0
+installer_sha256: df00858459d58c36b270999f3dad784998eceae4d6864210b1a34579dc30d1cb
+```
+
+Every machine acceptance check passed:
+
+- installer identity preserved
+- service running
+- stable SCM identity preserved
+- canonical assets present
+- native ARM64 service/runtime payloads
+- certification marker removed
+- successful-install rollback staging discarded
+- durable ProgramData state preserved
+- signed authorization recovered
+- runtime supervision recovered
+- port 43873 remained loopback-only and owned by the Gen2 runtime
+- machine data-root contract preserved
+
+Resulting machine hashes:
+
+```text
+service:
+f119486c5bf0b98b636a3291a638a71ff9762a7b8f5c7c5390c16bc424cc689e
+
+runtime:
+fb7799db6dec72c45d2c0ef10fad91ba744296f0c1c778c2088bdfbc4a212610
+
+agent.db:
+e00994231d220e1d671d99986a353badb3062ba237ae9cb2fb069c8580cd7ed5
+```
+
+Stable SCM executable after migration:
+
+```text
+C:\Program Files\BKE Digital Solutions\Licensing Agent\service\bke-licensing-agent-service.exe
+```
+
+Phase 8 therefore proves the canonical Windows Gen2 installer migration on hosted x64 and the persistent native ARM64 machine.
+
+Production signing, production catalog/update-authority publication, release/tag creation, deployment, and merges remain unauthorized. Production-signed self-update is Phase 9; broken production update rollback remains Phase 10.
