@@ -233,7 +233,7 @@ begin
     RestoreStagedDirectory(UpdaterPath, UpdaterBackup);
     RestoreStagedDirectory(ProvisioningPath, ProvisioningBackup);
     RestoreStagedDirectory(TrustPath, TrustBackup);
-    raise;
+    RaiseException('Existing Agent payload staging failed; staged payloads were restored.');
   end;
 
   Log('Existing Agent payloads staged for automatic rollback.');
