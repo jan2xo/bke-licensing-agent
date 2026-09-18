@@ -244,7 +244,7 @@ if ($Mode -eq 'Install') {
         }
         $result.checks['installer_identity_preserved'] = $true
 
-        $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$InstallerLog")
+        $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/LOG="{0}"' -f $InstallerLog))
         $process = Start-Process -FilePath $resolvedInstaller -ArgumentList $arguments -Wait -PassThru
         $result['installer_exit_code'] = [int]$process.ExitCode
         if ($process.ExitCode -ne 0) {
