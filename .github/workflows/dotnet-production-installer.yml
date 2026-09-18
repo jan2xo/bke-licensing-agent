@@ -56,12 +56,21 @@ jobs:
           python -m pip install -e ".[test]"
           choco install innosetup -y --no-progress
 
-      - name: Run Gen2 and production-packaging tests
+      - name: Run Windows-compatible Gen2 and production-packaging tests
         shell: pwsh
         run: |
           python -m pytest -q tests/unit/test_windows_privileged_packaging.py
-          bash dotnet/certify.sh
-          if ($LASTEXITCODE -ne 0) { throw "Gen2 certification suite failed: $LASTEXITCODE" }
+
+          dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 host build failed: $LASTEXITCODE" }
+
+          dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed: $LASTEXITCODE" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Gen2 contract certification failed: $LASTEXITCODE" }
+
+          Write-Host "Full Python-oracle differentials are enforced by the dedicated .NET 10 Agent Gen2 Linux gate; the License Center differential is intentionally POSIX-only."
 
       - name: Build Python baseline support payloads
         shell: pwsh
