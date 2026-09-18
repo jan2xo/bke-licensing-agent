@@ -3,14 +3,6 @@ using BKE.LicensingAgent.Contracts;
 using BKE.LicensingAgent.Host;
 using BKE.LicensingAgent.Infrastructure;
 
-if (Environment.GetEnvironmentVariable("BKE_AGENT_VNEXT_ENABLE") != "1")
-{
-    Console.Error.WriteLine(
-        "BKE Licensing Agent .NET 10 Gen2 is migration-only. Python remains canonical. " +
-        "Set BKE_AGENT_VNEXT_ENABLE=1 only for isolated development/certification.");
-    return 78;
-}
-
 var port = LocalAgentContract.DefaultPort;
 var configuredPort = Environment.GetEnvironmentVariable("BKE_AGENT_PORT");
 if (!string.IsNullOrWhiteSpace(configuredPort))
