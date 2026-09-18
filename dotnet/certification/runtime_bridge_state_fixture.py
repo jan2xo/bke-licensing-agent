@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from bke_licensing_agent.devices.fingerprint import DeviceFingerprint  # noqa: E402
+from bke_licensing_agent.runtime import InstalledAgentRuntime  # noqa: E402
 from bke_licensing_agent.storage.database import Database  # noqa: E402
 
 PRODUCT_ID = "runtime-bridge-cert"
@@ -202,6 +203,23 @@ def read_state(data_root: Path) -> dict[str, object]:
     }
 
 
+
+def prove_python_authorization(data_root: Path) -> None:
+    os.environ["BKE_AGENT_DATA_DIR"] = str(data_root)
+    database = Database(data_root / "agent.db")
+    runtime = InstalledAgentRuntime(database=database, port=43873, module_server=object())  # type: ignore[arg-type]
+    try:
+        result = runtime.authorize({
+            "product_id": PRODUCT_ID,
+            "version": VERSION,
+            "installation_id": INSTALLATION_ID,
+        })
+    finally:
+        database.close()
+    if result.get("authorized") is not True or result.get("reason") != "authorized":
+        raise SystemExit(f"Canonical Python authorization failed before migration: {result}")
+    print("Canonical Python durable-state authorization: PASS")
+
 def write_snapshot(data_root: Path, snapshot_path: Path) -> None:
     state = read_state(data_root)
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +250,7 @@ def main() -> None:
 
     if args.command == "seed":
         seed(args.data_root)
+        prove_python_authorization(args.data_root)
         write_snapshot(args.data_root, args.snapshot)
     elif args.command == "snapshot":
         write_snapshot(args.data_root, args.snapshot)
