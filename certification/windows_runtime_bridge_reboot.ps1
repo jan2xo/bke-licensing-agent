@@ -76,7 +76,7 @@ function Assert-LoopbackOnly {
     }
 }
 
-function Write-Result([hashtable]$Document) {
+function Write-Result([System.Collections.IDictionary]$Document) {
     New-Item -ItemType Directory -Force $EvidenceRoot | Out-Null
     $Document | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ResultPath -Encoding utf8
 }
@@ -132,7 +132,9 @@ if ($Mode -eq 'Prepare') {
     }
     $expected | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ExpectedPath -Encoding utf8
 
-    Copy-Item -LiteralPath $PSCommandPath -Destination $VerifierPath -Force
+    if (![string]::Equals([IO.Path]::GetFullPath($PSCommandPath), [IO.Path]::GetFullPath($VerifierPath), [StringComparison]::OrdinalIgnoreCase)) {
+        Copy-Item -LiteralPath $PSCommandPath -Destination $VerifierPath -Force
+    }
 
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument (
