@@ -1,5 +1,7 @@
 #define AppName "BKE Licensing Agent"
+#ifndef AppVersion
 #define AppVersion "2.0.0"
+#endif
 #define AppPublisher "BKE Digital Solutions"
 #define AppCopyright "Copyright (c) 2026 BKES Information Technology Solutions. All rights reserved."
 #define ServiceName "BKE-Licensing-Agent"
@@ -236,7 +238,7 @@ begin
   PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
   Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' +
     '$deadline=[DateTime]::UtcNow.AddSeconds(60); ' +
-    '$uri=''http://127.0.0.1:43873/license-center?product_id=runtime-bridge-health&version=2.0.0&installation_id=installer-health''; ' +
+    '$uri=''http://127.0.0.1:43873/license-center?product_id=runtime-bridge-health&version={#AppVersion}&installation_id=installer-health''; ' +
     'while ([DateTime]::UtcNow -lt $deadline) { try { ' +
     '$response=Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 2; ' +
     'if ($response.StatusCode -eq 200) { exit 0 } } catch {}; Start-Sleep -Milliseconds 500 }; exit 1"';
