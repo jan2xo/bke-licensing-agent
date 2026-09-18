@@ -98,25 +98,38 @@ public sealed class AuthorizationProvider : IAuthorizationService
             var activeRecord = LoadActiveVerifiedLicense(connection, binding.ActiveLicenseId);
             if (activeRecord is null || !BindingMatchesRecord(binding, activeRecord))
             {
-                throw new InvalidDataException("Active binding does not match license");
+                return new AuthorizationResponse(false, "lease_authority_mismatch");
             }
 
             var signedRecord = LoadLeaseRecord(connection, binding.ActiveLeaseId);
             if (signedRecord is null)
             {
-                throw new InvalidDataException("Signed lease record is missing");
+                return new AuthorizationResponse(false, "lease_authority_mismatch");
             }
 
             var lease = VerifySignedLease(signedRecord, trustedKeys);
+
+            if (lease.Revoked)
+            {
+                return new AuthorizationResponse(false, "lease_revoked");
+            }
+            if (lease.SupersededBy is not null)
+            {
+                return new AuthorizationResponse(false, "lease_superseded");
+            }
+            if (!string.Equals(lease.Version, request.Version, StringComparison.Ordinal))
+            {
+                return new AuthorizationResponse(false, "lease_version_rejected");
+            }
             if (!LeaseMatchesStoredAuthority(lease, signedRecord, request, deviceId))
             {
-                throw new InvalidDataException("Signed lease metadata does not match envelope");
+                return new AuthorizationResponse(false, "lease_authority_mismatch");
             }
             if (lease.LeaseId != activeRecord.LeaseId ||
                 lease.Generation != activeRecord.Generation ||
                 lease.ServerRevision != activeRecord.ServerRevision)
             {
-                throw new InvalidDataException("Active lease is stale");
+                return new AuthorizationResponse(false, "lease_authority_mismatch");
             }
 
             var now = DateTimeOffset.UtcNow;
@@ -338,10 +351,6 @@ public sealed class AuthorizationProvider : IAuthorizationService
             OptionalBoolean(root, "revoked", false),
             OptionalNullableString(root, "superseded_by"));
 
-        if (lease.Revoked || lease.SupersededBy is not null)
-        {
-            throw new InvalidDataException("Lease is revoked or superseded");
-        }
         return lease;
     }
 
@@ -355,10 +364,8 @@ public sealed class AuthorizationProvider : IAuthorizationService
         lease.ProductId == request.ProductId &&
         lease.InstallationId == request.InstallationId &&
         lease.DeviceId == deviceId &&
-        lease.Version == request.Version &&
         lease.Generation == record.Generation &&
         lease.ServerRevision == record.ServerRevision &&
-        lease.KeyId == record.KeyId &&
         lease.KeyId == record.KeyId &&
         lease.Algorithm == record.SignedAlgorithm;
 
