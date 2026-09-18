@@ -1,7 +1,9 @@
-name: Windows in-place upgrade certification
+name: Legacy Python Windows in-place upgrade certification (manual)
 
+# Historical RC3 -> Python 1.0.0 replacement gate.
+# Superseded for Gen2 migration authority by dotnet-runtime-bridge.yml.
+# Kept manual-only for archaeology/regression reproduction; do not use as a Gen2 release gate.
 on:
-  pull_request:
   workflow_dispatch:
 
 permissions:
