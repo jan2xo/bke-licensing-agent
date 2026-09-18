@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <AssemblyName>BKE.LicensingAgent.Desktop</AssemblyName>
+    <AssemblyName>bke-license-center</AssemblyName>
     <RootNamespace>BKE.LicensingAgent.Desktop</RootNamespace>
-    <Description>Cross-platform desktop UI shell for the BKE Licensing Agent.</Description>
+    <Description>Native .NET 10 License Center and desktop shell for the BKE Licensing Agent.</Description>
   </PropertyGroup>
 
   <ItemGroup>
