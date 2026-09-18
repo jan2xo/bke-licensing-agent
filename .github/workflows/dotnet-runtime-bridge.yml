@@ -8,6 +8,7 @@ on:
     paths:
       - "dotnet/**"
       - "packaging/windows/bke-licensing-agent-runtime-bridge.iss"
+      - "packaging/windows/bke-licensing-agent-runtime-bridge-arm64.iss"
       - ".github/workflows/dotnet-runtime-bridge.yml"
       - "docs/agent-runtime-replacement-contract.md"
   pull_request:
@@ -16,6 +17,7 @@ on:
     paths:
       - "dotnet/**"
       - "packaging/windows/bke-licensing-agent-runtime-bridge.iss"
+      - "packaging/windows/bke-licensing-agent-runtime-bridge-arm64.iss"
       - ".github/workflows/dotnet-runtime-bridge.yml"
       - "docs/agent-runtime-replacement-contract.md"
 
@@ -557,5 +559,87 @@ jobs:
         with:
           name: BKE-Licensing-Agent-RuntimeBridge-Certification
           path: dist/BKE-Licensing-Agent-2.0.0-RuntimeBridge-Certification-*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish native ARM64 stable bootstrap and Gen2 runtime
+        shell: pwsh
+        run: |
+          Remove-Item dist/windows/bke-licensing-agent-service-arm64,dist/windows/bke-licensing-agent-runtime-arm64 -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service-arm64 | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime-arm64 | Out-Null
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj `
+            --configuration Release --runtime win-arm64 --self-contained true `
+            -p:PublishSingleFile=true -p:Version=${env:BRIDGE_VERSION} `
+            --verbosity minimal `
+            --output dist/windows/bke-licensing-agent-service-arm64
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64 stable bootstrap publish failed' }
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj `
+            --configuration Release --runtime win-arm64 --self-contained true `
+            -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=${env:BRIDGE_VERSION} `
+            --verbosity minimal `
+            --output dist/windows/bke-licensing-agent-runtime-arm64
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64 Gen2 runtime publish failed' }
+
+      - name: Verify ARM64 PE machine type
+        shell: pwsh
+        run: |
+          function Assert-Arm64Pe([string]$Path) {
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Path))
+            if ($bytes.Length -lt 256) { throw "PE file too small: $Path" }
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+            if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne "PE`0`0") { throw "invalid PE signature: $Path" }
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0xAA64) { throw ("expected ARM64 PE 0xAA64 but got 0x{0:X4}: {1}" -f $machine,$Path) }
+            Write-Host ("ARM64 PE verified 0xAA64: {0}" -f $Path)
+          }
+          Assert-Arm64Pe 'dist/windows/bke-licensing-agent-service-arm64/bke-licensing-agent-service.exe'
+          Assert-Arm64Pe 'dist/windows/bke-licensing-agent-runtime-arm64/bke-licensing-agent-runtime.exe'
+
+      - name: Build ARM64 certification-only bridge installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/bke-licensing-agent-runtime-bridge-arm64.iss
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Windows-arm64.exe"
+          if (!(Test-Path $installer)) { throw "ARM64 bridge installer missing: $installer" }
+
+      - name: Assemble ARM64 UTM certification bundle
+        shell: pwsh
+        run: |
+          $package = 'dist/utm-arm64-certification-package'
+          Remove-Item $package -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $package | Out-Null
+          $installer = "dist/installer/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Windows-arm64.exe"
+          Copy-Item $installer $package
+          Copy-Item 'certification/windows_runtime_bridge_reboot.ps1' $package
+          @"
+          BKE Licensing Agent Gen2 Runtime Bridge - Windows ARM64
+          CERTIFICATION ONLY - NOT A PRODUCTION RELEASE
+
+          Source commit:
+          ${{ github.sha }}
+
+          Native ARM64 service/runtime PE headers were verified as 0xAA64.
+          Functional x64 bridge gates passed earlier in this job.
+          Actual ARM64 execution/reboot certification must be completed on the persistent UTM Windows 11 ARM64 VM.
+
+          DO NOT use this installer for production cutover.
+          "@ | Set-Content -LiteralPath (Join-Path $package 'CERTIFICATION-ONLY.txt') -Encoding utf8
+
+          $sum = Join-Path $package 'SHA256SUMS.txt'
+          Get-ChildItem -LiteralPath $package -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Add-Content -LiteralPath $sum -Encoding ascii
+          }
+          $zip = "dist/BKE-Licensing-Agent-${env:BRIDGE_VERSION}-RuntimeBridge-Windows-arm64-Certification-${{ github.sha }}.zip"
+          Compress-Archive -Path "$package/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List
+
+      - name: Upload ARM64 UTM certification bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-RuntimeBridge-Certification-Windows-arm64
+          path: dist/BKE-Licensing-Agent-2.0.0-RuntimeBridge-Windows-arm64-Certification-*.zip
           if-no-files-found: error
           retention-days: 14
