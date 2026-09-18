@@ -28,10 +28,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
@@ -39,99 +35,36 @@ jobs:
       - name: Install packaging dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyinstaller
-          python -m pip install -e ".[test]"
           choco install innosetup -y --no-progress
 
       - name: Re-run release-critical tests
         shell: pwsh
         run: |
-          python -m pytest -q tests/unit/test_windows_privileged_packaging.py
           dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed" }
           dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "Gen2 runtime build failed" }
+          dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw ".NET License Center build failed" }
+          dotnet build dotnet/src/BKE.LicensingAgent.Updater/BKE.LicensingAgent.Updater.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw ".NET updater helper build failed" }
+          dotnet build dotnet/src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw ".NET provisioner build failed" }
+          dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw ".NET release tooling build failed" }
           dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw "signed self-update certification failed" }
 
-      - name: Build retained support payloads
+      - name: Publish native .NET support payloads
         shell: pwsh
         run: |
-          Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:GEN2_VERSION -Architecture all
 
-          pyinstaller --clean --noconfirm bke-license-center.spec
-          Move-Item dist/bke-license-center dist/windows/bke-license-center
-
-          pyinstaller --clean --noconfirm --onefile --name bke-updater-core packaging/windows/updater_core_entry.py
-          New-Item -ItemType Directory -Force dist/windows/bke-updater-core | Out-Null
-          Move-Item dist/bke-updater-core.exe dist/windows/bke-updater-core/bke-updater-core.exe
-
-          pyinstaller --clean --noconfirm --onefile --name bke-privileged-provisioner packaging/windows/provision_privileged_runtime.py
-          New-Item -ItemType Directory -Force dist/windows/bke-privileged-provisioner | Out-Null
-          Move-Item dist/bke-privileged-provisioner.exe dist/windows/bke-privileged-provisioner/bke-privileged-provisioner.exe
-
-      - name: Generate disposable preflight trust
+      - name: Generate disposable preflight trust with .NET
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-keys | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/privileged-payload/target-policies | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/update-authority-keys | Out-Null
-
-          @'
-          import base64, json
-          from pathlib import Path
-          from cryptography.hazmat.primitives import serialization
-          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-          root = Path("dist/windows/privileged-payload")
-          target_private = Ed25519PrivateKey.generate()
-          target_public = target_private.public_key()
-          target_key_id = "phase11-preflight-target-v1"
-          (root / "target-keys" / f"{target_key_id}.pem").write_bytes(
-              target_public.public_bytes(
-                  serialization.Encoding.PEM,
-                  serialization.PublicFormat.SubjectPublicKeyInfo,
-              )
-          )
-          unsigned = {
-              "schema": "bke.install-target-policy.v1",
-              "policy_id": "phase11-preflight-only",
-              "revision": 1,
-              "product_id": "bke-certification-product",
-              "platform": "windows",
-              "architecture": "x86_64",
-              "install_root": r"C:\Program Files\BKE Digital Solutions\Certification Product",
-              "entry_point": "product.exe",
-              "signing_key_id": target_key_id,
-              "algorithm": "Ed25519",
-          }
-          canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-          document = dict(unsigned)
-          document["signature"] = base64.b64encode(target_private.sign(canonical)).decode("ascii")
-          (root / "target-policies" / "phase11-preflight-only.json").write_text(
-              json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="utf-8",
-          )
-
-          update_private = Ed25519PrivateKey.generate()
-          raw_public = update_private.public_key().public_bytes(
-              serialization.Encoding.Raw,
-              serialization.PublicFormat.Raw,
-          )
-          key = {
-              "schema": "bke.update-authority-key.v1",
-              "key_id": "phase11-preflight-update-v1",
-              "algorithm": "Ed25519",
-              "public_key": base64.b64encode(raw_public).decode("ascii"),
-          }
-          Path("dist/windows/update-authority-keys/phase11-preflight-update-v1.json").write_text(
-              json.dumps(key, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="utf-8",
-          )
-          print("Disposable preflight trust generated. NOT PRODUCTION AUTHORITY.")
-          '@ | python -
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id phase11-preflight-target-v1 --policy-id phase11-preflight-only --update-key-id phase11-preflight-update-v1
+          if ($LASTEXITCODE -ne 0) { throw ".NET disposable trust generation failed" }
 
       - name: Publish native x64 + ARM64 Gen2 payloads
         shell: pwsh
@@ -259,8 +192,8 @@ jobs:
       - name: Build owner-gated production signing request
         shell: pwsh
         run: |
-          python scripts/build_production_signing_request.py dist/phase11-preflight/PREFLIGHT-MANIFEST.json dist/phase11-preflight/SIGNING-REQUEST.json
-          if ($LASTEXITCODE -ne 0) { throw "production signing request generation failed" }
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- build-signing-request --manifest dist/phase11-preflight/PREFLIGHT-MANIFEST.json --output dist/phase11-preflight/SIGNING-REQUEST.json
+          if ($LASTEXITCODE -ne 0) { throw ".NET production signing request generation failed" }
           $request = Get-Content dist/phase11-preflight/SIGNING-REQUEST.json -Raw | ConvertFrom-Json
           if ($request.signing_authorized -ne $false) { throw "signing request unexpectedly authorizes signing" }
           if ($request.publish_allowed -ne $false) { throw "signing request unexpectedly authorizes publication" }
