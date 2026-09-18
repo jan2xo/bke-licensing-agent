@@ -8,15 +8,25 @@ Python at `feat/notification-feed-provider` commit `77bdcd0be364192a6c1adea07365
 
 The stale `refactor/dotnet10-agent-vnext` branch is archaeology only. Its useful composition-root and certification ideas are retained here because they were already present in the frozen Python baseline; the stale branch itself is not merged into Generation 2.
 
-## Safety gate
+## Phase 8 candidate boundary
 
-The .NET host remains opt-in and refuses to start unless:
+On `feat/production-installer-gen2`, the migration-only Gen2 startup guard has been removed so the canonical Windows installer candidate can run the certified runtime bridge directly.
+
+This is **not** a production cutover. The branch and its stacked PR remain draft/unmerged. Production signing, catalog publication, release/tag creation, and deployment are separate authorization gates.
+
+The canonical candidate keeps these stable machine boundaries:
 
 ```text
-BKE_AGENT_VNEXT_ENABLE=1
+BKE-Licensing-Agent
+        ↓
+service\\bke-licensing-agent-service.exe
+        ↓
+runtime\\bke-licensing-agent-runtime.exe
+        ↓
+127.0.0.1 / ::1 :43873
 ```
 
-This is a development/certification guard, not a stable-channel switch.
+The existing Python/PyInstaller License Center remains a separate UI boundary during Phase 8.
 
 ## Boundary rule
 
@@ -47,20 +57,22 @@ BKE.LicensingAgent.Host           loopback composition boundary
 
 The capability projects are introduced only as their parity waves begin. Do not create fake wrappers that merely relocate Python behavior.
 
-## Current first-wave scope
+## Current migration scope
 
-The first Gen2 wave is deliberately narrow:
+The Gen2 migration has progressed through runtime, compatibility, installed-machine, and reboot certification. Phase 8 now migrates the canonical Windows installer while preserving the certified machine contract.
 
-- freeze the exact Python behavioral baseline;
-- inventory the current external/runtime contract in `contracts/gen1-baseline.json`;
-- bring the C# contract model up to the current licensing, update, typed-notification, and notification-inbox route set;
-- split the old monolithic runtime port into capability-oriented application ports;
-- retain fail-closed unavailable providers for capabilities not yet migrated;
-- explicitly enforce the known loopback request guardrails rather than relying silently on ASP.NET defaults;
-- certify the C# contract against the machine-readable inventory;
-- run Python-oracle compatibility checks beside the .NET certification.
+Phase 8 includes:
 
-This wave does **not** migrate licensing policy, SQLite reads/writes, broadcast synchronization, update execution, service IPC, packaging, or License Center UI.
+- canonical Windows x64 Gen2 installer packaging;
+- a separate native Windows ARM64 Gen2 installer;
+- stable SCM bootstrap + replaceable Gen2 runtime packaging;
+- preservation of ProgramData / schema-8 state;
+- transactional service/runtime rollback and local API health checks;
+- architecture-aware Agent self-update discovery;
+- continued Python/PyInstaller License Center packaging;
+- hosted Windows proof of Python production installer → canonical Gen2 in-place migration.
+
+Phase 8 does **not** authorize production signing, catalog publication, release/tag creation, production deployment, License Center language migration, or the Phase 9 production-signed self-update boundary.
 
 ## Frozen persistence invariant
 
