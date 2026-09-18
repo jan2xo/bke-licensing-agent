@@ -10,7 +10,7 @@ on:
       - "dotnet/**"
       - "packaging/windows/bke-licensing-agent.iss"
       - "packaging/windows/bke-licensing-agent-arm64.iss"
-      - "certification/windows_production_installer_arm64.ps1"
+      - "certification/windows_dotnet_only_arm64.ps1"
       - "scripts/publish_dotnet_windows_payloads.ps1"
   pull_request:
     paths:
@@ -18,7 +18,7 @@ on:
       - "dotnet/**"
       - "packaging/windows/bke-licensing-agent.iss"
       - "packaging/windows/bke-licensing-agent-arm64.iss"
-      - "certification/windows_production_installer_arm64.ps1"
+      - "certification/windows_dotnet_only_arm64.ps1"
       - "scripts/publish_dotnet_windows_payloads.ps1"
 
 permissions:
@@ -49,7 +49,7 @@ jobs:
       - name: Validate ARM64 acceptance verifier
         shell: pwsh
         run: |
-          $path = (Resolve-Path "certification/windows_production_installer_arm64.ps1").Path
+          $path = (Resolve-Path "certification/windows_dotnet_only_arm64.ps1").Path
           $tokens = $null
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors) | Out-Null
@@ -192,7 +192,7 @@ jobs:
           $package="dist/dotnet-only-arm64-kit"
           New-Item -ItemType Directory -Force $package | Out-Null
           Copy-Item "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe" $package
-          Copy-Item "certification/windows_production_installer_arm64.ps1" $package
+          Copy-Item "certification/windows_dotnet_only_arm64.ps1" $package
           @"
           BKE Licensing Agent 2.0.0 - .NET-only ARM64 acceptance
 
@@ -205,7 +205,7 @@ jobs:
           - privileged updater helper
           - privileged provisioner
 
-          Run Prepare -> Install -> Collect on the persistent Windows 11 ARM64 UTM machine.
+          Run Prepare -> Install -> Collect with windows_dotnet_only_arm64.ps1 on the persistent Windows 11 ARM64 UTM machine.
           "@ | Set-Content (Join-Path $package "README-DOTNET-ONLY.txt") -Encoding utf8
           Compress-Archive -Path "$package/*" -DestinationPath "dist/BKE-Licensing-Agent-2.0.0-Windows-arm64-DOTNET-ONLY-$env:GITHUB_SHA.zip" -Force
 
