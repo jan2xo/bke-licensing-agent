@@ -475,6 +475,7 @@ public sealed class AuthorizationProvider : IAuthorizationService
         return Convert.ToHexString(digest).ToLowerInvariant();
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     private static string LegacyWindowsRelease(Version osVersion)
     {
         var productName = Microsoft.Win32.Registry.GetValue(
