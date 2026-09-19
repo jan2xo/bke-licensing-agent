@@ -73,6 +73,10 @@
       {
         "method": "POST",
         "path": "/v1/software/install"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/software/open"
       }
     ],
     "removed_product_update_routes": [
@@ -148,6 +152,19 @@
       "local_responses_expose_cloud_tokens": false,
       "local_responses_expose_download_urls": false,
       "local_responses_expose_install_paths": false
+    },
+    "software_open": {
+      "capability_id": "bke.software-open",
+      "contract_version": 1,
+      "catalog_recheck_required": true,
+      "execution_type_required": "STANDALONE",
+      "launch_owner": "bke-licensing-agent",
+      "local_request_fields": [
+        "correlation_id",
+        "product_id"
+      ],
+      "local_responses_expose_entry_point": false,
+      "local_responses_expose_install_path": false
     }
   },
   "notifications": {
