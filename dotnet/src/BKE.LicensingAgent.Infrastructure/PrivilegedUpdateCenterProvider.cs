@@ -1305,14 +1305,32 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
         {
             throw new PlatformNotSupportedException("Windows elevation is only available on Windows");
         }
-        var start = new ProcessStartInfo
+        var serviceHosted =
+            Environment.GetEnvironmentVariable(
+                "BKE_AGENT_SERVICE_HOSTED") == "1";
+
+        var start = serviceHosted
+            ? new ProcessStartInfo
+            {
+                FileName = command[0],
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            }
+            : new ProcessStartInfo
+            {
+                FileName = command[0],
+                UseShellExecute = true,
+                Verb = "runas",
+            };
+
+        foreach (var argument in command.Skip(1))
         {
-            FileName = command[0],
-            UseShellExecute = true,
-            Verb = "runas",
-        };
-        foreach (var argument in command.Skip(1)) start.ArgumentList.Add(argument);
-        _ = Process.Start(start) ?? throw new InvalidOperationException("privileged helper did not start");
+            start.ArgumentList.Add(argument);
+        }
+
+        _ = Process.Start(start)
+            ?? throw new InvalidOperationException(
+                "privileged helper did not start");
     }
 
     private void WriteTransaction(string runtimeRoot, string transactionId, string state, string helper)
