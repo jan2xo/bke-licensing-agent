@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/utm-disposable-target-trust.yml"
       - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
+      - "certification/utm/**"
   workflow_dispatch:
 
 permissions:
@@ -25,6 +26,27 @@ jobs:
         run: |
           dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
 
+      - name: Parse UTM PowerShell helpers
+        shell: pwsh
+        run: |
+          foreach ($path in @(
+            "certification/utm/Install-RenderDock-UtmTargetTrust.ps1",
+            "certification/utm/Remove-RenderDock-UtmTargetTrust.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "UTM helper parse failed: $path"
+            }
+          }
+          Write-Host "UTM PowerShell helper parse: PASS"
+
       - name: Generate disposable Render Dock target policies
         shell: bash
         run: |
@@ -32,6 +54,10 @@ jobs:
 
           root="dist/utm-render-dock-target-trust"
           mkdir -p "$root/x64" "$root/arm64"
+          cp certification/utm/Install-RenderDock-UtmTargetTrust.ps1 "$root/"
+          cp certification/utm/Remove-RenderDock-UtmTargetTrust.ps1 "$root/"
+          cp certification/utm/README-RenderDock-UtmTargetTrust.md "$root/README.md"
+          printf '%s\n' "$GITHUB_SHA" > "$root/SOURCE-SHA.txt"
 
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
             --configuration Release --no-build -- \
