@@ -130,6 +130,7 @@ static async Task CertifyAccountSessionStateMachine()
         RefreshToken: "refresh-secret",
         SessionId: "session-1",
         ExpiresIn: TimeSpan.FromMinutes(30),
+        RefreshExpiresIn: TimeSpan.FromDays(30),
         Account: new AccountSessionAccount(
             "user-1",
             "buyer@example.com",
@@ -148,6 +149,26 @@ static async Task CertifyAccountSessionStateMachine()
             active.AccessToken == "access-secret" &&
             active.RefreshToken == "refresh-secret",
         "approved remote secrets were not retained by the secret-store boundary");
+    Require(remote.AcknowledgeCount == 1, "approved handoff was not acknowledged after secure-store write");
+
+    clock.Advance(TimeSpan.FromMinutes(29));
+    remote.Refreshes.Enqueue(new RemoteAccountSessionRefresh(
+        "refreshed",
+        AccessToken: "access-secret-2",
+        RefreshToken: "refresh-secret-2",
+        SessionId: "session-1",
+        ExpiresIn: TimeSpan.FromMinutes(30),
+        RefreshExpiresIn: TimeSpan.FromDays(29),
+        Account: active.Account));
+    var refreshed = await service.StatusAsync(
+        new AccountSessionStatusRequest("cert-refresh"),
+        CancellationToken.None);
+    Require(refreshed.Status == "AUTHENTICATED", "account-session refresh did not remain authenticated");
+    Require(remote.RefreshCount == 1, "account-session refresh did not call remote");
+    Require(store.State is ActiveAccountSessionState rotated &&
+            rotated.AccessToken == "access-secret-2" &&
+            rotated.RefreshToken == "refresh-secret-2",
+        "rotated account-session secrets did not replace the previous secure-store state");
 
     remote.ThrowOnRevoke = true;
     var logout = await service.LogoutAsync(
@@ -212,8 +233,11 @@ sealed class FakeAccountSessionRemote : IAccountSessionRemote
 {
     public int StartCount { get; private set; }
     public int PollCount { get; private set; }
+    public int RefreshCount { get; private set; }
+    public int AcknowledgeCount { get; private set; }
     public bool ThrowOnRevoke { get; set; }
     public Queue<RemoteAccountSessionPoll> Polls { get; } = new();
+    public Queue<RemoteAccountSessionRefresh> Refreshes { get; } = new();
 
     public Task<RemoteAccountSessionStart> StartAsync(CancellationToken cancellationToken)
     {
@@ -236,6 +260,30 @@ sealed class FakeAccountSessionRemote : IAccountSessionRemote
             throw new InvalidOperationException("secret-store device code drifted");
         }
         return Task.FromResult(Polls.Dequeue());
+    }
+
+    public Task<RemoteAccountSessionRefresh> RefreshAsync(
+        string refreshToken,
+        CancellationToken cancellationToken)
+    {
+        RefreshCount += 1;
+        if (refreshToken != "refresh-secret")
+        {
+            throw new InvalidOperationException("refresh token drifted");
+        }
+        return Task.FromResult(Refreshes.Dequeue());
+    }
+
+    public Task AcknowledgeAsync(
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        AcknowledgeCount += 1;
+        if (accessToken != "access-secret")
+        {
+            throw new InvalidOperationException("handoff access token drifted");
+        }
+        return Task.CompletedTask;
     }
 
     public Task RevokeAsync(
