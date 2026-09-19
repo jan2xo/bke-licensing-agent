@@ -158,6 +158,25 @@ static async Task CertifyAccountSessionStateMachine()
     Require(store.State is null, "local account session survived logout revoke failure");
 }
 
+static HashSet<string> MethodNames<T>() =>
+    typeof(T).GetMethods().Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
+
+static string JsonName<T>(string propertyName)
+{
+    var property = typeof(T).GetProperty(propertyName)
+        ?? throw new InvalidOperationException($"Missing property {typeof(T).Name}.{propertyName}");
+    return property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name
+        ?? throw new InvalidOperationException($"Missing JsonPropertyName on {typeof(T).Name}.{propertyName}");
+}
+
+static void Require(bool condition, string message)
+{
+    if (!condition)
+    {
+        throw new InvalidOperationException(message);
+    }
+}
+
 sealed class ManualTimeProvider : TimeProvider
 {
     private DateTimeOffset _now;
@@ -224,24 +243,5 @@ sealed class FakeAccountSessionRemote : IAccountSessionRemote
     {
         if (ThrowOnRevoke) throw new HttpRequestException("certified remote revoke failure");
         return Task.CompletedTask;
-    }
-}
-
-static HashSet<string> MethodNames<T>() =>
-    typeof(T).GetMethods().Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
-
-static string JsonName<T>(string propertyName)
-{
-    var property = typeof(T).GetProperty(propertyName)
-        ?? throw new InvalidOperationException($"Missing property {typeof(T).Name}.{propertyName}");
-    return property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name
-        ?? throw new InvalidOperationException($"Missing JsonPropertyName on {typeof(T).Name}.{propertyName}");
-}
-
-static void Require(bool condition, string message)
-{
-    if (!condition)
-    {
-        throw new InvalidOperationException(message);
     }
 }
