@@ -231,7 +231,10 @@ sealed class FakeAccountSessionRemote : IAccountSessionRemote
         CancellationToken cancellationToken)
     {
         PollCount += 1;
-        Require(deviceCode == "device-secret", "secret-store device code drifted");
+        if (deviceCode != "device-secret")
+        {
+            throw new InvalidOperationException("secret-store device code drifted");
+        }
         return Task.FromResult(Polls.Dequeue());
     }
 
