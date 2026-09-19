@@ -36,6 +36,9 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.NotificationUnreadCountPath}",
     $"POST {LocalAgentContract.CheckUpdatesPath}",
     $"POST {LocalAgentContract.OpenUpdateCenterPath}",
+    $"POST {LocalAgentContract.AccountSessionStartPath}",
+    $"POST {LocalAgentContract.AccountSessionStatusPath}",
+    $"POST {LocalAgentContract.AccountSessionLogoutPath}",
 };
 Require(inventoryRoutes.SetEquals(contractRoutes), "current route inventory mismatch");
 
@@ -67,6 +70,9 @@ Require(JsonName<NotificationFeedRequest>(nameof(NotificationFeedRequest.Include
 Require(JsonName<NotificationItem>(nameof(NotificationItem.DeliveryMode)) == "delivery_mode", "notification delivery_mode wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.CurrentVersion)) == "current_version", "update current_version wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.RequestedVersion)) == "requested_version", "update requested_version wire name mismatch");
+Require(JsonName<AccountSessionStartRequest>(nameof(AccountSessionStartRequest.CorrelationId)) == "correlation_id", "account-session start correlation_id wire name mismatch");
+Require(JsonName<AccountSessionStatusRequest>(nameof(AccountSessionStatusRequest.CorrelationId)) == "correlation_id", "account-session status correlation_id wire name mismatch");
+Require(JsonName<AccountSessionLogoutRequest>(nameof(AccountSessionLogoutRequest.CorrelationId)) == "correlation_id", "account-session logout correlation_id wire name mismatch");
 
 Require(MethodNames<IAuthorizationService>().SetEquals(["AuthorizeAsync"]), "authorization port drifted");
 Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activation port drifted");
