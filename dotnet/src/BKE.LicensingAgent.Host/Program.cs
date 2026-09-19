@@ -37,6 +37,11 @@ builder.Services.AddSingleton<INotificationService>(services => services.GetRequ
 builder.Services.AddSingleton<UpdateProvider>();
 builder.Services.AddSingleton<PrivilegedUpdateCenterProvider>();
 builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
+builder.Services.AddSingleton<IAccountSessionRemote>(_ => new AccountSessionRemote());
+builder.Services.AddSingleton<IAccountSessionSecretStore>(_ => new WindowsDpapiAccountSessionSecretStore());
+builder.Services.AddSingleton<IAccountSessionService>(services => new AccountSessionService(
+    services.GetRequiredService<IAccountSessionRemote>(),
+    services.GetRequiredService<IAccountSessionSecretStore>()));
 builder.Services.AddSingleton<UnavailableProviders>();
 
 var app = builder.Build();
@@ -266,6 +271,48 @@ app.MapPost(LocalAgentContract.OpenUpdateCenterPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountSessionStartPath, async (
+    AccountSessionStartRequest request,
+    IAccountSessionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountSessionStartInvalidRequest();
+    }
+
+    var response = await service.StartAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountSessionStatusPath, async (
+    AccountSessionStatusRequest request,
+    IAccountSessionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountSessionStatusInvalidRequest();
+    }
+
+    var response = await service.StatusAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountSessionLogoutPath, async (
+    AccountSessionLogoutRequest request,
+    IAccountSessionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountSessionLogoutInvalidRequest();
+    }
+
+    var response = await service.LogoutAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 await app.RunAsync();
 return 0;
 
@@ -274,6 +321,9 @@ static bool ValidProductContext(string? productId, string? version, string? inst
 
 static bool ValidCorrelationId(string? correlationId) =>
     !string.IsNullOrWhiteSpace(correlationId) && correlationId.All(character => character >= 32);
+
+static bool ValidAccountSessionCorrelationId(string? correlationId) =>
+    ValidCorrelationId(correlationId) && correlationId!.Length <= 128;
 
 static bool ValidNotificationContext(string? productId, string? version, string? installationId) =>
     ValidProductContext(productId, version, installationId) &&
@@ -301,6 +351,34 @@ static string LicenseCenterPage(string productId, string version, string install
         .Replace("__BKE_VERSION__", safeVersion, StringComparison.Ordinal)
         .Replace("__BKE_CONTEXT__", contextJson, StringComparison.Ordinal);
 }
+
+static IResult AccountSessionStartInvalidRequest() =>
+    Results.Json(new AccountSessionStartResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "FAILED",
+        null,
+        null,
+        null,
+        new AccountSessionError("INVALID_REQUEST", "The account-session request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountSessionStatusInvalidRequest() =>
+    Results.Json(new AccountSessionStatusResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "FAILED",
+        null,
+        new AccountSessionError("INVALID_REQUEST", "The account-session request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountSessionLogoutInvalidRequest() =>
+    Results.Json(new AccountSessionLogoutResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "FAILED",
+        new AccountSessionError("INVALID_REQUEST", "The account-session request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
 
 static IResult NotificationInvalidRequest() =>
     Results.Json(new NotificationMutationResponse(
