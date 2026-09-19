@@ -64,6 +64,12 @@ builder.Services.AddSingleton<ISoftwareInstallService>(services => new SoftwareI
     services.GetRequiredService<ILocalProductInventory>(),
     services.GetRequiredService<IStandaloneProvisionAuthorizationRemote>(),
     services.GetRequiredService<IStandaloneSoftwareProvisioner>()));
+builder.Services.AddSingleton<SqliteProductLauncher>();
+builder.Services.AddSingleton<ILocalProductLauncher>(services =>
+    services.GetRequiredService<SqliteProductLauncher>());
+builder.Services.AddSingleton<ISoftwareOpenService>(services => new SoftwareOpenService(
+    services.GetRequiredService<ISoftwareCatalogService>(),
+    services.GetRequiredService<ILocalProductLauncher>()));
 builder.Services.AddSingleton<UnavailableProviders>();
 
 var app = builder.Build();
@@ -364,6 +370,21 @@ app.MapPost(LocalAgentContract.SoftwareInstallPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.SoftwareOpenPath, async (
+    SoftwareOpenRequest request,
+    ISoftwareOpenService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidSoftwareProductId(request.ProductId))
+    {
+        return SoftwareOpenInvalidRequest();
+    }
+
+    var response = await service.OpenAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 await app.RunAsync();
 return 0;
 
@@ -460,6 +481,18 @@ static IResult SoftwareInstallInvalidRequest() =>
         new SoftwareInstallError(
             "INVALID_REQUEST",
             "The software install request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult SoftwareOpenInvalidRequest() =>
+    Results.Json(new SoftwareOpenResponse(
+        LocalAgentContract.SoftwareOpenCapabilityId,
+        LocalAgentContract.SoftwareOpenContractVersion,
+        "FAILED",
+        "invalid_request",
+        new SoftwareOpenError(
+            "INVALID_REQUEST",
+            "The software open request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
