@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 using Microsoft.Data.Sqlite;
 using Org.BouncyCastle.Crypto;
@@ -1855,7 +1856,7 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
         string DownloadUrl);
 
     private sealed class GitHubReleasePackageException :
-        InvalidDataException
+        Exception
     {
         public GitHubReleasePackageException(
             string code,
