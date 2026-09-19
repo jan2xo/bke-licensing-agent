@@ -26,6 +26,7 @@ public static class LocalAgentContract
     public const string AccountSessionStartPath = "/v1/account-session/start";
     public const string AccountSessionStatusPath = "/v1/account-session/status";
     public const string AccountSessionLogoutPath = "/v1/account-session/logout";
+    public const string SoftwareCatalogPath = "/v1/software/catalog";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
@@ -35,6 +36,8 @@ public static class LocalAgentContract
     public const int NotificationInboxContractVersion = 1;
     public const string AccountSessionCapabilityId = "bke.account-session";
     public const int AccountSessionContractVersion = 1;
+    public const string SoftwareCatalogCapabilityId = "bke.software-catalog";
+    public const int SoftwareCatalogContractVersion = 1;
 }
 
 public sealed record AuthorizeRequest(
