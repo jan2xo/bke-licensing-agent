@@ -31,7 +31,8 @@ jobs:
         run: |
           foreach ($path in @(
             "certification/utm/Install-RenderDock-UtmTargetTrust.ps1",
-            "certification/utm/Remove-RenderDock-UtmTargetTrust.ps1"
+            "certification/utm/Remove-RenderDock-UtmTargetTrust.ps1",
+            "certification/utm/Collect-BkeLauncher-UtmEvidence.ps1"
           )) {
             $tokens = $null
             $errors = $null
@@ -57,6 +58,7 @@ jobs:
           cp certification/utm/Install-RenderDock-UtmTargetTrust.ps1 "$root/"
           cp certification/utm/Remove-RenderDock-UtmTargetTrust.ps1 "$root/"
           cp certification/utm/README-RenderDock-UtmTargetTrust.md "$root/README.md"
+          cp certification/utm/Collect-BkeLauncher-UtmEvidence.ps1 "$root/"
           printf '%s\n' "$GITHUB_SHA" > "$root/SOURCE-SHA.txt"
 
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
