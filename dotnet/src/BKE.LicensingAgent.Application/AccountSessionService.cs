@@ -8,6 +8,12 @@ public interface IAccountSessionRemote
 
     Task<RemoteAccountSessionPoll> PollAsync(string deviceCode, CancellationToken cancellationToken);
 
+    Task<RemoteAccountSessionRefresh> RefreshAsync(
+        string refreshToken,
+        CancellationToken cancellationToken);
+
+    Task AcknowledgeAsync(string accessToken, CancellationToken cancellationToken);
+
     Task RevokeAsync(string? sessionId, string? refreshToken, string? deviceCode, CancellationToken cancellationToken);
 }
 
@@ -35,6 +41,7 @@ public sealed record ActiveAccountSessionState(
     string RefreshToken,
     string? SessionId,
     DateTimeOffset AccessTokenExpiresAt,
+    DateTimeOffset RefreshTokenExpiresAt,
     AccountSessionAccount Account) : AccountSessionStoredState;
 
 public sealed record RemoteAccountSessionStart(
@@ -50,12 +57,23 @@ public sealed record RemoteAccountSessionPoll(
     string? RefreshToken = null,
     string? SessionId = null,
     TimeSpan? ExpiresIn = null,
+    TimeSpan? RefreshExpiresIn = null,
+    AccountSessionAccount? Account = null);
+
+public sealed record RemoteAccountSessionRefresh(
+    string Status,
+    string? AccessToken = null,
+    string? RefreshToken = null,
+    string? SessionId = null,
+    TimeSpan? ExpiresIn = null,
+    TimeSpan? RefreshExpiresIn = null,
     AccountSessionAccount? Account = null);
 
 public sealed class AccountSessionService : IAccountSessionService
 {
     private static readonly TimeSpan SlowDownIncrement = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MaxPollInterval = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan RefreshWindow = TimeSpan.FromMinutes(2);
 
     private readonly IAccountSessionRemote _remote;
     private readonly IAccountSessionSecretStore _store;
@@ -162,7 +180,7 @@ public sealed class AccountSessionService : IAccountSessionService
 
             if (state is ActiveAccountSessionState active)
             {
-                return StatusResponse("AUTHENTICATED", active.Account, null);
+                return await EnsureActiveSessionAsync(active, now, cancellationToken);
             }
 
             var pending = (PendingAccountSessionState)state;
@@ -310,8 +328,18 @@ public sealed class AccountSessionService : IAccountSessionService
                     poll.RefreshToken!,
                     poll.SessionId,
                     now.Add(poll.ExpiresIn!.Value),
+                    now.Add(poll.RefreshExpiresIn!.Value),
                     poll.Account!);
                 await _store.WriteAsync(active, cancellationToken);
+                try
+                {
+                    await _remote.AcknowledgeAsync(active.AccessToken, cancellationToken);
+                }
+                catch
+                {
+                    // The tokens are already durably protected locally. The server-side
+                    // handoff bundle has a short TTL and refresh also erases it.
+                }
                 return StatusResponse("AUTHENTICATED", active.Account, null);
             default:
                 await _store.ClearAsync(cancellationToken);
@@ -320,6 +348,99 @@ public sealed class AccountSessionService : IAccountSessionService
                     null,
                     Error("INVALID_REMOTE_RESPONSE", "BKE account authorization returned an unknown state.", false));
         }
+    }
+
+    private async Task<AccountSessionStatusResponse> EnsureActiveSessionAsync(
+        ActiveAccountSessionState active,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (active.RefreshTokenExpiresAt <= now)
+        {
+            await _store.ClearAsync(cancellationToken);
+            return StatusResponse(
+                "SIGNED_OUT",
+                null,
+                Error("SESSION_EXPIRED", "The BKE account session expired. Sign in again.", false));
+        }
+
+        if (active.AccessTokenExpiresAt - now > RefreshWindow)
+        {
+            return StatusResponse("AUTHENTICATED", active.Account, null);
+        }
+
+        RemoteAccountSessionRefresh refreshed;
+        try
+        {
+            refreshed = await _remote.RefreshAsync(active.RefreshToken, cancellationToken);
+        }
+        catch
+        {
+            if (active.AccessTokenExpiresAt > now)
+            {
+                return StatusResponse(
+                    "AUTHENTICATED",
+                    active.Account,
+                    Error("REMOTE_UNAVAILABLE", "BKE account session refresh is temporarily unavailable.", true));
+            }
+            return StatusResponse(
+                "FAILED",
+                null,
+                Error("REMOTE_UNAVAILABLE", "BKE account session refresh is unavailable.", true));
+        }
+
+        if (refreshed.Status is "invalid_grant" or "replay_detected")
+        {
+            await _store.ClearAsync(cancellationToken);
+            return StatusResponse(
+                "SIGNED_OUT",
+                null,
+                Error(
+                    refreshed.Status == "replay_detected" ? "SESSION_REPLAY_DETECTED" : "SESSION_INVALID",
+                    "The BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+
+        if (!ValidRefresh(refreshed))
+        {
+            await _store.ClearAsync(cancellationToken);
+            return StatusResponse(
+                "FAILED",
+                null,
+                Error("INVALID_REMOTE_RESPONSE", "BKE account session refresh returned an invalid response.", false));
+        }
+
+        var next = new ActiveAccountSessionState(
+            refreshed.AccessToken!,
+            refreshed.RefreshToken!,
+            refreshed.SessionId,
+            now.Add(refreshed.ExpiresIn!.Value),
+            now.Add(refreshed.RefreshExpiresIn!.Value),
+            refreshed.Account!);
+        await _store.WriteAsync(next, cancellationToken);
+        return StatusResponse("AUTHENTICATED", next.Account, null);
+    }
+
+    private static bool ValidRefresh(RemoteAccountSessionRefresh refreshed)
+    {
+        var account = refreshed.Account;
+        return refreshed.Status == "refreshed" &&
+               !string.IsNullOrWhiteSpace(refreshed.AccessToken) &&
+               !string.IsNullOrWhiteSpace(refreshed.RefreshToken) &&
+               refreshed.AccessToken!.Length <= 8192 &&
+               refreshed.RefreshToken!.Length <= 8192 &&
+               refreshed.ExpiresIn is { } expiresIn &&
+               expiresIn > TimeSpan.Zero &&
+               expiresIn <= TimeSpan.FromHours(24) &&
+               refreshed.RefreshExpiresIn is { } refreshExpiresIn &&
+               refreshExpiresIn > expiresIn &&
+               refreshExpiresIn <= TimeSpan.FromDays(90) &&
+               account is not null &&
+               !string.IsNullOrWhiteSpace(account.UserId) &&
+               !string.IsNullOrWhiteSpace(account.Email) &&
+               !string.IsNullOrWhiteSpace(account.AccountId) &&
+               !string.IsNullOrWhiteSpace(account.DisplayName) &&
+               account.AccountType is "INDIVIDUAL" or "ORGANIZATION";
     }
 
     private static bool ValidRemoteStart(RemoteAccountSessionStart started, DateTimeOffset now)
@@ -351,6 +472,9 @@ public sealed class AccountSessionService : IAccountSessionService
                poll.ExpiresIn is { } expiresIn &&
                expiresIn > TimeSpan.Zero &&
                expiresIn <= TimeSpan.FromHours(24) &&
+               poll.RefreshExpiresIn is { } refreshExpiresIn &&
+               refreshExpiresIn > expiresIn &&
+               refreshExpiresIn <= TimeSpan.FromDays(90) &&
                account is not null &&
                !string.IsNullOrWhiteSpace(account.UserId) &&
                !string.IsNullOrWhiteSpace(account.Email) &&
