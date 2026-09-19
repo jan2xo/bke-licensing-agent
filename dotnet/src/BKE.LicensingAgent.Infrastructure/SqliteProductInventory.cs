@@ -42,7 +42,7 @@ public sealed class SqliteProductInventory : ILocalProductInventory
         using var schema = connection.CreateCommand();
         schema.CommandText = "SELECT version FROM schema_version LIMIT 1";
         var schemaVersion = Convert.ToInt32(schema.ExecuteScalar());
-        if (schemaVersion != Contracts.LocalAgentContract.StorageSchemaVersion)
+        if (schemaVersion != BKE.LicensingAgent.Contracts.LocalAgentContract.StorageSchemaVersion)
         {
             throw new InvalidDataException("Local product inventory schema is unsupported.");
         }
