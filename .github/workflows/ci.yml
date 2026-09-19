@@ -29,6 +29,7 @@ jobs:
           dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
           dotnet build dotnet/src/BKE.LicensingAgent.Updater/BKE.LicensingAgent.Updater.csproj --configuration Release
           dotnet build dotnet/src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj --configuration Release
+          dotnet build dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release
           dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
 
       - name: Run .NET contract certifications
@@ -71,6 +72,12 @@ jobs:
           $process = Start-Process -FilePath ".\dist\windows\bke-license-center-x64\bke-license-center.exe" -ArgumentList "--smoke" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw ".NET License Center smoke failed: $($process.ExitCode)" }
           Write-Host ".NET License Center smoke: PASS"
+
+      - name: Certify privileged first-install helper
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release -- --helper ".\dist\windows\bke-updater-core-x64\bke-updater-core.exe"
+          if ($LASTEXITCODE -ne 0) { throw "privileged first-install certification failed" }
 
       - name: Generate disposable trust using .NET tooling
         shell: pwsh
