@@ -20,9 +20,9 @@ Do not begin the true cloud-backed install path until all of these are deliberat
    - Product active, published, not archived
    - launcherExecutionType = STANDALONE
    - active Stable/LTS ProductVersion 1.0.2
-   - operatingSystem = windows
-   - architecture = arm64 for Windows ARM64 UTM
-   - test account owns an active current entitlement through its claimed Claim Code
+   - operatingSystem = windows (or universal/any compatibility metadata)
+   - architecture = universal is preferred when one release tag contains both x64 + ARM64 assets; exact machine architecture is also accepted
+   - test account owns an active current Entitlement; acquisition may be direct commerce settlement or Claim Code redemption
 4. GitHub Release v1.0.2 exists in jan2xo/BKE_RENDER_DOCK and contains the architecture-specific updater metadata + ZIP. For ARM64:
    - Render-Dock-1.0.2-Windows-arm64.update.json
    - Render-Dock-1.0.2-Windows-arm64.update.zip
@@ -93,9 +93,9 @@ Render Dock must project as:
 - state: Installable
 - Install button visible
 
-If it instead shows Release unavailable, inspect the Digital Solutions ProductVersion platform/architecture row.
+If it instead shows Release unavailable, inspect the Digital Solutions ProductVersion platform/architecture compatibility metadata. ProductVersion is unique by product + version, so a cross-architecture v1.0.2 should normally use architecture=universal rather than duplicate x64/ARM64 rows.
 
-If it shows Not entitled, inspect Claim Code -> Entitlement -> account linkage.
+If it shows Not entitled, inspect the active Entitlement for the account and confirm its resourceId resolves to the Render Dock Product or one of its Editions. Claim Code is one acquisition path, not a catalog ownership requirement.
 
 Do not work around either failure in Launcher.
 
