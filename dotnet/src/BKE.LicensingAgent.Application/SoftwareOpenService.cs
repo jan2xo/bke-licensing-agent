@@ -174,6 +174,10 @@ public sealed class SoftwareOpenService : ISoftwareOpenService
             "The installed product entry point is unavailable.",
         "UNSUPPORTED_PLATFORM" =>
             "Opening managed standalone products is not supported on this platform.",
+        "NO_ACTIVE_USER_SESSION" =>
+            "No active Windows user session is available to receive the product window.",
+        "INTERACTIVE_LAUNCH_FAILED" =>
+            "Windows could not start the product in the active user session.",
         _ =>
             "The BKE Licensing Agent could not start the installed product.",
     };
