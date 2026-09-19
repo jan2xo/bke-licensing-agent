@@ -36,6 +36,8 @@ builder.Services.AddSingleton<NotificationProvider>();
 builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<NotificationProvider>());
 builder.Services.AddSingleton<UpdateProvider>();
 builder.Services.AddSingleton<PrivilegedUpdateCenterProvider>();
+builder.Services.AddSingleton<IStandaloneSoftwareProvisioner>(services =>
+    services.GetRequiredService<PrivilegedUpdateCenterProvider>());
 builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
 builder.Services.AddSingleton<IAccountSessionRemote>(_ => new AccountSessionRemote());
 builder.Services.AddSingleton<IAccountSessionSecretStore>(_ => new WindowsDpapiAccountSessionSecretStore());
@@ -53,6 +55,15 @@ builder.Services.AddSingleton<ISoftwareCatalogService>(services => new SoftwareC
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<ISoftwareCatalogRemote>(),
     services.GetRequiredService<ILocalProductInventory>()));
+builder.Services.AddSingleton<StandaloneProvisionAuthorizationRemote>();
+builder.Services.AddSingleton<IStandaloneProvisionAuthorizationRemote>(services =>
+    services.GetRequiredService<StandaloneProvisionAuthorizationRemote>());
+builder.Services.AddSingleton<ISoftwareInstallService>(services => new SoftwareInstallService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<ILocalProductInventory>(),
+    services.GetRequiredService<IStandaloneProvisionAuthorizationRemote>(),
+    services.GetRequiredService<IStandaloneSoftwareProvisioner>()));
 builder.Services.AddSingleton<UnavailableProviders>();
 
 var app = builder.Build();
@@ -338,6 +349,21 @@ app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.SoftwareInstallPath, async (
+    SoftwareInstallRequest request,
+    ISoftwareInstallService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidSoftwareProductId(request.ProductId))
+    {
+        return SoftwareInstallInvalidRequest();
+    }
+
+    var response = await service.InstallAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 await app.RunAsync();
 return 0;
 
@@ -349,6 +375,14 @@ static bool ValidCorrelationId(string? correlationId) =>
 
 static bool ValidAccountSessionCorrelationId(string? correlationId) =>
     ValidCorrelationId(correlationId) && correlationId!.Length <= 128;
+
+static bool ValidSoftwareProductId(string? productId) =>
+    !string.IsNullOrWhiteSpace(productId) &&
+    productId.Length <= 128 &&
+    productId.All(character =>
+        character is >= 'a' and <= 'z' ||
+        character is >= '0' and <= '9' ||
+        character == '-');
 
 static bool ValidNotificationContext(string? productId, string? version, string? installationId) =>
     ValidProductContext(productId, version, installationId) &&
@@ -414,6 +448,18 @@ static IResult SoftwareCatalogInvalidRequest() =>
         new SoftwareCatalogError(
             "INVALID_REQUEST",
             "The software catalog request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult SoftwareInstallInvalidRequest() =>
+    Results.Json(new SoftwareInstallResponse(
+        LocalAgentContract.SoftwareInstallCapabilityId,
+        LocalAgentContract.SoftwareInstallContractVersion,
+        "FAILED",
+        "invalid_request",
+        new SoftwareInstallError(
+            "INVALID_REQUEST",
+            "The software install request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 

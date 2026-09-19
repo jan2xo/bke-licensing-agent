@@ -77,7 +77,7 @@ internal static class Program
             ? null
             : ResolveUnder(runtimeRoot, options.TransactionRoot, "transaction_root", mustExist: false);
 
-        var trust = LoadTrust(runtimeRoot);
+        var trust = LoadTrust(runtimeRoot, requireDigitalKeys: options.Mode == OperationMode.Update);
         using var requestDocument = JsonDocument.Parse(File.ReadAllText(requestPath));
         using var targetDocument = JsonDocument.Parse(File.ReadAllText(targetPath));
         var target = VerifyTarget(targetDocument.RootElement, trust);
@@ -231,7 +231,7 @@ internal static class Program
             timeout);
     }
 
-    private static TrustedRuntime LoadTrust(string runtimeRoot)
+    private static TrustedRuntime LoadTrust(string runtimeRoot, bool requireDigitalKeys)
     {
         var trustPath = Path.Combine(runtimeRoot, "trust.json");
         using var document = JsonDocument.Parse(File.ReadAllText(trustPath));
@@ -253,7 +253,7 @@ internal static class Program
 
         return new TrustedRuntime(
             DecodeKeys(root.GetProperty("agent_keys"), "agent_keys"),
-            DecodeKeys(root.GetProperty("digital_keys"), "digital_keys"),
+            DecodeKeys(root.GetProperty("digital_keys"), "digital_keys", allowEmpty: !requireDigitalKeys),
             DecodeKeys(root.GetProperty("target_keys"), "target_keys"),
             approved,
             RequiredString(root, "expected_channel"),
@@ -770,7 +770,10 @@ internal static class Program
         File.Move(temporary, Path.Combine(folder, "state.json"), true);
     }
 
-    private static Dictionary<string, byte[]> DecodeKeys(JsonElement root, string field)
+    private static Dictionary<string, byte[]> DecodeKeys(
+        JsonElement root,
+        string field,
+        bool allowEmpty = false)
     {
         if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"invalid {field}");
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
@@ -784,7 +787,7 @@ internal static class Program
             if (raw.Length != 32) throw new InvalidDataException($"invalid {field}");
             result[property.Name] = raw;
         }
-        if (result.Count == 0) throw new InvalidDataException($"invalid {field}");
+        if (!allowEmpty && result.Count == 0) throw new InvalidDataException($"invalid {field}");
         return result;
     }
 

@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 using Microsoft.Data.Sqlite;
 using Org.BouncyCastle.Crypto;
@@ -15,10 +16,20 @@ using Org.BouncyCastle.OpenSsl;
 
 namespace BKE.LicensingAgent.Infrastructure;
 
-public sealed class PrivilegedUpdateCenterProvider
+public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisioner
 {
     private const string ProtocolVersion = "bke.licensing.v3";
     private const string UpdatePackageContentType = "application/vnd.bke.update-package+zip";
+    private const long MaximumStandalonePackageBytes = 4L * 1024 * 1024 * 1024;
+    private const int MaximumReleaseMetadataBytes = 64 * 1024;
+    private static readonly Uri GitHubApiBaseUri = new("https://api.github.com/", UriKind.Absolute);
+    private static readonly HashSet<string> ApprovedGitHubAssetHosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "github.com",
+        "release-assets.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+    };
     private static readonly Regex SafePathPattern = new("[^A-Za-z0-9_.-]", RegexOptions.CultureInvariant);
     private static readonly Regex CoreVersionPattern = new("^(?:0|[1-9][0-9]*)(?:\\.[0-9]+){0,3}$", RegexOptions.CultureInvariant);
     private static readonly Regex HashPattern = new("^[0-9a-fA-F]{64}$", RegexOptions.CultureInvariant);
@@ -77,6 +88,152 @@ public sealed class PrivilegedUpdateCenterProvider
         {
             Timeout = TimeSpan.FromSeconds(30),
         };
+    }
+
+    public async Task<StandaloneProvisioningResult> ProvisionAsync(
+        StandaloneProvisionAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return new StandaloneProvisioningResult(
+                "PRIVILEGED_HANDOFF_FAILED",
+                "unsupported_platform",
+                false);
+        }
+
+        var identity = MachineIdentityProvider.Calculate();
+        var platform = MachineIdentityProvider.ProtocolPlatform(identity.Platform);
+        var protocolArchitecture = MachineIdentityProvider.ProtocolArchitecture(identity.Architecture);
+        if (platform != "windows")
+        {
+            return new StandaloneProvisioningResult(
+                "PRIVILEGED_HANDOFF_FAILED",
+                "unsupported_platform",
+                false);
+        }
+
+        PrivilegedConfig config;
+        TargetPolicy target;
+        try
+        {
+            config = LoadPrivilegedConfig();
+            target = ResolveTargetPolicyForProvision(
+                authorization.ProductId,
+                platform,
+                protocolArchitecture,
+                config);
+
+            if (Directory.Exists(target.InstallRoot) || File.Exists(target.InstallRoot))
+            {
+                return new StandaloneProvisioningResult(
+                    "TARGET_ALREADY_EXISTS",
+                    "target_already_exists",
+                    false);
+            }
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "TARGET_POLICY_UNAVAILABLE",
+                "target_policy_unavailable",
+                false);
+        }
+
+        GitHubReleasePackage package;
+        try
+        {
+            package = await ResolveGitHubReleasePackageAsync(
+                authorization,
+                protocolArchitecture,
+                target,
+                cancellationToken);
+        }
+        catch (GitHubReleasePackageException exception)
+        {
+            return new StandaloneProvisioningResult(
+                exception.Code,
+                exception.Reason,
+                exception.Retryable);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        string artifact;
+        try
+        {
+            var downloadRoot = Path.Combine(
+                config.RuntimeRoot,
+                "downloads",
+                "provision");
+            var destination = Path.Combine(
+                downloadRoot,
+                Safe($"{authorization.ProductId}-{authorization.Version}-{package.FileName}", 220));
+            artifact = await AcquireGitHubAssetAsync(
+                package.DownloadUrl,
+                destination,
+                package.Size,
+                package.Sha256,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "RELEASE_DOWNLOAD_FAILED",
+                "release_download_failed",
+                true);
+        }
+
+        try
+        {
+            var transactionId = Safe(
+                $"{authorization.ProductId}-{authorization.Version}-{Guid.NewGuid():N}",
+                180);
+            var prepared = PreparePrivilegedProvisionInvocation(
+                authorization,
+                package,
+                target,
+                config,
+                artifact,
+                transactionId);
+            Launch(prepared.Command);
+            WriteTransaction(
+                config.RuntimeRoot,
+                transactionId,
+                "PROVISION_STAGED",
+                config.HelperExecutable);
+
+            return new StandaloneProvisioningResult(
+                "STARTED",
+                "provision_started",
+                false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "PRIVILEGED_HANDOFF_FAILED",
+                "privileged_handoff_failed",
+                true);
+        }
     }
 
     public async Task<OpenUpdateCenterResponse> OpenAsync(
@@ -279,6 +436,482 @@ public sealed class PrivilegedUpdateCenterProvider
         throw new InvalidDataException("update request did not complete");
     }
 
+    private async Task<GitHubReleasePackage> ResolveGitHubReleasePackageAsync(
+        StandaloneProvisionAuthorization authorization,
+        string protocolArchitecture,
+        TargetPolicy target,
+        CancellationToken cancellationToken)
+    {
+        if (!Regex.IsMatch(
+                authorization.Repository,
+                "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+                RegexOptions.CultureInvariant))
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        if (authorization.Tag != "v" + authorization.Version)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        var segments = authorization.Repository.Split('/', 2);
+        var releaseUri = new Uri(
+            GitHubApiBaseUri,
+            $"repos/{Uri.EscapeDataString(segments[0])}/{Uri.EscapeDataString(segments[1])}/releases/tags/{Uri.EscapeDataString(authorization.Tag)}");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, releaseUri);
+        request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.TryAddWithoutValidation(
+            "X-GitHub-Api-Version",
+            "2022-11-28");
+
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_PACKAGE_UNAVAILABLE",
+                "release_package_unavailable",
+                true);
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_DOWNLOAD_FAILED",
+                "release_download_failed",
+                IsRetryable(response.StatusCode));
+        }
+
+        await using var stream =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken);
+        var root = document.RootElement;
+
+        if (root.ValueKind != JsonValueKind.Object ||
+            RequiredString(root, "tag_name") != authorization.Tag ||
+            !root.TryGetProperty("draft", out var draft) ||
+            draft.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+            draft.GetBoolean() ||
+            !root.TryGetProperty("prerelease", out var prerelease) ||
+            prerelease.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+            prerelease.GetBoolean() ||
+            !root.TryGetProperty("assets", out var assets) ||
+            assets.ValueKind != JsonValueKind.Array)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        var metadataSuffix =
+            $"-Windows-{protocolArchitecture}.update.json";
+        var metadataAssets = assets.EnumerateArray()
+            .Where(asset =>
+                asset.ValueKind == JsonValueKind.Object &&
+                asset.TryGetProperty("name", out var name) &&
+                name.ValueKind == JsonValueKind.String &&
+                name.GetString()!.EndsWith(
+                    metadataSuffix,
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(ParseGitHubAsset)
+            .ToArray();
+
+        if (metadataAssets.Length != 1 ||
+            metadataAssets[0].Size <= 0 ||
+            metadataAssets[0].Size > MaximumReleaseMetadataBytes)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_PACKAGE_UNAVAILABLE",
+                "release_package_unavailable",
+                false);
+        }
+
+        var metadataBytes = await DownloadGitHubAssetBytesAsync(
+            metadataAssets[0].DownloadUrl,
+            MaximumReleaseMetadataBytes,
+            cancellationToken);
+
+        using var metadataDocument = JsonDocument.Parse(metadataBytes);
+        var metadata = ParseStandalonePackageMetadata(
+            metadataDocument.RootElement,
+            authorization,
+            protocolArchitecture,
+            target);
+
+        var packageAssets = assets.EnumerateArray()
+            .Where(asset =>
+                asset.ValueKind == JsonValueKind.Object &&
+                asset.TryGetProperty("name", out var name) &&
+                name.ValueKind == JsonValueKind.String &&
+                string.Equals(
+                    name.GetString(),
+                    metadata.FileName,
+                    StringComparison.Ordinal))
+            .Select(ParseGitHubAsset)
+            .ToArray();
+
+        if (packageAssets.Length != 1 ||
+            packageAssets[0].Size != metadata.Size)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_PACKAGE_UNAVAILABLE",
+                "release_package_unavailable",
+                false);
+        }
+
+        return metadata with
+        {
+            DownloadUrl = packageAssets[0].DownloadUrl,
+        };
+    }
+
+    private static GitHubReleaseAsset ParseGitHubAsset(JsonElement asset)
+    {
+        var name = RequiredString(asset, "name");
+        var size = RequiredLong(asset, "size");
+        var url = RequiredString(asset, "browser_download_url");
+
+        if (string.IsNullOrWhiteSpace(name) ||
+            name.Length > 512 ||
+            size < 0 ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !string.Equals(
+                uri.Host,
+                "github.com",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        return new GitHubReleaseAsset(name, size, url);
+    }
+
+    private static GitHubReleasePackage ParseStandalonePackageMetadata(
+        JsonElement root,
+        StandaloneProvisionAuthorization authorization,
+        string protocolArchitecture,
+        TargetPolicy target)
+    {
+        var expected = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schema",
+            "productId",
+            "version",
+            "platform",
+            "architecture",
+            "entryPoint",
+            "filename",
+            "contentType",
+            "bytes",
+            "sha256",
+        };
+
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.EnumerateObject()
+                .Select(property => property.Name)
+                .ToHashSet(StringComparer.Ordinal)
+                .SetEquals(expected) ||
+            RequiredString(root, "schema") != "bke.update-package.v1" ||
+            RequiredString(root, "productId") != authorization.ProductId ||
+            RequiredString(root, "version") != authorization.Version ||
+            RequiredString(root, "platform") != "windows" ||
+            RequiredString(root, "architecture") != protocolArchitecture ||
+            RequiredString(root, "contentType") != UpdatePackageContentType)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        var entryPoint = NormalizeWindowsRelative(
+            RequiredString(root, "entryPoint"));
+        if (!string.Equals(
+                entryPoint,
+                target.EntryPoint,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        var fileName = RequiredString(root, "filename");
+        if (fileName.Length > 512 ||
+            Path.GetFileName(fileName) != fileName ||
+            !fileName.EndsWith(
+                ".update.zip",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        var size = RequiredLong(root, "bytes");
+        var sha256 = RequiredString(root, "sha256").ToLowerInvariant();
+        if (size <= 0 ||
+            size > MaximumStandalonePackageBytes ||
+            !HashPattern.IsMatch(sha256))
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        return new GitHubReleasePackage(
+            fileName,
+            size,
+            sha256,
+            entryPoint,
+            string.Empty);
+    }
+
+    private async Task<byte[]> DownloadGitHubAssetBytesAsync(
+        string url,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        using var response = await SendGitHubAssetAsync(
+            new Uri(url, UriKind.Absolute),
+            cancellationToken);
+
+        if (response.Content.Headers.ContentLength is long announced &&
+            announced > maximumBytes)
+        {
+            throw new GitHubReleasePackageException(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        await using var input =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var output = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+
+        while (true)
+        {
+            var remaining = maximumBytes - (int)output.Length + 1;
+            if (remaining <= 0)
+            {
+                throw new GitHubReleasePackageException(
+                    "RELEASE_METADATA_INVALID",
+                    "release_metadata_invalid",
+                    false);
+            }
+
+            var read = await input.ReadAsync(
+                buffer.AsMemory(
+                    0,
+                    Math.Min(buffer.Length, remaining)),
+                cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            output.Write(buffer, 0, read);
+            if (output.Length > maximumBytes)
+            {
+                throw new GitHubReleasePackageException(
+                    "RELEASE_METADATA_INVALID",
+                    "release_metadata_invalid",
+                    false);
+            }
+        }
+
+        return output.ToArray();
+    }
+
+    private async Task<string> AcquireGitHubAssetAsync(
+        string url,
+        string destination,
+        long expectedSize,
+        string expectedSha256,
+        CancellationToken cancellationToken)
+    {
+        if (expectedSize <= 0 ||
+            expectedSize > MaximumStandalonePackageBytes ||
+            !HashPattern.IsMatch(expectedSha256))
+        {
+            throw new InvalidDataException("invalid GitHub artifact bounds");
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var temporary =
+            destination + ".tmp-" + Guid.NewGuid().ToString("N");
+
+        try
+        {
+            using var response = await SendGitHubAssetAsync(
+                new Uri(url, UriKind.Absolute),
+                cancellationToken);
+
+            if (response.Content.Headers.ContentLength is long announced &&
+                announced > expectedSize)
+            {
+                throw new InvalidDataException(
+                    "GitHub artifact exceeds bounded size");
+            }
+
+            await using var input =
+                await response.Content.ReadAsStreamAsync(cancellationToken);
+            await using var output = File.Create(temporary);
+            using var hash =
+                IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[1024 * 1024];
+            long count = 0;
+
+            while (true)
+            {
+                var remaining = expectedSize - count + 1;
+                if (remaining <= 0)
+                {
+                    throw new InvalidDataException(
+                        "GitHub artifact exceeds bounded size");
+                }
+
+                var read = await input.ReadAsync(
+                    buffer.AsMemory(
+                        0,
+                        (int)Math.Min(buffer.Length, remaining)),
+                    cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                count += read;
+                if (count > expectedSize)
+                {
+                    throw new InvalidDataException(
+                        "GitHub artifact exceeds bounded size");
+                }
+
+                hash.AppendData(buffer, 0, read);
+                await output.WriteAsync(
+                    buffer.AsMemory(0, read),
+                    cancellationToken);
+            }
+
+            var digest =
+                Convert.ToHexString(hash.GetHashAndReset())
+                    .ToLowerInvariant();
+            if (count != expectedSize ||
+                !string.Equals(
+                    digest,
+                    expectedSha256,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "GitHub artifact integrity mismatch");
+            }
+
+            File.Move(temporary, destination, true);
+            return destination;
+        }
+        catch
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendGitHubAssetAsync(
+        Uri initialUri,
+        CancellationToken cancellationToken)
+    {
+        var current = initialUri;
+
+        for (var redirect = 0; redirect <= 5; redirect++)
+        {
+            ValidateGitHubAssetUri(current);
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                current);
+            request.Headers.Accept.ParseAdd(
+                "application/octet-stream");
+            request.Headers.UserAgent.ParseAdd(
+                "bke-licensing-agent");
+
+            var response = await _http.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+
+            if ((int)response.StatusCode is >= 300 and <= 399)
+            {
+                var location = response.Headers.Location;
+                response.Dispose();
+
+                if (location is null)
+                {
+                    throw new HttpRequestException(
+                        "GitHub release asset redirect is missing a location.");
+                }
+
+                current = location.IsAbsoluteUri
+                    ? location
+                    : new Uri(current, location);
+                continue;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var status = response.StatusCode;
+                response.Dispose();
+                throw new HttpRequestException(
+                    $"GitHub release asset returned {(int)status}.",
+                    null,
+                    status);
+            }
+
+            return response;
+        }
+
+        throw new HttpRequestException(
+            "GitHub release asset exceeded the redirect limit.");
+    }
+
+    private static void ValidateGitHubAssetUri(Uri uri)
+    {
+        if (!uri.IsAbsoluteUri ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !ApprovedGitHubAssetHosts.Contains(uri.Host) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new InvalidDataException(
+                "GitHub release asset URI is not approved.");
+        }
+    }
+
     private async Task<string> AcquireArtifactAsync(
         string url,
         string destination,
@@ -340,6 +973,180 @@ public sealed class PrivilegedUpdateCenterProvider
             if (File.Exists(temporary)) File.Delete(temporary);
             throw;
         }
+    }
+
+    private PreparedInvocation PreparePrivilegedProvisionInvocation(
+        StandaloneProvisionAuthorization authorization,
+        GitHubReleasePackage package,
+        TargetPolicy target,
+        PrivilegedConfig config,
+        string artifact,
+        string transactionId)
+    {
+        var runtimeRoot = Path.GetFullPath(config.RuntimeRoot);
+        Directory.CreateDirectory(runtimeRoot);
+
+        if (!File.Exists(config.HelperExecutable))
+        {
+            throw new InvalidDataException(
+                "privileged helper unavailable");
+        }
+
+        if (!string.Equals(
+                target.ProductId,
+                authorization.ProductId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "target authority product mismatch");
+        }
+
+        if (Directory.Exists(target.InstallRoot) ||
+            File.Exists(target.InstallRoot))
+        {
+            throw new InvalidDataException(
+                "first-install target already exists");
+        }
+
+        var operationRoot = Path.Combine(
+            runtimeRoot,
+            "provision",
+            transactionId);
+        var stageRoot = Path.Combine(
+            operationRoot,
+            "stage");
+        Directory.CreateDirectory(operationRoot);
+
+        ExtractUpdatePackage(
+            artifact,
+            stageRoot,
+            target.EntryPoint);
+
+        var transactionRoot = Path.Combine(
+            runtimeRoot,
+            "transactions");
+        Directory.CreateDirectory(transactionRoot);
+
+        var agentPublic =
+            config.SigningPrivateKey
+                .GeneratePublicKey()
+                .GetEncoded();
+        var trust = new Dictionary<string, object?>(
+            StringComparer.Ordinal)
+        {
+            ["schema"] = "bke.updater-trust.v1",
+            ["agent_keys"] = new Dictionary<string, string>
+            {
+                [config.SigningKeyId] =
+                    Convert.ToBase64String(agentPublic),
+            },
+            ["digital_keys"] = new Dictionary<string, string>(),
+            ["target_keys"] =
+                config.TargetKeys.ToDictionary(
+                    pair => pair.Key,
+                    pair => Convert.ToBase64String(
+                        pair.Value.GetEncoded()),
+                    StringComparer.Ordinal),
+            ["approved_install_roots"] =
+                config.ApprovedInstallRoots,
+            ["expected_channel"] =
+                config.ExpectedChannel,
+        };
+        WriteJson(
+            Path.Combine(runtimeRoot, "trust.json"),
+            trust);
+
+        var targetPath = Path.Combine(
+            operationRoot,
+            "target-policy.json");
+        File.WriteAllText(
+            targetPath,
+            target.Raw.GetRawText(),
+            new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false));
+
+        var runtimeArtifact = Path.Combine(
+            operationRoot,
+            "artifact.zip");
+        File.Copy(artifact, runtimeArtifact, true);
+
+        var now = DateTimeOffset.UtcNow;
+        var unsigned = new Dictionary<string, object?>(
+            StringComparer.Ordinal)
+        {
+            ["schema"] =
+                "bke.privileged-provision-request.v1",
+            ["request_id"] =
+                "agent-" + Guid.NewGuid().ToString("N"),
+            ["product_id"] =
+                authorization.ProductId,
+            ["target_version"] =
+                authorization.Version,
+            ["platform"] =
+                target.Platform,
+            ["architecture"] =
+                target.Architecture,
+            ["install_root"] =
+                target.InstallRoot,
+            ["entry_point"] =
+                target.EntryPoint,
+            ["artifact_sha256"] =
+                package.Sha256,
+            ["artifact_size"] =
+                package.Size,
+            ["target_policy_sha256"] =
+                DocumentSha256(target.Raw),
+            ["issued_at"] = Iso(now),
+            ["expires_at"] =
+                Iso(now.AddSeconds(120)),
+            ["signing_key_id"] =
+                config.SigningKeyId,
+            ["algorithm"] = "Ed25519",
+        };
+
+        var canonical =
+            CanonicalObjectBytes(unsigned);
+        var signer = new Ed25519Signer();
+        signer.Init(
+            true,
+            config.SigningPrivateKey);
+        signer.BlockUpdate(
+            canonical,
+            0,
+            canonical.Length);
+
+        var requestDocument =
+            new Dictionary<string, object?>(
+                unsigned,
+                StringComparer.Ordinal)
+            {
+                ["signature"] =
+                    Convert.ToBase64String(
+                        signer.GenerateSignature()),
+            };
+
+        var requestPath = Path.Combine(
+            operationRoot,
+            "request.json");
+        WriteJson(
+            requestPath,
+            requestDocument);
+
+        var command = new List<string>
+        {
+            Path.GetFullPath(
+                config.HelperExecutable),
+            "--privileged-provision",
+            "--runtime-root", runtimeRoot,
+            "--request", requestPath,
+            "--target-policy", targetPath,
+            "--artifact", runtimeArtifact,
+            "--staged-root", stageRoot,
+            "--transaction-root", transactionRoot,
+            "--transaction-id", transactionId,
+        };
+
+        return new PreparedInvocation(command);
     }
 
     private PreparedInvocation PreparePrivilegedInvocation(
@@ -576,6 +1383,64 @@ public sealed class PrivilegedUpdateCenterProvider
             }
         }
         return selected ?? throw new InvalidDataException("no verified BKE install-target policy");
+    }
+
+    private TargetPolicy ResolveTargetPolicyForProvision(
+        string productId,
+        string platform,
+        string protocolArchitecture,
+        PrivilegedConfig config)
+    {
+        TargetPolicy? selected = null;
+
+        foreach (var path in Directory.Exists(config.TargetPoliciesDir)
+                     ? Directory.EnumerateFiles(config.TargetPoliciesDir, "*.json")
+                         .OrderBy(item => item, StringComparer.Ordinal)
+                         .ToArray()
+                     : Array.Empty<string>())
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var candidate = VerifyTargetPolicy(document.RootElement, config);
+                if (candidate.ProductId == productId &&
+                    candidate.Platform == platform &&
+                    ArchitecturesEquivalent(
+                        candidate.Architecture,
+                        protocolArchitecture) &&
+                    (selected is null || candidate.Revision > selected.Revision))
+                {
+                    selected = candidate with { Raw = candidate.Raw.Clone() };
+                }
+            }
+            catch
+            {
+                // Fail closed by ignoring any target policy that cannot be independently verified.
+            }
+        }
+
+        return selected
+            ?? throw new InvalidDataException(
+                "no verified BKE install-target policy");
+    }
+
+    private static bool ArchitecturesEquivalent(
+        string targetArchitecture,
+        string protocolArchitecture)
+    {
+        static string Normalize(string value) =>
+            value.Trim().ToLowerInvariant() switch
+            {
+                "amd64" or "x86_64" or "x64" => "x64",
+                "arm64" or "aarch64" => "arm64",
+                "x86" or "i386" or "i686" => "x86",
+                _ => value.Trim().ToLowerInvariant(),
+            };
+
+        return string.Equals(
+            Normalize(targetArchitecture),
+            Normalize(protocolArchitecture),
+            StringComparison.Ordinal);
     }
 
     private TargetPolicy VerifyTargetPolicy(JsonElement policy, PrivilegedConfig config)
@@ -977,6 +1842,39 @@ public sealed class PrivilegedUpdateCenterProvider
     }
 
     private static string Iso(DateTimeOffset value) => value.ToUniversalTime().ToString("O").Replace("+00:00", "Z", StringComparison.Ordinal);
+
+    private sealed record GitHubReleaseAsset(
+        string Name,
+        long Size,
+        string DownloadUrl);
+
+    private sealed record GitHubReleasePackage(
+        string FileName,
+        long Size,
+        string Sha256,
+        string EntryPoint,
+        string DownloadUrl);
+
+    private sealed class GitHubReleasePackageException :
+        Exception
+    {
+        public GitHubReleasePackageException(
+            string code,
+            string reason,
+            bool retryable)
+            : base(reason)
+        {
+            Code = code;
+            Reason = reason;
+            Retryable = retryable;
+        }
+
+        public string Code { get; }
+
+        public string Reason { get; }
+
+        public bool Retryable { get; }
+    }
 
     private sealed record ProductContext(
         string ProductId, string Version, string Platform, string Architecture, string UpdateChannel,
