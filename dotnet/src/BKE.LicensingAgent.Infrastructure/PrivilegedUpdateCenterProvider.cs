@@ -974,6 +974,180 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
         }
     }
 
+    private PreparedInvocation PreparePrivilegedProvisionInvocation(
+        StandaloneProvisionAuthorization authorization,
+        GitHubReleasePackage package,
+        TargetPolicy target,
+        PrivilegedConfig config,
+        string artifact,
+        string transactionId)
+    {
+        var runtimeRoot = Path.GetFullPath(config.RuntimeRoot);
+        Directory.CreateDirectory(runtimeRoot);
+
+        if (!File.Exists(config.HelperExecutable))
+        {
+            throw new InvalidDataException(
+                "privileged helper unavailable");
+        }
+
+        if (!string.Equals(
+                target.ProductId,
+                authorization.ProductId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "target authority product mismatch");
+        }
+
+        if (Directory.Exists(target.InstallRoot) ||
+            File.Exists(target.InstallRoot))
+        {
+            throw new InvalidDataException(
+                "first-install target already exists");
+        }
+
+        var operationRoot = Path.Combine(
+            runtimeRoot,
+            "provision",
+            transactionId);
+        var stageRoot = Path.Combine(
+            operationRoot,
+            "stage");
+        Directory.CreateDirectory(operationRoot);
+
+        ExtractUpdatePackage(
+            artifact,
+            stageRoot,
+            target.EntryPoint);
+
+        var transactionRoot = Path.Combine(
+            runtimeRoot,
+            "transactions");
+        Directory.CreateDirectory(transactionRoot);
+
+        var agentPublic =
+            config.SigningPrivateKey
+                .GeneratePublicKey()
+                .GetEncoded();
+        var trust = new Dictionary<string, object?>(
+            StringComparer.Ordinal)
+        {
+            ["schema"] = "bke.updater-trust.v1",
+            ["agent_keys"] = new Dictionary<string, string>
+            {
+                [config.SigningKeyId] =
+                    Convert.ToBase64String(agentPublic),
+            },
+            ["digital_keys"] = new Dictionary<string, string>(),
+            ["target_keys"] =
+                config.TargetKeys.ToDictionary(
+                    pair => pair.Key,
+                    pair => Convert.ToBase64String(
+                        pair.Value.GetEncoded()),
+                    StringComparer.Ordinal),
+            ["approved_install_roots"] =
+                config.ApprovedInstallRoots,
+            ["expected_channel"] =
+                config.ExpectedChannel,
+        };
+        WriteJson(
+            Path.Combine(runtimeRoot, "trust.json"),
+            trust);
+
+        var targetPath = Path.Combine(
+            operationRoot,
+            "target-policy.json");
+        File.WriteAllText(
+            targetPath,
+            target.Raw.GetRawText(),
+            new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false));
+
+        var runtimeArtifact = Path.Combine(
+            operationRoot,
+            "artifact.zip");
+        File.Copy(artifact, runtimeArtifact, true);
+
+        var now = DateTimeOffset.UtcNow;
+        var unsigned = new Dictionary<string, object?>(
+            StringComparer.Ordinal)
+        {
+            ["schema"] =
+                "bke.privileged-provision-request.v1",
+            ["request_id"] =
+                "agent-" + Guid.NewGuid().ToString("N"),
+            ["product_id"] =
+                authorization.ProductId,
+            ["target_version"] =
+                authorization.Version,
+            ["platform"] =
+                target.Platform,
+            ["architecture"] =
+                target.Architecture,
+            ["install_root"] =
+                target.InstallRoot,
+            ["entry_point"] =
+                target.EntryPoint,
+            ["artifact_sha256"] =
+                package.Sha256,
+            ["artifact_size"] =
+                package.Size,
+            ["target_policy_sha256"] =
+                DocumentSha256(target.Raw),
+            ["issued_at"] = Iso(now),
+            ["expires_at"] =
+                Iso(now.AddSeconds(120)),
+            ["signing_key_id"] =
+                config.SigningKeyId,
+            ["algorithm"] = "Ed25519",
+        };
+
+        var canonical =
+            CanonicalObjectBytes(unsigned);
+        var signer = new Ed25519Signer();
+        signer.Init(
+            true,
+            config.SigningPrivateKey);
+        signer.BlockUpdate(
+            canonical,
+            0,
+            canonical.Length);
+
+        var requestDocument =
+            new Dictionary<string, object?>(
+                unsigned,
+                StringComparer.Ordinal)
+            {
+                ["signature"] =
+                    Convert.ToBase64String(
+                        signer.GenerateSignature()),
+            };
+
+        var requestPath = Path.Combine(
+            operationRoot,
+            "request.json");
+        WriteJson(
+            requestPath,
+            requestDocument);
+
+        var command = new List<string>
+        {
+            Path.GetFullPath(
+                config.HelperExecutable),
+            "--privileged-provision",
+            "--runtime-root", runtimeRoot,
+            "--request", requestPath,
+            "--target-policy", targetPath,
+            "--artifact", runtimeArtifact,
+            "--staged-root", stageRoot,
+            "--transaction-root", transactionRoot,
+            "--transaction-id", transactionId,
+        };
+
+        return new PreparedInvocation(command);
+    }
+
     private PreparedInvocation PreparePrivilegedInvocation(
         ProductContext product,
         JsonElement updatePolicy,
@@ -1667,6 +1841,39 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
     }
 
     private static string Iso(DateTimeOffset value) => value.ToUniversalTime().ToString("O").Replace("+00:00", "Z", StringComparison.Ordinal);
+
+    private sealed record GitHubReleaseAsset(
+        string Name,
+        long Size,
+        string DownloadUrl);
+
+    private sealed record GitHubReleasePackage(
+        string FileName,
+        long Size,
+        string Sha256,
+        string EntryPoint,
+        string DownloadUrl);
+
+    private sealed class GitHubReleasePackageException :
+        InvalidDataException
+    {
+        public GitHubReleasePackageException(
+            string code,
+            string reason,
+            bool retryable)
+            : base(reason)
+        {
+            Code = code;
+            Reason = reason;
+            Retryable = retryable;
+        }
+
+        public string Code { get; }
+
+        public string Reason { get; }
+
+        public bool Retryable { get; }
+    }
 
     private sealed record ProductContext(
         string ProductId, string Version, string Platform, string Architecture, string UpdateChannel,
