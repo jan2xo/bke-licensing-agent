@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 using Microsoft.Data.Sqlite;
@@ -118,36 +117,27 @@ public sealed class SqliteProductLauncher : ILocalProductLauncher
 
                 try
                 {
-                    var process = Process.Start(
-                        new ProcessStartInfo
-                        {
-                            FileName = entryPoint,
-                            WorkingDirectory = productRoot,
-                            UseShellExecute = true,
-                        });
-
-                    if (process is null)
-                    {
-                        return Task.FromResult(
-                            new LocalProductLaunchResult(
-                                "LAUNCH_FAILED",
-                                "launch_failed",
-                                true));
-                    }
-
-                    process.Dispose();
+                    WindowsInteractiveProcessLauncher.Start(entryPoint);
                     return Task.FromResult(
                         new LocalProductLaunchResult(
                             "STARTED",
                             "started",
                             false));
                 }
-                catch (Win32Exception)
+                catch (Win32Exception exception)
                 {
+                    var noActiveSession =
+                        exception.Message.Contains(
+                            "No active Windows console session",
+                            StringComparison.Ordinal);
                     return Task.FromResult(
                         new LocalProductLaunchResult(
-                            "LAUNCH_FAILED",
-                            "launch_failed",
+                            noActiveSession
+                                ? "NO_ACTIVE_USER_SESSION"
+                                : "INTERACTIVE_LAUNCH_FAILED",
+                            noActiveSession
+                                ? "no_active_user_session"
+                                : "interactive_launch_failed",
                             true));
                 }
             }
