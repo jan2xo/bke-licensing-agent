@@ -41,6 +41,10 @@ public sealed record StandaloneProvisioningResult(
 
 public sealed class SoftwareInstallService : ISoftwareInstallService
 {
+    private static readonly TimeSpan ProvisionStartGuard = TimeSpan.FromMinutes(10);
+    private readonly SemaphoreSlim _installGate = new(1, 1);
+    private readonly Dictionary<string, DateTimeOffset> _recentStarts =
+        new(StringComparer.Ordinal);
     private readonly IAccountSessionService _accountSession;
     private readonly IAccountSessionSecretStore _secretStore;
     private readonly ILocalProductInventory _inventory;
@@ -62,6 +66,21 @@ public sealed class SoftwareInstallService : ISoftwareInstallService
     }
 
     public async Task<SoftwareInstallResponse> InstallAsync(
+        SoftwareInstallRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _installGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await InstallCoreAsync(request, cancellationToken);
+        }
+        finally
+        {
+            _installGate.Release();
+        }
+    }
+
+    private async Task<SoftwareInstallResponse> InstallCoreAsync(
         SoftwareInstallRequest request,
         CancellationToken cancellationToken)
     {
@@ -114,10 +133,25 @@ public sealed class SoftwareInstallService : ISoftwareInstallService
 
         if (installed.ContainsKey(request.ProductId))
         {
+            _recentStarts.Remove(request.ProductId);
             return Response(
                 "ALREADY_INSTALLED",
                 "already_installed",
                 null);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (_recentStarts.TryGetValue(request.ProductId, out var startedAt))
+        {
+            if (now - startedAt < ProvisionStartGuard)
+            {
+                return Response(
+                    "IN_PROGRESS",
+                    "provision_in_progress",
+                    null);
+            }
+
+            _recentStarts.Remove(request.ProductId);
         }
 
         StandaloneProvisionAuthorizationResult authorization;
@@ -178,6 +212,7 @@ public sealed class SoftwareInstallService : ISoftwareInstallService
 
             if (result.Status == "STARTED")
             {
+                _recentStarts[request.ProductId] = DateTimeOffset.UtcNow;
                 return Response("STARTED", result.Reason, null);
             }
 
@@ -256,6 +291,8 @@ public sealed class SoftwareInstallService : ISoftwareInstallService
     {
         "TARGET_POLICY_UNAVAILABLE" =>
             "No trusted install-target policy is provisioned for this product on this machine.",
+        "TARGET_ALREADY_EXISTS" =>
+            "The authorized installation target already exists on this machine.",
         "RELEASE_PACKAGE_UNAVAILABLE" =>
             "The authorized GitHub Release does not contain an eligible BKE package.",
         "RELEASE_METADATA_INVALID" =>
