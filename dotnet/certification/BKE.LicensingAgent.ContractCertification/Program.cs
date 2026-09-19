@@ -41,6 +41,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.AccountSessionLogoutPath}",
     $"POST {LocalAgentContract.SoftwareCatalogPath}",
     $"POST {LocalAgentContract.SoftwareInstallPath}",
+    $"POST {LocalAgentContract.SoftwareOpenPath}",
 };
 Require(inventoryRoutes.SetEquals(contractRoutes), "current route inventory mismatch");
 
@@ -79,6 +80,17 @@ Require(softwareInstall.GetProperty("local_responses_expose_cloud_tokens").GetBo
 Require(softwareInstall.GetProperty("local_responses_expose_download_urls").GetBoolean() == false, "software-install download URL exposure drifted");
 Require(softwareInstall.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-install path exposure drifted");
 
+var softwareOpen = capabilities.GetProperty("software_open");
+Require(softwareOpen.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareOpenCapabilityId, "software-open capability id mismatch");
+Require(softwareOpen.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareOpenContractVersion, "software-open contract version mismatch");
+Require(softwareOpen.GetProperty("catalog_recheck_required").GetBoolean(), "software-open catalog recheck was disabled");
+Require(softwareOpen.GetProperty("execution_type_required").GetString() == "STANDALONE", "software-open execution type drifted");
+Require(softwareOpen.GetProperty("launch_owner").GetString() == "bke-licensing-agent", "software-open launch ownership drifted");
+Require(softwareOpen.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "product_id"]), "software-open local request widened");
+Require(softwareOpen.GetProperty("local_responses_expose_entry_point").GetBoolean() == false, "software-open entry-point exposure drifted");
+Require(softwareOpen.GetProperty("local_responses_expose_install_path").GetBoolean() == false, "software-open install-path exposure drifted");
+
 var notificationInbox = capabilities.GetProperty("notification_inbox");
 Require(notificationInbox.GetProperty("capability_id").GetString() == LocalAgentContract.NotificationInboxCapabilityId, "notification inbox capability id mismatch");
 Require(notificationInbox.GetProperty("contract_version").GetInt32() == LocalAgentContract.NotificationInboxContractVersion, "notification inbox contract version mismatch");
@@ -101,6 +113,8 @@ Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType))
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.CorrelationId)) == "correlation_id", "software-install correlation_id wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.ProductId)) == "product_id", "software-install product_id wire name mismatch");
+Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.CorrelationId)) == "correlation_id", "software-open correlation_id wire name mismatch");
+Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.ProductId)) == "product_id", "software-open product_id wire name mismatch");
 
 Require(MethodNames<IAuthorizationService>().SetEquals(["AuthorizeAsync"]), "authorization port drifted");
 Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activation port drifted");
@@ -110,10 +124,12 @@ Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"
 Require(MethodNames<IAccountSessionService>().SetEquals(["StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
+Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
 
 await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
+await CertifySoftwareOpenBoundary();
 
 var notificationColumns = storage.GetProperty("tables").GetProperty("notifications")
     .EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal);
@@ -125,6 +141,7 @@ Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVe
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
+Console.WriteLine("Software open entitlement, execution-type, and path-hiding boundary certified");
 return;
 
 static async Task CertifyAccountSessionStateMachine()
@@ -371,6 +388,141 @@ static async Task CertifySoftwareInstallBoundary()
     Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful install denial was flattened");
 }
 
+static async Task CertifySoftwareOpenBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-open",
+        "opener@example.com",
+        "account-open",
+        "INDIVIDUAL",
+        "Open Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "open-access-secret",
+            "open-refresh-secret",
+            "open-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var remote = new FakeSoftwareCatalogRemote([
+        new RemoteSoftwareCatalogItem(
+            "bke-render-dock",
+            "Render Dock",
+            "Standalone rendering product",
+            "STANDALONE",
+            true,
+            true,
+            "1.0.2"),
+    ]);
+    var inventory = new FakeLocalProductInventory(
+        new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+        {
+            ["bke-render-dock"] =
+                new("bke-render-dock", "1.0.2"),
+        });
+    var catalog = new SoftwareCatalogService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        remote,
+        inventory);
+    var launcher = new FakeLocalProductLauncher(
+        new LocalProductLaunchResult(
+            "STARTED",
+            "started",
+            false));
+    var service = new SoftwareOpenService(
+        catalog,
+        launcher);
+
+    var response = await service.OpenAsync(
+        new SoftwareOpenRequest(
+            "cert-open",
+            "bke-render-dock"),
+        CancellationToken.None);
+
+    Require(response.Status == "STARTED", "software open did not enter STARTED");
+    Require(response.State == "started", "software open state drifted");
+    Require(launcher.ProductId == "bke-render-dock", "software open launcher product drifted");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("Program Files", StringComparison.OrdinalIgnoreCase), "software open leaked an install path");
+    Require(!wire.Contains("RENDER DOCK.exe", StringComparison.OrdinalIgnoreCase), "software open leaked an entry point");
+    Require(!wire.Contains("open-access-secret", StringComparison.Ordinal), "software open leaked an account token");
+
+    var deniedRemote = new FakeSoftwareCatalogRemote([
+        new RemoteSoftwareCatalogItem(
+            "bke-render-dock",
+            "Render Dock",
+            "Standalone rendering product",
+            "STANDALONE",
+            false,
+            false,
+            "1.0.2"),
+    ]);
+    var deniedCatalog = new SoftwareCatalogService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        deniedRemote,
+        inventory);
+    var deniedLauncher = new FakeLocalProductLauncher(
+        new LocalProductLaunchResult(
+            "STARTED",
+            "started",
+            false));
+    var deniedService = new SoftwareOpenService(
+        deniedCatalog,
+        deniedLauncher);
+    var denied = await deniedService.OpenAsync(
+        new SoftwareOpenRequest(
+            "cert-open-denied",
+            "bke-render-dock"),
+        CancellationToken.None);
+
+    Require(denied.Error?.Code == "NOT_ENTITLED", "software open entitlement denial was flattened");
+    Require(deniedLauncher.ProductId is null, "software open launched despite entitlement denial");
+
+    var pluginRemote = new FakeSoftwareCatalogRemote([
+        new RemoteSoftwareCatalogItem(
+            "bke-plugin-tool",
+            "Plugin Tool",
+            "Launcher-hosted tool",
+            "LAUNCHER_PLUGIN",
+            true,
+            true,
+            "1.0.0"),
+    ]);
+    var pluginInventory = new FakeLocalProductInventory(
+        new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+        {
+            ["bke-plugin-tool"] =
+                new("bke-plugin-tool", "1.0.0"),
+        });
+    var pluginCatalog = new SoftwareCatalogService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        pluginRemote,
+        pluginInventory);
+    var pluginLauncher = new FakeLocalProductLauncher(
+        new LocalProductLaunchResult(
+            "STARTED",
+            "started",
+            false));
+    var pluginService = new SoftwareOpenService(
+        pluginCatalog,
+        pluginLauncher);
+    var plugin = await pluginService.OpenAsync(
+        new SoftwareOpenRequest(
+            "cert-open-plugin",
+            "bke-plugin-tool"),
+        CancellationToken.None);
+
+    Require(plugin.Error?.Code == "UNSUPPORTED_EXECUTION_TYPE", "software open accepted Launcher plugin");
+    Require(pluginLauncher.ProductId is null, "software open launched a Launcher plugin as standalone");
+}
+
 static HashSet<string> MethodNames<T>() =>
     typeof(T).GetMethods().Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
 
@@ -567,6 +719,21 @@ sealed class FakeStandaloneSoftwareProvisioner(
         CancellationToken cancellationToken)
     {
         Authorization = authorization;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeLocalProductLauncher(
+    LocalProductLaunchResult result)
+    : ILocalProductLauncher
+{
+    public string? ProductId { get; private set; }
+
+    public Task<LocalProductLaunchResult> OpenAsync(
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        ProductId = productId;
         return Task.FromResult(result);
     }
 }

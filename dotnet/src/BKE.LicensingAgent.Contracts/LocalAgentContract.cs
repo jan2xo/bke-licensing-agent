@@ -28,6 +28,7 @@ public static class LocalAgentContract
     public const string AccountSessionLogoutPath = "/v1/account-session/logout";
     public const string SoftwareCatalogPath = "/v1/software/catalog";
     public const string SoftwareInstallPath = "/v1/software/install";
+    public const string SoftwareOpenPath = "/v1/software/open";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
@@ -41,6 +42,8 @@ public static class LocalAgentContract
     public const int SoftwareCatalogContractVersion = 1;
     public const string SoftwareInstallCapabilityId = "bke.software-install";
     public const int SoftwareInstallContractVersion = 1;
+    public const string SoftwareOpenCapabilityId = "bke.software-open";
+    public const int SoftwareOpenContractVersion = 1;
 }
 
 public sealed record AuthorizeRequest(
