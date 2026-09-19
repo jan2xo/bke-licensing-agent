@@ -260,8 +260,16 @@ public sealed class WindowsDpapiAccountSessionSecretStore : IAccountSessionSecre
         {
             if (output.Data != IntPtr.Zero)
             {
-                CryptographicOperations.ZeroMemory(output.ToBytes());
-                LocalFree(output.Data);
+                var zeros = new byte[output.Size];
+                try
+                {
+                    Marshal.Copy(zeros, 0, output.Data, output.Size);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(zeros);
+                    LocalFree(output.Data);
+                }
             }
         }
     }
