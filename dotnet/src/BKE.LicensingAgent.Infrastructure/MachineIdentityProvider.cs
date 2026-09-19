@@ -49,6 +49,19 @@ public static class MachineIdentityProvider
             architecture.Trim().ToLowerInvariant());
     }
 
+    public static string ProtocolPlatform(string platform)
+    {
+        var normalized = platform.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "windows" => "windows",
+            "linux" => "linux",
+            "darwin" or "macos" or "osx" => "macos",
+            _ => throw new InvalidOperationException(
+                $"Unsupported machine platform for BKE account session: {platform}"),
+        };
+    }
+
     public static string ProtocolArchitecture(string architecture)
     {
         var normalized = architecture.Trim().ToLowerInvariant();
