@@ -30,6 +30,8 @@ public static class LocalAgentContract
     public const int TypedNotificationContractVersion = 1;
     public const string NotificationInboxCapabilityId = "bke.notifications";
     public const int NotificationInboxContractVersion = 1;
+    public const string AccountSessionCapabilityId = "bke.account-session";
+    public const int AccountSessionContractVersion = 1;
 }
 
 public sealed record AuthorizeRequest(
