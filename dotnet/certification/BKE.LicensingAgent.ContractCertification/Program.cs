@@ -47,6 +47,12 @@ var typedNotifications = capabilities.GetProperty("typed_notifications");
 Require(typedNotifications.GetProperty("capability_id").GetString() == LocalAgentContract.TypedNotificationCapabilityId, "typed-notification capability id mismatch");
 Require(typedNotifications.GetProperty("contract_version").GetInt32() == LocalAgentContract.TypedNotificationContractVersion, "typed-notification contract version mismatch");
 
+var accountSession = capabilities.GetProperty("account_session");
+Require(accountSession.GetProperty("capability_id").GetString() == LocalAgentContract.AccountSessionCapabilityId, "account-session capability id mismatch");
+Require(accountSession.GetProperty("contract_version").GetInt32() == LocalAgentContract.AccountSessionContractVersion, "account-session contract version mismatch");
+Require(accountSession.GetProperty("secret_owner").GetString() == "bke-licensing-agent", "account-session secret ownership drifted");
+Require(accountSession.GetProperty("local_responses_expose_tokens").GetBoolean() == false, "account-session local secret exposure drifted");
+
 var notificationInbox = capabilities.GetProperty("notification_inbox");
 Require(notificationInbox.GetProperty("capability_id").GetString() == LocalAgentContract.NotificationInboxCapabilityId, "notification inbox capability id mismatch");
 Require(notificationInbox.GetProperty("contract_version").GetInt32() == LocalAgentContract.NotificationInboxContractVersion, "notification inbox contract version mismatch");
