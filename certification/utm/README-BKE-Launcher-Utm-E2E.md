@@ -23,11 +23,17 @@ Do not begin the true cloud-backed install path until all of these are deliberat
    - operatingSystem = windows (or universal/any compatibility metadata)
    - architecture = universal is preferred when one release tag contains both x64 + ARM64 assets; exact machine architecture is also accepted
    - test account owns an active current Entitlement; acquisition may be direct commerce settlement or Claim Code redemption
-4. GitHub Release v1.0.2 exists in jan2xo/BKE_RENDER_DOCK and contains the architecture-specific updater metadata + ZIP. For ARM64:
+4. If Digital Solutions already contains Render Dock ProductVersion `1.0.2` as x64-only, do not create a duplicate version row. `ProductVersion` is unique by product + version. Use the owner release UI:
+   - Unpublish `1.0.2` in Release Center.
+   - In Products, change compatibility to `Windows + universal`.
+   - Save compatibility.
+   - Return to Release Center and republish after the normal release gates are satisfied.
+   - Published releases intentionally reject in-place compatibility widening with `RELEASE_COMPATIBILITY_EDIT_REQUIRES_UNPUBLISH`.
+5. GitHub Release v1.0.2 exists in jan2xo/BKE_RENDER_DOCK and contains the architecture-specific updater metadata + ZIP. For ARM64:
    - Render-Dock-1.0.2-Windows-arm64.update.json
    - Render-Dock-1.0.2-Windows-arm64.update.zip
 
-The Render Dock workflow artifact alone is not sufficient for the real install flow. The Agent intentionally resolves a GitHub Release by exact tag.
+The Render Dock workflow artifact alone is not sufficient for the real install flow. The Agent intentionally resolves a GitHub Release by exact tag. Do not use the older x64-only `v1.0.2-utm-test` prerelease as an ARM64 substitute.
 
 ## Candidate inputs
 
