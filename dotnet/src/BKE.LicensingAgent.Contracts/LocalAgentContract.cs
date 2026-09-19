@@ -23,6 +23,9 @@ public static class LocalAgentContract
     public const string NotificationUnreadCountPath = "/v1/notifications/unread-count";
     public const string CheckUpdatesPath = "/v1/updates/check";
     public const string OpenUpdateCenterPath = "/v1/update-center/open";
+    public const string AccountSessionStartPath = "/v1/account-session/start";
+    public const string AccountSessionStatusPath = "/v1/account-session/status";
+    public const string AccountSessionLogoutPath = "/v1/account-session/logout";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
