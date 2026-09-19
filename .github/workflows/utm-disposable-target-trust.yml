@@ -96,8 +96,9 @@ jobs:
           test -f "$root/arm64/target-keys/utm-render-dock-arm64-target-v1.pem"
           test -f "$root/arm64/target-policies/utm-render-dock-windows-arm64-v1.json"
 
-          if grep -R --binary-files=without-match -n "BEGIN PRIVATE KEY" "$root"; then
-            echo "Disposable target-trust artifact contains private-key material."
+          if find "$root" -type f -name '*.pem' -print0 |
+            xargs -0 grep -H -n "BEGIN PRIVATE KEY"; then
+            echo "Disposable target-trust PEM payload contains private-key material."
             exit 1
           fi
 
