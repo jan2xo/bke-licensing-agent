@@ -40,6 +40,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.AccountSessionStatusPath}",
     $"POST {LocalAgentContract.AccountSessionLogoutPath}",
     $"POST {LocalAgentContract.SoftwareCatalogPath}",
+    $"POST {LocalAgentContract.SoftwareInstallPath}",
 };
 Require(inventoryRoutes.SetEquals(contractRoutes), "current route inventory mismatch");
 
@@ -66,6 +67,18 @@ Require(softwareCatalog.GetProperty("local_responses_expose_cloud_tokens").GetBo
 Require(softwareCatalog.GetProperty("execution_types").EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal)
     .SetEquals(["LAUNCHER_PLUGIN", "STANDALONE"]), "software-catalog execution types drifted");
 
+var softwareInstall = capabilities.GetProperty("software_install");
+Require(softwareInstall.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareInstallCapabilityId, "software-install capability id mismatch");
+Require(softwareInstall.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareInstallContractVersion, "software-install contract version mismatch");
+Require(softwareInstall.GetProperty("cloud_authorization_owner").GetString() == "bke-digital-solutions", "software-install cloud authorization ownership drifted");
+Require(softwareInstall.GetProperty("release_authority").GetString() == "github-releases", "software-install release authority drifted");
+Require(softwareInstall.GetProperty("privileged_install_owner").GetString() == "bke-licensing-agent", "software-install privileged authority drifted");
+Require(softwareInstall.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "product_id"]), "software-install local request widened");
+Require(softwareInstall.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "software-install cloud token exposure drifted");
+Require(softwareInstall.GetProperty("local_responses_expose_download_urls").GetBoolean() == false, "software-install download URL exposure drifted");
+Require(softwareInstall.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-install path exposure drifted");
+
 var notificationInbox = capabilities.GetProperty("notification_inbox");
 Require(notificationInbox.GetProperty("capability_id").GetString() == LocalAgentContract.NotificationInboxCapabilityId, "notification inbox capability id mismatch");
 Require(notificationInbox.GetProperty("contract_version").GetInt32() == LocalAgentContract.NotificationInboxContractVersion, "notification inbox contract version mismatch");
@@ -86,6 +99,8 @@ Require(JsonName<AccountSessionLogoutRequest>(nameof(AccountSessionLogoutRequest
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
+Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.CorrelationId)) == "correlation_id", "software-install correlation_id wire name mismatch");
+Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.ProductId)) == "product_id", "software-install product_id wire name mismatch");
 
 Require(MethodNames<IAuthorizationService>().SetEquals(["AuthorizeAsync"]), "authorization port drifted");
 Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activation port drifted");
@@ -94,9 +109,11 @@ Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsyn
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
+Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 
 await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
+await CertifySoftwareInstallBoundary();
 
 var notificationColumns = storage.GetProperty("tables").GetProperty("notifications")
     .EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal);
@@ -107,6 +124,7 @@ Console.WriteLine($"Routes certified: {contractRoutes.Count}");
 Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVersion}");
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
+Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 return;
 
 static async Task CertifyAccountSessionStateMachine()
@@ -276,6 +294,83 @@ static async Task CertifySoftwareCatalogBoundary()
     Require(!wire.Contains("catalog-refresh-secret", StringComparison.Ordinal), "catalog refresh token leaked to local response");
 }
 
+static async Task CertifySoftwareInstallBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-install",
+        "installer@example.com",
+        "account-install",
+        "INDIVIDUAL",
+        "Install Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "install-access-secret",
+            "install-refresh-secret",
+            "install-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var remote = new FakeStandaloneProvisionAuthorizationRemote(
+        new StandaloneProvisionAuthorizationResult(
+            "AUTHORIZED",
+            new StandaloneProvisionAuthorization(
+                "bke-render-dock",
+                "1.0.2",
+                "jan2xo/BKE_RENDER_DOCK",
+                "v1.0.2")));
+    var provisioner = new FakeStandaloneSoftwareProvisioner(
+        new StandaloneProvisioningResult(
+            "STARTED",
+            "provision_started",
+            false));
+    var inventory = new FakeLocalProductInventory(
+        new Dictionary<string, LocalInstalledProduct>(
+            StringComparer.Ordinal));
+    var service = new SoftwareInstallService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        inventory,
+        remote,
+        provisioner);
+
+    var response = await service.InstallAsync(
+        new SoftwareInstallRequest(
+            "cert-install",
+            "bke-render-dock"),
+        CancellationToken.None);
+
+    Require(response.Status == "STARTED", "software install did not enter STARTED");
+    Require(response.State == "provision_started", "software install state drifted");
+    Require(remote.AccessToken == "install-access-secret", "software install remote did not receive Agent-owned access token");
+    Require(remote.ProductId == "bke-render-dock", "software install remote product drifted");
+    Require(provisioner.Authorization?.Repository == "jan2xo/BKE_RENDER_DOCK", "verified release authority did not reach the provisioner");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("install-access-secret", StringComparison.Ordinal), "install access token leaked to local response");
+    Require(!wire.Contains("install-refresh-secret", StringComparison.Ordinal), "install refresh token leaked to local response");
+    Require(!wire.Contains("github.com", StringComparison.OrdinalIgnoreCase), "GitHub release URL leaked to local response");
+    Require(!wire.Contains("BKE_RENDER_DOCK", StringComparison.Ordinal), "GitHub repository identity leaked to local response");
+    Require(!wire.Contains("Program Files", StringComparison.OrdinalIgnoreCase), "privileged install path leaked to local response");
+
+    var denied = new SoftwareInstallService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        inventory,
+        new FakeStandaloneProvisionAuthorizationRemote(
+            new StandaloneProvisionAuthorizationResult(
+                "NOT_ENTITLED")),
+        provisioner);
+    var deniedResponse = await denied.InstallAsync(
+        new SoftwareInstallRequest(
+            "cert-install-denied",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful install denial was flattened");
+}
+
 static HashSet<string> MethodNames<T>() =>
     typeof(T).GetMethods().Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
 
@@ -441,5 +536,38 @@ sealed class FakeLocalProductInventory(
     public Task<IReadOnlyDictionary<string, LocalInstalledProduct>> ReadAsync(
         CancellationToken cancellationToken) =>
         Task.FromResult(items);
+}
+
+sealed class FakeStandaloneProvisionAuthorizationRemote(
+    StandaloneProvisionAuthorizationResult result)
+    : IStandaloneProvisionAuthorizationRemote
+{
+    public string? AccessToken { get; private set; }
+    public string? ProductId { get; private set; }
+
+    public Task<StandaloneProvisionAuthorizationResult> AuthorizeAsync(
+        string accessToken,
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        ProductId = productId;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStandaloneSoftwareProvisioner(
+    StandaloneProvisioningResult result)
+    : IStandaloneSoftwareProvisioner
+{
+    public StandaloneProvisionAuthorization? Authorization { get; private set; }
+
+    public Task<StandaloneProvisioningResult> ProvisionAsync(
+        StandaloneProvisionAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        Authorization = authorization;
+        return Task.FromResult(result);
+    }
 }
 

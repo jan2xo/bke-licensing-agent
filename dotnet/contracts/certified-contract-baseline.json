@@ -69,6 +69,10 @@
       {
         "method": "POST",
         "path": "/v1/software/catalog"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/software/install"
       }
     ],
     "removed_product_update_routes": [
@@ -130,6 +134,20 @@
         "LAUNCHER_PLUGIN",
         "STANDALONE"
       ]
+    },
+    "software_install": {
+      "capability_id": "bke.software-install",
+      "contract_version": 1,
+      "cloud_authorization_owner": "bke-digital-solutions",
+      "release_authority": "github-releases",
+      "privileged_install_owner": "bke-licensing-agent",
+      "local_request_fields": [
+        "correlation_id",
+        "product_id"
+      ],
+      "local_responses_expose_cloud_tokens": false,
+      "local_responses_expose_download_urls": false,
+      "local_responses_expose_install_paths": false
     }
   },
   "notifications": {
