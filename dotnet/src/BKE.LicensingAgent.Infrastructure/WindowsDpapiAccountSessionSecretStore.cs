@@ -150,6 +150,7 @@ public sealed class WindowsDpapiAccountSessionSecretStore : IAccountSessionSecre
                 null,
                 null,
                 null,
+                null,
                 null),
 
             ActiveAccountSessionState active => new SecretEnvelope(
