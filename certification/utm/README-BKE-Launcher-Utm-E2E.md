@@ -112,7 +112,7 @@ Do not work around either failure in Launcher.
    - verify signed UTM target policy
    - sign bke.privileged-provision-request.v1
    - invoke bke-updater-core.exe --privileged-provision
-4. Approve Windows elevation if presented by the privileged boundary.
+4. In the canonical installed Agent, the runtime is service-hosted under LocalSystem and the verified helper inherits that service privilege. A second UAC prompt is therefore not expected for the normal service path. A non-service/manual Agent may still use `runas`.
 5. Wait for Agent discovery to observe the installed product.
 6. Refresh software in Launcher.
 
