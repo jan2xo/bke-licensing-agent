@@ -50,11 +50,13 @@ public sealed partial class App : Application
             IAgentDesktopViewSource source = preview
                 ? new DesignAgentDesktopViewSource()
                 : new UnconnectedAgentDesktopViewSource();
+            var accountSessionClient = new AccountSessionLoopbackClient();
 
             desktop.MainWindow = new MainWindow
             {
-                DataContext = new MainWindowViewModel(source),
+                DataContext = new MainWindowViewModel(source, accountSessionClient),
             };
+            desktop.Exit += (_, _) => accountSessionClient.Dispose();
         }
 
         base.OnFrameworkInitializationCompleted();
