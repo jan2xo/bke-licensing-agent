@@ -53,3 +53,10 @@ public interface IAccountSessionService
         AccountSessionLogoutRequest request,
         CancellationToken cancellationToken);
 }
+
+public interface ISoftwareCatalogService
+{
+    Task<SoftwareCatalogResponse> GetAsync(
+        SoftwareCatalogRequest request,
+        CancellationToken cancellationToken);
+}
