@@ -145,10 +145,15 @@ static async Task CertifyAccountSessionStateMachine()
     var approvedWire = JsonSerializer.Serialize(approved);
     Require(!approvedWire.Contains("access-secret", StringComparison.Ordinal), "access token leaked to local status");
     Require(!approvedWire.Contains("refresh-secret", StringComparison.Ordinal), "refresh token leaked to local status");
-    Require(store.State is ActiveAccountSessionState active &&
-            active.AccessToken == "access-secret" &&
-            active.RefreshToken == "refresh-secret",
-        "approved remote secrets were not retained by the secret-store boundary");
+    if (store.State is not ActiveAccountSessionState active)
+    {
+        throw new InvalidOperationException(
+            "approved remote secrets were not retained by the secret-store boundary");
+    }
+    Require(active.AccessToken == "access-secret",
+        "approved remote access token was not retained by the secret-store boundary");
+    Require(active.RefreshToken == "refresh-secret",
+        "approved remote refresh token was not retained by the secret-store boundary");
     Require(remote.AcknowledgeCount == 1, "approved handoff was not acknowledged after secure-store write");
 
     clock.Advance(TimeSpan.FromMinutes(29));
