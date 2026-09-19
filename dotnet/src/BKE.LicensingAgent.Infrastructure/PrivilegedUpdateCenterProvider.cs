@@ -15,10 +15,20 @@ using Org.BouncyCastle.OpenSsl;
 
 namespace BKE.LicensingAgent.Infrastructure;
 
-public sealed class PrivilegedUpdateCenterProvider
+public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisioner
 {
     private const string ProtocolVersion = "bke.licensing.v3";
     private const string UpdatePackageContentType = "application/vnd.bke.update-package+zip";
+    private const long MaximumStandalonePackageBytes = 4L * 1024 * 1024 * 1024;
+    private const int MaximumReleaseMetadataBytes = 64 * 1024;
+    private static readonly Uri GitHubApiBaseUri = new("https://api.github.com/", UriKind.Absolute);
+    private static readonly HashSet<string> ApprovedGitHubAssetHosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "github.com",
+        "release-assets.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+    };
     private static readonly Regex SafePathPattern = new("[^A-Za-z0-9_.-]", RegexOptions.CultureInvariant);
     private static readonly Regex CoreVersionPattern = new("^(?:0|[1-9][0-9]*)(?:\\.[0-9]+){0,3}$", RegexOptions.CultureInvariant);
     private static readonly Regex HashPattern = new("^[0-9a-fA-F]{64}$", RegexOptions.CultureInvariant);
@@ -77,6 +87,152 @@ public sealed class PrivilegedUpdateCenterProvider
         {
             Timeout = TimeSpan.FromSeconds(30),
         };
+    }
+
+    public async Task<StandaloneProvisioningResult> ProvisionAsync(
+        StandaloneProvisionAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return new StandaloneProvisioningResult(
+                "PRIVILEGED_HANDOFF_FAILED",
+                "unsupported_platform",
+                false);
+        }
+
+        var identity = MachineIdentityProvider.Calculate();
+        var platform = MachineIdentityProvider.ProtocolPlatform(identity.Platform);
+        var protocolArchitecture = MachineIdentityProvider.ProtocolArchitecture(identity.Architecture);
+        if (platform != "windows")
+        {
+            return new StandaloneProvisioningResult(
+                "PRIVILEGED_HANDOFF_FAILED",
+                "unsupported_platform",
+                false);
+        }
+
+        PrivilegedConfig config;
+        TargetPolicy target;
+        try
+        {
+            config = LoadPrivilegedConfig();
+            target = ResolveTargetPolicyForProvision(
+                authorization.ProductId,
+                platform,
+                protocolArchitecture,
+                config);
+
+            if (Directory.Exists(target.InstallRoot) || File.Exists(target.InstallRoot))
+            {
+                return new StandaloneProvisioningResult(
+                    "TARGET_ALREADY_EXISTS",
+                    "target_already_exists",
+                    false);
+            }
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "TARGET_POLICY_UNAVAILABLE",
+                "target_policy_unavailable",
+                false);
+        }
+
+        GitHubReleasePackage package;
+        try
+        {
+            package = await ResolveGitHubReleasePackageAsync(
+                authorization,
+                protocolArchitecture,
+                target,
+                cancellationToken);
+        }
+        catch (GitHubReleasePackageException exception)
+        {
+            return new StandaloneProvisioningResult(
+                exception.Code,
+                exception.Reason,
+                exception.Retryable);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "RELEASE_METADATA_INVALID",
+                "release_metadata_invalid",
+                false);
+        }
+
+        string artifact;
+        try
+        {
+            var downloadRoot = Path.Combine(
+                config.RuntimeRoot,
+                "downloads",
+                "provision");
+            var destination = Path.Combine(
+                downloadRoot,
+                Safe($"{authorization.ProductId}-{authorization.Version}-{package.FileName}", 220));
+            artifact = await AcquireGitHubAssetAsync(
+                package.DownloadUrl,
+                destination,
+                package.Size,
+                package.Sha256,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "RELEASE_DOWNLOAD_FAILED",
+                "release_download_failed",
+                true);
+        }
+
+        try
+        {
+            var transactionId = Safe(
+                $"{authorization.ProductId}-{authorization.Version}-{Guid.NewGuid():N}",
+                180);
+            var prepared = PreparePrivilegedProvisionInvocation(
+                authorization,
+                package,
+                target,
+                config,
+                artifact,
+                transactionId);
+            Launch(prepared.Command);
+            WriteTransaction(
+                config.RuntimeRoot,
+                transactionId,
+                "PROVISION_STAGED",
+                config.HelperExecutable);
+
+            return new StandaloneProvisioningResult(
+                "STARTED",
+                "provision_started",
+                false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneProvisioningResult(
+                "PRIVILEGED_HANDOFF_FAILED",
+                "privileged_handoff_failed",
+                true);
+        }
     }
 
     public async Task<OpenUpdateCenterResponse> OpenAsync(
