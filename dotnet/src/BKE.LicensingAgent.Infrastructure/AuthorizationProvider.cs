@@ -14,7 +14,6 @@ namespace BKE.LicensingAgent.Infrastructure;
 
 public sealed class AuthorizationProvider : IAuthorizationService
 {
-    private const string FingerprintSchemaVersion = "bke-device-v1";
     private const int ExpectedSchemaVersion = 8;
     private static readonly Regex ProductIdPattern = new("^[a-z0-9-]+$", RegexOptions.CultureInvariant);
     private static readonly Regex VersionPattern = new("^\\d+\\.\\d+\\.\\d+(?:[-+].*)?$", RegexOptions.CultureInvariant);
@@ -77,7 +76,7 @@ public sealed class AuthorizationProvider : IAuthorizationService
             return new AuthorizationResponse(false, "unknown_product_or_version");
         }
 
-        var deviceId = CalculateDeviceFingerprint();
+        var deviceId = MachineIdentityProvider.Calculate().DeviceId;
         var binding = LoadActiveBinding(connection, request.ProductId, request.InstallationId, deviceId);
         if (binding is null)
         {
@@ -455,74 +454,6 @@ public sealed class AuthorizationProvider : IAuthorizationService
 
     private string LicenseCenterUrl(string productId, string version, string installationId) =>
         $"http://127.0.0.1:{_port}/license-center?product_id={Uri.EscapeDataString(productId)}&version={Uri.EscapeDataString(version)}&installation_id={Uri.EscapeDataString(installationId)}";
-
-    private static string CalculateDeviceFingerprint()
-    {
-        string platform;
-        string release;
-        string architecture;
-
-        if (OperatingSystem.IsWindows())
-        {
-            platform = "windows";
-            var osVersion = Environment.OSVersion.Version;
-            release = LegacyWindowsRelease(osVersion);
-            architecture = (Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE") ??
-                            System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString()).ToLowerInvariant();
-        }
-        else
-        {
-            platform = RunUname("-s").ToLowerInvariant();
-            release = RunUname("-r").ToLowerInvariant();
-            architecture = RunUname("-m").ToLowerInvariant();
-        }
-
-        var normalized = $"architecture={architecture.Trim().ToLowerInvariant()}|os_version={release.Trim().ToLowerInvariant()}|platform={platform.Trim().ToLowerInvariant()}";
-        var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"{FingerprintSchemaVersion}|{normalized}"));
-        return Convert.ToHexString(digest).ToLowerInvariant();
-    }
-
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static string LegacyWindowsRelease(Version osVersion)
-    {
-        var productName = Microsoft.Win32.Registry.GetValue(
-            @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
-            "ProductName",
-            null)?.ToString() ?? string.Empty;
-        var isServer = productName.Contains("Server", StringComparison.OrdinalIgnoreCase);
-
-        if (isServer && osVersion.Major >= 10)
-        {
-            if (osVersion.Build >= 26100) return "2025Server";
-            if (osVersion.Build >= 20348) return "2022Server";
-            if (osVersion.Build >= 17763) return "2019Server";
-            if (osVersion.Build >= 14393) return "2016Server";
-        }
-
-        return osVersion.Major >= 10 && osVersion.Build >= 22000
-            ? "11"
-            : osVersion.Major >= 10 ? "10" : osVersion.Major.ToString();
-    }
-
-    private static string RunUname(string argument)
-    {
-        using var process = Process.Start(new ProcessStartInfo
-        {
-            FileName = "uname",
-            Arguments = argument,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        }) ?? throw new InvalidOperationException("Could not execute uname");
-        var output = process.StandardOutput.ReadToEnd().Trim();
-        process.WaitForExit();
-        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
-        {
-            throw new InvalidOperationException("Could not resolve platform identity");
-        }
-        return output;
-    }
 
     private static string RequiredString(JsonElement root, string name)
     {

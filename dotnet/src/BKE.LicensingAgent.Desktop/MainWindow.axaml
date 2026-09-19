@@ -249,6 +249,33 @@
 
           <StackPanel Grid.Column="2" Spacing="18">
             <Border Classes="card">
+              <StackPanel Spacing="12">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="BKE account" Classes="label" />
+                  <Border Grid.Column="1" Background="#141D2A" CornerRadius="10" Padding="9,6">
+                    <TextBlock Text="{Binding AccountSessionState}" FontSize="10.5" Foreground="#A7B6CB" />
+                  </Border>
+                </Grid>
+                <TextBlock Text="{Binding AccountDisplay}" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding AccountSessionMessage}" Classes="muted" FontSize="11" TextWrapping="Wrap" />
+                <Border Classes="subcard" Padding="12">
+                  <StackPanel Spacing="5">
+                    <TextBlock Text="DEVICE AUTHORIZATION" Classes="label" FontSize="9" />
+                    <TextBlock Text="{Binding AccountUserCode}" FontFamily="Consolas" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding AccountVerificationUri}" Classes="muted" FontSize="10" TextWrapping="Wrap" />
+                  </StackPanel>
+                </Border>
+                <Button Classes="primary" Content="Continue with BKE" Command="{Binding AccountSignInCommand}" HorizontalAlignment="Stretch" />
+                <Grid ColumnDefinitions="*,10,*">
+                  <Button Classes="ghost" Content="Refresh account" Command="{Binding AccountRefreshCommand}" HorizontalAlignment="Stretch" />
+                  <Button Grid.Column="2" Classes="ghost" Content="Sign out" Command="{Binding AccountSignOutCommand}" HorizontalAlignment="Stretch" />
+                </Grid>
+                <TextBlock Text="Launcher and License Center consume this same Agent-owned machine session."
+                           Classes="muted" FontSize="10" TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
               <StackPanel Spacing="14">
                 <TextBlock Text="Update control" Classes="label" />
                 <TextBlock Text="{Binding UpdateState}" FontSize="20" FontWeight="SemiBold" />

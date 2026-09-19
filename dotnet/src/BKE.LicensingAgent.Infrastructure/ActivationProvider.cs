@@ -15,7 +15,6 @@ namespace BKE.LicensingAgent.Infrastructure;
 
 public sealed class ActivationProvider : IActivationService
 {
-    private const string FingerprintSchemaVersion = "bke-device-v1";
     private const int ExpectedSchemaVersion = 8;
     private static readonly HashSet<HttpStatusCode> RetryableStatuses = new()
     {
@@ -78,7 +77,7 @@ public sealed class ActivationProvider : IActivationService
             }
             PersistTrustedKeys(trustedKeys);
 
-            var identity = CalculateDeviceIdentity();
+            var identity = MachineIdentityProvider.Calculate();
             var envelope = await ActivateRemoteAsync(request, identity, cancellationToken);
             var lease = VerifyLeaseEnvelope(envelope, trustedKeys);
             RequireLeaseIdentity(lease, request, identity.DeviceId);
@@ -153,7 +152,7 @@ public sealed class ActivationProvider : IActivationService
 
     private async Task<LeaseEnvelope> ActivateRemoteAsync(
         ActivateRequest request,
-        DeviceIdentity identity,
+        MachineIdentity identity,
         CancellationToken cancellationToken)
     {
         var wire = JsonSerializer.Serialize(new
@@ -453,75 +452,6 @@ public sealed class ActivationProvider : IActivationService
         return connection;
     }
 
-    private static DeviceIdentity CalculateDeviceIdentity()
-    {
-        string platform;
-        string release;
-        string architecture;
-        if (OperatingSystem.IsWindows())
-        {
-            platform = "windows";
-            var osVersion = Environment.OSVersion.Version;
-            release = LegacyWindowsRelease(osVersion);
-            architecture = (Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE") ??
-                            System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString()).ToLowerInvariant();
-        }
-        else
-        {
-            platform = RunUname("-s").ToLowerInvariant();
-            release = RunUname("-r").ToLowerInvariant();
-            architecture = RunUname("-m").ToLowerInvariant();
-        }
-        var normalized = $"architecture={architecture.Trim().ToLowerInvariant()}|os_version={release.Trim().ToLowerInvariant()}|platform={platform.Trim().ToLowerInvariant()}";
-        var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"{FingerprintSchemaVersion}|{normalized}"));
-        return new DeviceIdentity(
-            Convert.ToHexString(digest).ToLowerInvariant(),
-            platform.Trim().ToLowerInvariant(),
-            architecture.Trim().ToLowerInvariant());
-    }
-
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static string LegacyWindowsRelease(Version osVersion)
-    {
-        var productName = Microsoft.Win32.Registry.GetValue(
-            @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
-            "ProductName",
-            null)?.ToString() ?? string.Empty;
-        var isServer = productName.Contains("Server", StringComparison.OrdinalIgnoreCase);
-
-        if (isServer && osVersion.Major >= 10)
-        {
-            if (osVersion.Build >= 26100) return "2025Server";
-            if (osVersion.Build >= 20348) return "2022Server";
-            if (osVersion.Build >= 17763) return "2019Server";
-            if (osVersion.Build >= 14393) return "2016Server";
-        }
-
-        return osVersion.Major >= 10 && osVersion.Build >= 22000
-            ? "11"
-            : osVersion.Major >= 10 ? "10" : osVersion.Major.ToString();
-    }
-
-    private static string RunUname(string argument)
-    {
-        using var process = Process.Start(new ProcessStartInfo
-        {
-            FileName = "uname",
-            Arguments = argument,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        }) ?? throw new InvalidOperationException("Could not execute uname");
-        var output = process.StandardOutput.ReadToEnd().Trim();
-        process.WaitForExit();
-        if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
-        {
-            throw new InvalidOperationException("Could not resolve platform identity");
-        }
-        return output;
-    }
-
     private static void ValidatePlatformBaseUrl(string value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
@@ -608,7 +538,6 @@ public sealed class ActivationProvider : IActivationService
         return value.GetString();
     }
 
-    private sealed record DeviceIdentity(string DeviceId, string Platform, string Architecture);
     private sealed record LeaseEnvelope(string Payload, string Signature, string KeyId, string Algorithm);
     private sealed record LeasePayload(
         string LicenseId, string LeaseId, int Generation, int ServerRevision, string ProductId, string InstallationId,

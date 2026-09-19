@@ -37,3 +37,26 @@ public interface IUpdateService
 
     Task<OpenUpdateCenterResponse> OpenCenterAsync(OpenUpdateCenterRequest request, CancellationToken cancellationToken);
 }
+
+
+public interface IAccountSessionService
+{
+    Task<AccountSessionStartResponse> StartAsync(
+        AccountSessionStartRequest request,
+        CancellationToken cancellationToken);
+
+    Task<AccountSessionStatusResponse> StatusAsync(
+        AccountSessionStatusRequest request,
+        CancellationToken cancellationToken);
+
+    Task<AccountSessionLogoutResponse> LogoutAsync(
+        AccountSessionLogoutRequest request,
+        CancellationToken cancellationToken);
+}
+
+public interface ISoftwareCatalogService
+{
+    Task<SoftwareCatalogResponse> GetAsync(
+        SoftwareCatalogRequest request,
+        CancellationToken cancellationToken);
+}
