@@ -53,6 +53,18 @@
       {
         "method": "POST",
         "path": "/v1/update-center/open"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/account-session/start"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/account-session/status"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/account-session/logout"
       }
     ],
     "removed_product_update_routes": [
