@@ -58,6 +58,7 @@ jobs:
           cp certification/utm/Install-RenderDock-UtmTargetTrust.ps1 "$root/"
           cp certification/utm/Remove-RenderDock-UtmTargetTrust.ps1 "$root/"
           cp certification/utm/README-RenderDock-UtmTargetTrust.md "$root/README.md"
+          cp certification/utm/README-BKE-Launcher-Utm-E2E.md "$root/UTM-E2E-RUNBOOK.md"
           cp certification/utm/Collect-BkeLauncher-UtmEvidence.ps1 "$root/"
           printf '%s\n' "$GITHUB_SHA" > "$root/SOURCE-SHA.txt"
 
