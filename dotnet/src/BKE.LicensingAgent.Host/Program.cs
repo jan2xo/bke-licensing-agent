@@ -42,6 +42,17 @@ builder.Services.AddSingleton<IAccountSessionSecretStore>(_ => new WindowsDpapiA
 builder.Services.AddSingleton<IAccountSessionService>(services => new AccountSessionService(
     services.GetRequiredService<IAccountSessionRemote>(),
     services.GetRequiredService<IAccountSessionSecretStore>()));
+builder.Services.AddSingleton<SoftwareCatalogRemote>();
+builder.Services.AddSingleton<ISoftwareCatalogRemote>(services =>
+    services.GetRequiredService<SoftwareCatalogRemote>());
+builder.Services.AddSingleton<SqliteProductInventory>();
+builder.Services.AddSingleton<ILocalProductInventory>(services =>
+    services.GetRequiredService<SqliteProductInventory>());
+builder.Services.AddSingleton<ISoftwareCatalogService>(services => new SoftwareCatalogService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<ISoftwareCatalogRemote>(),
+    services.GetRequiredService<ILocalProductInventory>()));
 builder.Services.AddSingleton<UnavailableProviders>();
 
 var app = builder.Build();
@@ -313,6 +324,20 @@ app.MapPost(LocalAgentContract.AccountSessionLogoutPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
+    SoftwareCatalogRequest request,
+    ISoftwareCatalogService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return SoftwareCatalogInvalidRequest();
+    }
+
+    var response = await service.GetAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 await app.RunAsync();
 return 0;
 
@@ -378,6 +403,18 @@ static IResult AccountSessionLogoutInvalidRequest() =>
         LocalAgentContract.AccountSessionContractVersion,
         "FAILED",
         new AccountSessionError("INVALID_REQUEST", "The account-session request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult SoftwareCatalogInvalidRequest() =>
+    Results.Json(new SoftwareCatalogResponse(
+        LocalAgentContract.SoftwareCatalogCapabilityId,
+        LocalAgentContract.SoftwareCatalogContractVersion,
+        "FAILED",
+        Array.Empty<SoftwareCatalogItem>(),
+        new SoftwareCatalogError(
+            "INVALID_REQUEST",
+            "The software catalog request is invalid.",
+            false)),
         statusCode: StatusCodes.Status400BadRequest);
 
 static IResult NotificationInvalidRequest() =>
