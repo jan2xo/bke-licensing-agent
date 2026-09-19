@@ -27,7 +27,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private string _accountUserCode = string.Empty;
     private string _accountVerificationUri = string.Empty;
 
-    public MainWindowViewModel(
+    internal MainWindowViewModel(
         IAgentDesktopViewSource source,
         AccountSessionLoopbackClient accountSessionClient)
     {
