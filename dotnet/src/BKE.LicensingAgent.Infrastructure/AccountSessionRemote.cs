@@ -319,10 +319,16 @@ public sealed class AccountSessionRemote : IAccountSessionRemote, IDisposable
                 response.StatusCode);
         }
 
-        if (response.Headers.TryGetValues(
+        if (!response.Headers.TryGetValues(
                 "x-bke-account-session-version",
-                out var values) &&
-            !values.Contains(ProtocolVersion, StringComparer.Ordinal))
+                out var values))
+        {
+            throw new InvalidDataException("BKE account-session protocol response is missing its version");
+        }
+
+        var versions = values.ToArray();
+        if (versions.Length != 1 ||
+            !string.Equals(versions[0], ProtocolVersion, StringComparison.Ordinal))
         {
             throw new InvalidDataException("BKE account-session protocol response drifted");
         }
