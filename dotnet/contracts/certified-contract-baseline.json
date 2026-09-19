@@ -88,6 +88,12 @@
       "feed_limit_min": 1,
       "feed_limit_max": 200
     },
+    "account_session": {
+      "capability_id": "bke.account-session",
+      "contract_version": 1,
+      "secret_owner": "bke-licensing-agent",
+      "local_responses_expose_tokens": false
+    },
     "product_broadcasts": {
       "capability_id": "bke.product-broadcasts",
       "contract_version": 1,
