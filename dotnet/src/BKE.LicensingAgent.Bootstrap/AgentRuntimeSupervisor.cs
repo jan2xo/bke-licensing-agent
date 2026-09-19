@@ -77,6 +77,7 @@ internal sealed class AgentRuntimeSupervisor(ILogger<AgentRuntimeSupervisor> log
 
         start.Environment["BKE_AGENT_DATA_DIR"] = RuntimeBridgeContract.DataRoot;
         start.Environment["BKE_LICENSE_CENTER_EXECUTABLE"] = RuntimeBridgeContract.LicenseCenterExecutable;
+        start.Environment["BKE_AGENT_SERVICE_HOSTED"] = "1";
         return Process.Start(start) ?? throw new InvalidOperationException("Agent runtime process did not start");
     }
 
