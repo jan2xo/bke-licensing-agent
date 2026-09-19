@@ -206,7 +206,7 @@ internal static class Program
         else if (updatePolicy is not null ||
                  backupRoot is not null ||
                  waitPid is not null ||
-                 launchArgs.Count != 0 ||
+                 launchArgs.Length != 0 ||
                  readyMarker is not null ||
                  Optional("--startup-timeout") is not null)
         {
