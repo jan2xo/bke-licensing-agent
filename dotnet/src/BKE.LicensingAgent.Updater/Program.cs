@@ -18,6 +18,13 @@ internal static class Program
         "target_policy_sha256","issued_at","expires_at","signing_key_id","algorithm","signature",
     };
 
+    private static readonly HashSet<string> ProvisionRequestFields = new(StringComparer.Ordinal)
+    {
+        "schema","request_id","product_id","target_version","platform","architecture",
+        "install_root","entry_point","artifact_sha256","artifact_size","target_policy_sha256",
+        "issued_at","expires_at","signing_key_id","algorithm","signature",
+    };
+
     private static readonly HashSet<string> UpdateFields = new(StringComparer.Ordinal)
     {
         "schema","product_id","current_version","latest_version","minimum_supported_version","channel",
@@ -63,41 +70,86 @@ internal static class Program
 
         var runtimeRoot = ResolveDirectory(options.RuntimeRoot, "runtime_root");
         var requestPath = ResolveUnder(runtimeRoot, options.Request, "request");
-        var updatePath = ResolveUnder(runtimeRoot, options.UpdatePolicy, "update_policy");
         var targetPath = ResolveUnder(runtimeRoot, options.TargetPolicy, "target_policy");
         var artifactPath = ResolveUnder(runtimeRoot, options.Artifact, "artifact");
         var stagedRoot = ResolveUnder(runtimeRoot, options.StagedRoot, "staged_root");
-        var backupRoot = ResolveUnder(runtimeRoot, options.BackupRoot, "backup_root", mustExist: false);
         var transactionRoot = options.TransactionRoot is null
             ? null
             : ResolveUnder(runtimeRoot, options.TransactionRoot, "transaction_root", mustExist: false);
 
         var trust = LoadTrust(runtimeRoot);
         using var requestDocument = JsonDocument.Parse(File.ReadAllText(requestPath));
-        using var updateDocument = JsonDocument.Parse(File.ReadAllText(updatePath));
         using var targetDocument = JsonDocument.Parse(File.ReadAllText(targetPath));
-
-        var request = VerifyRequest(requestDocument.RootElement, trust, runtimeRoot);
-        var update = VerifyUpdate(updateDocument.RootElement, trust, request);
         var target = VerifyTarget(targetDocument.RootElement, trust);
 
-        ComposeAuthority(request, update, target, artifactPath, updateDocument.RootElement, targetDocument.RootElement);
-        var plan = ComposePlan(target, stagedRoot, backupRoot, transactionRoot, options.TransactionId, options.LaunchArgs, options.ReadyMarker, options.StartupTimeout);
-        ReplaceAndLaunch(plan, options.WaitPid);
+        if (options.Mode == OperationMode.Update)
+        {
+            if (options.UpdatePolicy is null || options.BackupRoot is null)
+                throw new InvalidDataException("update authority inputs are incomplete");
+
+            var updatePath = ResolveUnder(runtimeRoot, options.UpdatePolicy, "update_policy");
+            var backupRoot = ResolveUnder(runtimeRoot, options.BackupRoot, "backup_root", mustExist: false);
+            using var updateDocument = JsonDocument.Parse(File.ReadAllText(updatePath));
+
+            var request = VerifyRequest(requestDocument.RootElement, trust, runtimeRoot);
+            var update = VerifyUpdate(updateDocument.RootElement, trust, request);
+            ComposeAuthority(
+                request,
+                update,
+                target,
+                artifactPath,
+                updateDocument.RootElement,
+                targetDocument.RootElement);
+            var plan = ComposePlan(
+                target,
+                stagedRoot,
+                backupRoot,
+                transactionRoot,
+                options.TransactionId,
+                options.LaunchArgs,
+                options.ReadyMarker,
+                options.StartupTimeout);
+            ReplaceAndLaunch(plan, options.WaitPid);
+            return;
+        }
+
+        var provisionRequest = VerifyProvisionRequest(
+            requestDocument.RootElement,
+            trust,
+            runtimeRoot);
+        ComposeProvisionAuthority(
+            provisionRequest,
+            target,
+            artifactPath,
+            targetDocument.RootElement);
+        var provisionPlan = ComposeProvisionPlan(
+            provisionRequest,
+            target,
+            stagedRoot,
+            transactionRoot,
+            options.TransactionId);
+        Provision(provisionPlan);
     }
 
     private static Options Parse(string[] args)
     {
         var values = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var privileged = false;
+        OperationMode? mode = null;
+
         for (var index = 0; index < args.Length; index++)
         {
             var current = args[index];
-            if (current == "--privileged-update")
+            if (current is "--privileged-update" or "--privileged-provision")
             {
-                privileged = true;
+                var requested = current == "--privileged-update"
+                    ? OperationMode.Update
+                    : OperationMode.Provision;
+                if (mode is not null)
+                    throw new InvalidDataException("exactly one privileged operation mode is required");
+                mode = requested;
                 continue;
             }
+
             if (!current.StartsWith("--", StringComparison.Ordinal) || index + 1 >= args.Length)
                 throw new InvalidDataException($"invalid privileged updater argument: {current}");
             var value = args[++index];
@@ -109,41 +161,73 @@ internal static class Program
             list.Add(value);
         }
 
-        if (!privileged) throw new InvalidDataException("--privileged-update is required");
+        if (mode is null)
+            throw new InvalidDataException("--privileged-update or --privileged-provision is required");
+
         string Required(string name) =>
             values.TryGetValue(name, out var list) && list.Count == 1 && !string.IsNullOrWhiteSpace(list[0])
                 ? list[0]
                 : throw new InvalidDataException($"{name} is required");
+
         string? Optional(string name) =>
             values.TryGetValue(name, out var list) && list.Count == 1 ? list[0] : null;
 
         int? waitPid = null;
         if (Optional("--wait-pid") is { } wait)
         {
-            if (!int.TryParse(wait, out var parsed) || parsed <= 0) throw new InvalidDataException("wait_pid must be positive");
+            if (!int.TryParse(wait, out var parsed) || parsed <= 0)
+                throw new InvalidDataException("wait_pid must be positive");
             waitPid = parsed;
         }
 
         var timeout = 10d;
         if (Optional("--startup-timeout") is { } timeoutRaw &&
-            (!double.TryParse(timeoutRaw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out timeout) || timeout <= 0))
+            (!double.TryParse(
+                timeoutRaw,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out timeout) || timeout <= 0))
         {
             throw new InvalidDataException("startup_timeout must be positive");
         }
 
+        var launchArgs = values.TryGetValue("--launch-arg", out var launch)
+            ? launch.ToArray()
+            : [];
+        var readyMarker = Optional("--ready-marker");
+        var updatePolicy = Optional("--update-policy");
+        var backupRoot = Optional("--backup-root");
+
+        if (mode == OperationMode.Update)
+        {
+            updatePolicy ??= Required("--update-policy");
+            backupRoot ??= Required("--backup-root");
+        }
+        else if (updatePolicy is not null ||
+                 backupRoot is not null ||
+                 waitPid is not null ||
+                 launchArgs.Count != 0 ||
+                 readyMarker is not null ||
+                 Optional("--startup-timeout") is not null)
+        {
+            throw new InvalidDataException(
+                "first-install provisioning does not accept update, backup, wait, or launch arguments");
+        }
+
         return new Options(
+            mode.Value,
             Required("--runtime-root"),
             Required("--request"),
-            Required("--update-policy"),
+            updatePolicy,
             Required("--target-policy"),
             Required("--artifact"),
             Required("--staged-root"),
-            Required("--backup-root"),
+            backupRoot,
             Optional("--transaction-root"),
             Optional("--transaction-id"),
             waitPid,
-            values.TryGetValue("--launch-arg", out var launch) ? launch.ToArray() : [],
-            Optional("--ready-marker"),
+            launchArgs,
+            readyMarker,
             timeout);
     }
 
@@ -207,18 +291,7 @@ internal static class Program
             throw new InvalidDataException("unknown Agent signing key");
         VerifySignature(root, key, "invalid privileged request signature");
 
-        var replay = Path.Combine(runtimeRoot, "replay");
-        Directory.CreateDirectory(replay);
-        var replayPath = Path.Combine(replay, requestId);
-        try
-        {
-            using var stream = new FileStream(replayPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            stream.Write(Encoding.ASCII.GetBytes("consumed\n"));
-        }
-        catch (IOException)
-        {
-            throw new InvalidDataException("privileged request already consumed");
-        }
+        ConsumeReplay(runtimeRoot, requestId);
 
         return new VerifiedRequest(
             requestId,
@@ -232,6 +305,62 @@ internal static class Program
             artifactHash,
             artifactSize,
             updateHash,
+            targetHash);
+    }
+
+    private static VerifiedProvisionRequest VerifyProvisionRequest(
+        JsonElement root,
+        TrustedRuntime trust,
+        string runtimeRoot)
+    {
+        RequireExact(root, ProvisionRequestFields, "privileged provision request");
+        if (RequiredString(root, "schema") != "bke.privileged-provision-request.v1" ||
+            RequiredString(root, "algorithm") != "Ed25519")
+        {
+            throw new InvalidDataException("unsupported privileged provision request contract");
+        }
+
+        var requestId = RequiredString(root, "request_id");
+        if (!RequestIdPattern.IsMatch(requestId))
+            throw new InvalidDataException("invalid request_id");
+
+        var targetVersion = RequiredString(root, "target_version");
+        _ = SemanticVersion.Parse(targetVersion);
+
+        var artifactHash = RequiredHash(root, "artifact_sha256");
+        var targetHash = RequiredHash(root, "target_policy_sha256");
+        var artifactSize = RequiredLong(root, "artifact_size");
+        if (artifactSize < 0)
+            throw new InvalidDataException("invalid artifact_size");
+
+        var issued = RequiredTime(root, "issued_at");
+        var expires = RequiredTime(root, "expires_at");
+        var lifetime = expires - issued;
+        if (lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromMinutes(5))
+            throw new InvalidDataException("invalid request lifetime");
+
+        var now = DateTimeOffset.UtcNow;
+        if (issued - now > TimeSpan.FromSeconds(30))
+            throw new InvalidDataException("request issued in the future");
+        if (now >= expires)
+            throw new InvalidDataException("privileged provision request expired");
+
+        var keyId = RequiredString(root, "signing_key_id");
+        if (!trust.AgentKeys.TryGetValue(keyId, out var key))
+            throw new InvalidDataException("unknown Agent signing key");
+        VerifySignature(root, key, "invalid privileged provision request signature");
+        ConsumeReplay(runtimeRoot, requestId);
+
+        return new VerifiedProvisionRequest(
+            requestId,
+            RequiredString(root, "product_id"),
+            targetVersion,
+            RequiredString(root, "platform"),
+            RequiredString(root, "architecture"),
+            Path.GetFullPath(RequiredString(root, "install_root")),
+            RequiredRelativePath(root, "entry_point"),
+            artifactHash,
+            artifactSize,
             targetHash);
     }
 
@@ -350,6 +479,104 @@ internal static class Program
         var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         if (!string.Equals(digest, request.ArtifactSha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("artifact hash mismatch");
+    }
+
+    private static void ComposeProvisionAuthority(
+        VerifiedProvisionRequest request,
+        VerifiedTarget target,
+        string artifactPath,
+        JsonElement targetDocument)
+    {
+        if (request.ProductId != target.ProductId)
+            throw new InvalidDataException("product identity mismatch");
+        if (request.Platform != target.Platform)
+            throw new InvalidDataException("platform mismatch");
+        if (request.Architecture != target.Architecture)
+            throw new InvalidDataException("architecture mismatch");
+        if (!PathEquals(request.InstallRoot, target.InstallRoot))
+            throw new InvalidDataException("install root mismatch");
+        if (!string.Equals(request.EntryPoint, target.EntryPoint, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("entry point mismatch");
+        if (request.TargetPolicySha256 != Sha256(Canonical(targetDocument)))
+            throw new InvalidDataException("target policy hash mismatch");
+
+        var info = new FileInfo(artifactPath);
+        if (!info.Exists || info.Length != request.ArtifactSize)
+            throw new InvalidDataException("artifact size mismatch");
+        using var stream = File.OpenRead(artifactPath);
+        var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (!string.Equals(digest, request.ArtifactSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("artifact hash mismatch");
+    }
+
+    private static ProvisionPlan ComposeProvisionPlan(
+        VerifiedProvisionRequest request,
+        VerifiedTarget target,
+        string stagedRoot,
+        string? transactionRoot,
+        string? transactionId)
+    {
+        var installRoot = Path.GetFullPath(target.InstallRoot);
+        var stage = Path.GetFullPath(stagedRoot);
+
+        if (Directory.Exists(installRoot) || File.Exists(installRoot))
+            throw new InvalidDataException("first install refused because the target already exists");
+        if (PathEquals(installRoot, stage) || IsUnder(installRoot, stage) || IsUnder(stage, installRoot))
+            throw new InvalidDataException("helper roots overlap");
+
+        var stagedExecutable = Path.GetFullPath(Path.Combine(stage, target.EntryPoint));
+        if (!IsUnder(stage, stagedExecutable) || !File.Exists(stagedExecutable))
+            throw new InvalidDataException("authorized staged executable is missing");
+
+        var executable = Path.GetFullPath(Path.Combine(installRoot, target.EntryPoint));
+        if (!IsUnder(installRoot, executable))
+            throw new InvalidDataException("authorized entry point escapes install root");
+
+        return new ProvisionPlan(
+            installRoot,
+            stage,
+            executable,
+            request.TargetVersion,
+            transactionRoot,
+            transactionId);
+    }
+
+    private static void Provision(ProvisionPlan plan)
+    {
+        if (Directory.Exists(plan.InstallRoot) || File.Exists(plan.InstallRoot))
+            throw new InvalidDataException("first install refused because the target already exists");
+
+        var parent = Path.GetDirectoryName(plan.InstallRoot)
+            ?? throw new InvalidDataException("install root has no parent");
+        Directory.CreateDirectory(parent);
+
+        var candidate = plan.InstallRoot + ".bke-install-" + Guid.NewGuid().ToString("N");
+        var moved = false;
+        try
+        {
+            CopyDirectory(plan.StagedRoot, candidate);
+            var relativeEntry = Path.GetRelativePath(plan.InstallRoot, plan.Executable);
+            var candidateExecutable = Path.GetFullPath(Path.Combine(candidate, relativeEntry));
+            if (!IsUnder(candidate, candidateExecutable) || !File.Exists(candidateExecutable))
+                throw new InvalidDataException("provisioned candidate is missing its authorized entry point");
+
+            Directory.Move(candidate, plan.InstallRoot);
+            moved = true;
+
+            if (!File.Exists(plan.Executable))
+                throw new InvalidDataException("installed entry point is missing after commit");
+
+            WriteProvisionTransaction(plan, "COMMITTED", null);
+        }
+        catch (Exception exception)
+        {
+            if (Directory.Exists(candidate))
+                Directory.Delete(candidate, true);
+            if (moved && Directory.Exists(plan.InstallRoot))
+                Directory.Delete(plan.InstallRoot, true);
+            WriteProvisionTransaction(plan, "FAILED_CLEANED", exception.Message);
+            throw;
+        }
     }
 
     private static Plan ComposePlan(
@@ -489,6 +716,57 @@ internal static class Program
         if (reason is not null) document["reason"] = reason;
         var temporary = Path.Combine(folder, "state.json.tmp");
         File.WriteAllText(temporary, JsonSerializer.Serialize(document), new UTF8Encoding(false));
+        File.Move(temporary, Path.Combine(folder, "state.json"), true);
+    }
+
+    private static void ConsumeReplay(string runtimeRoot, string requestId)
+    {
+        var replay = Path.Combine(runtimeRoot, "replay");
+        Directory.CreateDirectory(replay);
+        var replayPath = Path.Combine(replay, requestId);
+        try
+        {
+            using var stream = new FileStream(
+                replayPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None);
+            stream.Write(Encoding.ASCII.GetBytes("consumed\n"));
+        }
+        catch (IOException)
+        {
+            throw new InvalidDataException("privileged request already consumed");
+        }
+    }
+
+    private static void WriteProvisionTransaction(
+        ProvisionPlan plan,
+        string state,
+        string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(plan.TransactionRoot) ||
+            string.IsNullOrWhiteSpace(plan.TransactionId))
+        {
+            return;
+        }
+
+        var folder = Path.Combine(plan.TransactionRoot, plan.TransactionId);
+        Directory.CreateDirectory(folder);
+        var document = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["transaction_id"] = plan.TransactionId,
+            ["state"] = state,
+            ["target_version"] = plan.TargetVersion,
+            ["operation"] = "PROVISION",
+        };
+        if (reason is not null)
+            document["reason"] = reason;
+
+        var temporary = Path.Combine(folder, "state.json.tmp");
+        File.WriteAllText(
+            temporary,
+            JsonSerializer.Serialize(document),
+            new UTF8Encoding(false));
         File.Move(temporary, Path.Combine(folder, "state.json"), true);
     }
 
@@ -686,10 +964,27 @@ internal static class Program
 
     private static string Sha256(byte[] data) => Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
 
+    private enum OperationMode
+    {
+        Update,
+        Provision,
+    }
+
     private sealed record Options(
-        string RuntimeRoot, string Request, string UpdatePolicy, string TargetPolicy, string Artifact,
-        string StagedRoot, string BackupRoot, string? TransactionRoot, string? TransactionId, int? WaitPid,
-        IReadOnlyList<string> LaunchArgs, string? ReadyMarker, double StartupTimeout);
+        OperationMode Mode,
+        string RuntimeRoot,
+        string Request,
+        string? UpdatePolicy,
+        string TargetPolicy,
+        string Artifact,
+        string StagedRoot,
+        string? BackupRoot,
+        string? TransactionRoot,
+        string? TransactionId,
+        int? WaitPid,
+        IReadOnlyList<string> LaunchArgs,
+        string? ReadyMarker,
+        double StartupTimeout);
 
     private sealed record TrustedRuntime(
         IReadOnlyDictionary<string, byte[]> AgentKeys,
@@ -705,6 +1000,18 @@ internal static class Program
         string Platform, string Architecture, string InstallRoot, string EntryPoint,
         string ArtifactSha256, long ArtifactSize, string UpdatePolicySha256, string TargetPolicySha256);
 
+    private sealed record VerifiedProvisionRequest(
+        string RequestId,
+        string ProductId,
+        string TargetVersion,
+        string Platform,
+        string Architecture,
+        string InstallRoot,
+        string EntryPoint,
+        string ArtifactSha256,
+        long ArtifactSize,
+        string TargetPolicySha256);
+
     private sealed record VerifiedUpdate(
         string ProductId, string CurrentVersion, string LatestVersion, string Platform,
         string Architecture, string ArtifactSha256, long ArtifactSize);
@@ -717,6 +1024,14 @@ internal static class Program
         string InstallRoot, string StagedRoot, string BackupRoot, string Executable,
         string? TransactionRoot, string? TransactionId, IReadOnlyList<string> LaunchArgs,
         string? ReadyMarker, double StartupTimeout);
+
+    private sealed record ProvisionPlan(
+        string InstallRoot,
+        string StagedRoot,
+        string Executable,
+        string TargetVersion,
+        string? TransactionRoot,
+        string? TransactionId);
 
     private sealed record SemanticVersion(int Major, int Minor, int Patch, string? PreRelease) : IComparable<SemanticVersion>
     {
