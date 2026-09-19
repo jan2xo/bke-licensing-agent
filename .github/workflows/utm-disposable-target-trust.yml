@@ -1,0 +1,113 @@
+name: UTM disposable Render Dock target trust
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/utm-disposable-target-trust.yml"
+      - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-render-dock-trust:
+    name: Generate Render Dock x64 + ARM64 disposable trust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build release tooling
+        run: |
+          dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
+
+      - name: Generate disposable Render Dock target policies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root="dist/utm-render-dock-target-trust"
+          mkdir -p "$root/x64" "$root/arm64"
+
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
+            --configuration Release --no-build -- \
+            generate-disposable-target-policy \
+            --output-dir "$root/x64" \
+            --product-id "bke-render-dock" \
+            --platform "windows" \
+            --architecture "x86_64" \
+            --install-root 'C:\Program Files\BKE Digital Solutions\Render Dock' \
+            --entry-point 'RENDER DOCK.exe' \
+            --target-key-id "utm-render-dock-x64-target-v1" \
+            --policy-id "utm-render-dock-windows-x64-v1" \
+            --revision "1"
+
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
+            --configuration Release --no-build -- \
+            generate-disposable-target-policy \
+            --output-dir "$root/arm64" \
+            --product-id "bke-render-dock" \
+            --platform "windows" \
+            --architecture "arm64" \
+            --install-root 'C:\Program Files\BKE Digital Solutions\Render Dock' \
+            --entry-point 'RENDER DOCK.exe' \
+            --target-key-id "utm-render-dock-arm64-target-v1" \
+            --policy-id "utm-render-dock-windows-arm64-v1" \
+            --revision "1"
+
+      - name: Certify disposable bundle shape and private-key absence
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="dist/utm-render-dock-target-trust"
+
+          test -f "$root/x64/target-keys/utm-render-dock-x64-target-v1.pem"
+          test -f "$root/x64/target-policies/utm-render-dock-windows-x64-v1.json"
+          test -f "$root/arm64/target-keys/utm-render-dock-arm64-target-v1.pem"
+          test -f "$root/arm64/target-policies/utm-render-dock-windows-arm64-v1.json"
+
+          if grep -R --binary-files=without-match -n "BEGIN PRIVATE KEY" "$root"; then
+            echo "Disposable target-trust artifact contains private-key material."
+            exit 1
+          fi
+
+          jq -e '
+            .schema == "bke.install-target-policy.v1" and
+            .product_id == "bke-render-dock" and
+            .platform == "windows" and
+            .architecture == "x86_64" and
+            .install_root == "C:\\Program Files\\BKE Digital Solutions\\Render Dock" and
+            .entry_point == "RENDER DOCK.exe" and
+            .algorithm == "Ed25519"
+          ' "$root/x64/target-policies/utm-render-dock-windows-x64-v1.json" >/dev/null
+
+          jq -e '
+            .schema == "bke.install-target-policy.v1" and
+            .product_id == "bke-render-dock" and
+            .platform == "windows" and
+            .architecture == "arm64" and
+            .install_root == "C:\\Program Files\\BKE Digital Solutions\\Render Dock" and
+            .entry_point == "RENDER DOCK.exe" and
+            .algorithm == "Ed25519"
+          ' "$root/arm64/target-policies/utm-render-dock-windows-arm64-v1.json" >/dev/null
+
+          (
+            cd "$root"
+            find . -type f ! -name SHA256SUMS.txt -print0 |
+              sort -z |
+              xargs -0 sha256sum > SHA256SUMS.txt
+          )
+
+          echo "Disposable Render Dock UTM trust certification: PASS"
+
+      - name: Upload disposable UTM trust bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: UTM-TEST-ONLY-Render-Dock-Target-Trust
+          path: dist/utm-render-dock-target-trust
+          if-no-files-found: error
+          retention-days: 7
