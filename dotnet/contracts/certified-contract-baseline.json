@@ -1,6 +1,6 @@
 {
   "inventory_id": "bke.licensing-agent.certified-contract-baseline",
-  "inventory_version": 2,
+  "inventory_version": 3,
   "local_api": {
     "contract_id": "bke.licensing-agent.local-api",
     "contract_version": 1,
@@ -65,6 +65,10 @@
       {
         "method": "POST",
         "path": "/v1/account-session/logout"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/software/catalog"
       }
     ],
     "removed_product_update_routes": [
@@ -115,6 +119,17 @@
         "EVERY_LAUNCH"
       ],
       "remote_arbitrary_presentation_content_allowed": false
+    },
+    "software_catalog": {
+      "capability_id": "bke.software-catalog",
+      "contract_version": 1,
+      "execution_type_owner": "bke-digital-solutions",
+      "installation_state_owner": "bke-licensing-agent",
+      "local_responses_expose_cloud_tokens": false,
+      "execution_types": [
+        "LAUNCHER_PLUGIN",
+        "STANDALONE"
+      ]
     }
   },
   "notifications": {
