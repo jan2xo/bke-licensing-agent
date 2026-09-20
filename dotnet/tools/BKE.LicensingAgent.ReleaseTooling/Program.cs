@@ -25,6 +25,7 @@ internal static class Program
             return args[0] switch
             {
                 "generate-disposable-trust" => GenerateDisposableTrust(args[1..]),
+                "generate-disposable-target-policy" => GenerateDisposableTargetPolicy(args[1..]),
                 "generate-production-update-key" => GenerateProductionUpdateKey(args[1..]),
                 "build-signing-request" => BuildSigningRequest(args[1..]),
                 _ => throw new InvalidDataException($"unknown release tooling command: {args[0]}"),
@@ -108,6 +109,187 @@ internal static class Program
             new UTF8Encoding(false));
 
         Console.WriteLine("Disposable .NET packaging trust generated.");
+        return 0;
+    }
+
+    private static int GenerateDisposableTargetPolicy(string[] args)
+    {
+        var options = Parse(args);
+        var output = Path.GetFullPath(Required(options, "--output-dir"));
+        var productId = Required(options, "--product-id");
+        var platform = Required(options, "--platform");
+        var architecture = Required(options, "--architecture");
+        var installRoot = Required(options, "--install-root");
+        var entryPoint = Required(options, "--entry-point");
+        var targetKeyId = Required(options, "--target-key-id");
+        var policyId = Required(options, "--policy-id");
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                productId,
+                "^[a-z0-9-]{1,128}$"))
+        {
+            throw new InvalidDataException("disposable target product ID is malformed");
+        }
+
+        if (platform != "windows")
+        {
+            throw new InvalidDataException(
+                "disposable target tooling currently supports Windows only");
+        }
+
+        if (architecture is not ("x86_64" or "arm64"))
+        {
+            throw new InvalidDataException(
+                "disposable target architecture must be x86_64 or arm64");
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                targetKeyId,
+                "^[A-Za-z0-9._-]{1,160}$") ||
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                policyId,
+                "^[A-Za-z0-9._-]{1,160}$"))
+        {
+            throw new InvalidDataException(
+                "disposable target key or policy ID is malformed");
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                installRoot,
+                @"^[A-Za-z]:\\") ||
+            installRoot.Replace('/', '\\')
+                .Split('\\', StringSplitOptions.RemoveEmptyEntries)
+                .Any(part => part is "." or ".."))
+        {
+            throw new InvalidDataException(
+                "disposable target install root must be an absolute Windows path without traversal");
+        }
+
+        var normalizedEntry = entryPoint.Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(normalizedEntry) ||
+            normalizedEntry.StartsWith('/') ||
+            (normalizedEntry.Length >= 2 && normalizedEntry[1] == ':') ||
+            normalizedEntry.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Any(part => part is "." or ".."))
+        {
+            throw new InvalidDataException(
+                "disposable target entry point must be a relative path without traversal");
+        }
+
+        var revision = 1;
+        if (options.TryGetValue("--revision", out var revisionRaw) &&
+            (!int.TryParse(revisionRaw, out revision) || revision <= 0))
+        {
+            throw new InvalidDataException(
+                "disposable target revision must be a positive integer");
+        }
+
+        var targetKeys = Path.Combine(output, "target-keys");
+        var targetPolicies = Path.Combine(output, "target-policies");
+        Directory.CreateDirectory(targetKeys);
+        Directory.CreateDirectory(targetPolicies);
+
+        var publicPath = Path.Combine(targetKeys, targetKeyId + ".pem");
+        var policyPath = Path.Combine(targetPolicies, policyId + ".json");
+        if (File.Exists(publicPath) || File.Exists(policyPath))
+        {
+            throw new IOException(
+                "refusing to overwrite disposable target trust");
+        }
+
+        var generator = new Ed25519KeyPairGenerator();
+        generator.Init(
+            new Ed25519KeyGenerationParameters(
+                new SecureRandom()));
+        var pair = generator.GenerateKeyPair();
+        var privateKey =
+            (Ed25519PrivateKeyParameters)pair.Private;
+        var publicKey =
+            (Ed25519PublicKeyParameters)pair.Public;
+
+        using (var stream = File.CreateText(publicPath))
+        {
+            var writer = new OpenSslPemWriter(stream);
+            var info =
+                SubjectPublicKeyInfoFactory
+                    .CreateSubjectPublicKeyInfo(publicKey);
+            writer.WriteObject(
+                new BouncyPemObject(
+                    "PUBLIC KEY",
+                    info.GetEncoded()));
+        }
+
+        var unsigned =
+            new SortedDictionary<string, object?>(
+                StringComparer.Ordinal)
+            {
+                ["schema"] =
+                    "bke.install-target-policy.v1",
+                ["policy_id"] = policyId,
+                ["revision"] = revision,
+                ["product_id"] = productId,
+                ["platform"] = platform,
+                ["architecture"] = architecture,
+                ["install_root"] = installRoot,
+                ["entry_point"] =
+                    normalizedEntry.Replace('/', '\\'),
+                ["signing_key_id"] = targetKeyId,
+                ["algorithm"] = "Ed25519",
+            };
+
+        var canonical = Canonical(unsigned);
+        var signer = new Ed25519Signer();
+        signer.Init(true, privateKey);
+        signer.BlockUpdate(
+            canonical,
+            0,
+            canonical.Length);
+
+        var policy =
+            new SortedDictionary<string, object?>(
+                unsigned,
+                StringComparer.Ordinal)
+            {
+                ["signature"] =
+                    Convert.ToBase64String(
+                        signer.GenerateSignature()),
+            };
+
+        File.WriteAllText(
+            policyPath,
+            JsonSerializer.Serialize(
+                policy,
+                JsonIndented) +
+            Environment.NewLine,
+            new UTF8Encoding(false));
+
+        var fingerprint =
+            Convert.ToHexString(
+                SHA256.HashData(
+                    publicKey.GetEncoded()))
+                .ToLowerInvariant();
+
+        File.WriteAllText(
+            Path.Combine(output, "DISPOSABLE-TEST-ONLY.txt"),
+            $"DISPOSABLE UTM TEST TRUST{Environment.NewLine}" +
+            $"product_id={productId}{Environment.NewLine}" +
+            $"platform={platform}{Environment.NewLine}" +
+            $"architecture={architecture}{Environment.NewLine}" +
+            $"policy_id={policyId}{Environment.NewLine}" +
+            $"target_key_id={targetKeyId}{Environment.NewLine}" +
+            $"public_key_sha256={fingerprint}{Environment.NewLine}" +
+            $"PRIVATE KEY WAS GENERATED IN MEMORY ONLY AND WAS NOT WRITTEN.{Environment.NewLine}" +
+            $"DO NOT USE THIS TRUST BUNDLE FOR PRODUCTION.{Environment.NewLine}",
+            new UTF8Encoding(false));
+
+        Console.WriteLine(
+            "Disposable target policy generated.");
+        Console.WriteLine(
+            $"policy_id={policyId}");
+        Console.WriteLine(
+            $"public_key_sha256={fingerprint}");
+        Console.WriteLine(
+            "PRIVATE KEY WAS NOT WRITTEN.");
         return 0;
     }
 
