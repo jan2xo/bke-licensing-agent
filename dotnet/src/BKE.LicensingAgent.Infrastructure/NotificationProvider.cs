@@ -323,6 +323,139 @@ public sealed class NotificationProvider : INotificationService
         }
     }
 
+    private async Task SyncAccountNotificationsAsync(
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        var session = await _accountSessionService.StatusAsync(
+            new AccountSessionStatusRequest($"notification-sync-{Guid.NewGuid():N}"),
+            cancellationToken);
+        if (!string.Equals(session.Status, "AUTHENTICATED", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var stored = await _accountSessionStore.ReadAsync(cancellationToken);
+        if (stored is not ActiveAccountSessionState active)
+        {
+            return;
+        }
+
+        var uri = new Uri(
+            _platformBaseUri,
+            $"/api/agent-sessions/notifications?product_id={Uri.EscapeDataString(productId)}&limit=200");
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.UserAgent.ParseAdd("BKE-Licensing-Agent/1");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", active.AccessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString());
+
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.NotFound)
+        {
+            return;
+        }
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            throw new InvalidDataException(
+                $"Account notification authority returned HTTP {(int)response.StatusCode}");
+        }
+
+        if (!response.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var protocolValues) ||
+            protocolValues.SingleOrDefault() != AccountSessionRemote.ProtocolVersion)
+        {
+            throw new InvalidDataException(
+                "Account notification protocol version drifted.");
+        }
+
+        await using var stream =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken);
+        var root = document.RootElement;
+
+        if (root.ValueKind != JsonValueKind.Object ||
+            BoundedString(root, "status", 32) != "ok" ||
+            BoundedString(root, "account_id", 256) != active.Account.AccountId ||
+            BoundedString(root, "product_id", 128) != productId ||
+            !root.TryGetProperty("notifications", out var notifications) ||
+            notifications.ValueKind != JsonValueKind.Array ||
+            notifications.GetArrayLength() > 200)
+        {
+            throw new InvalidDataException(
+                "Invalid account notification response.");
+        }
+
+        foreach (var raw in notifications.EnumerateArray())
+        {
+            if (raw.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification item.");
+            }
+
+            var id = BoundedString(raw, "id", 128);
+            var source = BoundedString(raw, "source", 128);
+            var eventName = BoundedString(raw, "event", 128);
+            var title = BoundedString(raw, "title", 256);
+            var body = BoundedString(raw, "body", 4096);
+            var category = AccountCategory(
+                BoundedString(raw, "category", 32));
+            var priority = BoundedString(raw, "priority", 32);
+            var severity = priority switch
+            {
+                "LOW" or "NORMAL" => "information",
+                "HIGH" or "URGENT" => "warning",
+                _ => throw new InvalidDataException(
+                    "Invalid account notification priority."),
+            };
+            var createdAt = BoundedString(raw, "created_at", 64);
+            if (!DateTimeOffset.TryParse(createdAt, out var created))
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification created_at.");
+            }
+
+            string? expiresAt = null;
+            if (raw.TryGetProperty("expires_at", out var expiry) &&
+                expiry.ValueKind != JsonValueKind.Null)
+            {
+                if (expiry.ValueKind != JsonValueKind.String ||
+                    !DateTimeOffset.TryParse(expiry.GetString(), out var parsedExpiry))
+                {
+                    throw new InvalidDataException(
+                        "Invalid account notification expires_at.");
+                }
+                expiresAt = parsedExpiry.ToUniversalTime().ToString("O");
+            }
+
+            EnsureAccountNotification(
+                productId,
+                id,
+                source,
+                eventName,
+                title,
+                body,
+                category,
+                severity,
+                created.ToUniversalTime().ToString("O"),
+                expiresAt);
+        }
+    }
+
     private async Task SyncAsync(string productId, string version, CancellationToken cancellationToken)
     {
         var uri = new Uri(
