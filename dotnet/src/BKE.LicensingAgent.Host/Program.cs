@@ -2,6 +2,31 @@ using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 using BKE.LicensingAgent.Host;
 using BKE.LicensingAgent.Infrastructure;
+using BKE.LicensingAgent.Storage;
+
+var agentDataDir =
+    Environment.GetEnvironmentVariable("BKE_AGENT_DATA_DIR") ??
+    Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".local",
+        "share",
+        "bke_licensing_agent");
+agentDataDir = Path.GetFullPath(agentDataDir);
+
+try
+{
+    AgentDatabase.EnsureInitialized(agentDataDir);
+    Environment.SetEnvironmentVariable(
+        "BKE_AGENT_DATA_DIR",
+        agentDataDir,
+        EnvironmentVariableTarget.Process);
+}
+catch (Exception exception)
+{
+    Console.Error.WriteLine(
+        $"BKE Licensing Agent storage bootstrap failed: {exception.Message}");
+    return 70;
+}
 
 var port = LocalAgentContract.DefaultPort;
 var configuredPort = Environment.GetEnvironmentVariable("BKE_AGENT_PORT");
