@@ -15,7 +15,6 @@ namespace BKE.LicensingAgent.Infrastructure;
 
 public sealed class ActivationProvider : IActivationService
 {
-    private const int ExpectedSchemaVersion = 8;
     private static readonly HashSet<HttpStatusCode> RetryableStatuses = new()
     {
         HttpStatusCode.RequestTimeout,
@@ -444,7 +443,7 @@ public sealed class ActivationProvider : IActivationService
         command.CommandText = "SELECT version FROM schema_version LIMIT 1";
         var value = command.ExecuteScalar();
         var version = value is long raw ? checked((int)raw) : Convert.ToInt32(value);
-        if (version != ExpectedSchemaVersion)
+        if (version != LocalAgentContract.StorageSchemaVersion)
         {
             connection.Dispose();
             throw new InvalidDataException("Agent database schema mismatch");

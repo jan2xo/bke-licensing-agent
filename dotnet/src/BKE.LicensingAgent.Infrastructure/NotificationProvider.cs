@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -49,21 +50,50 @@ public sealed class NotificationProvider : INotificationService
         };
 
     private readonly AuthorizationProvider _authorization;
+    private readonly IAccountSessionService _accountSessionService;
+    private readonly IAccountSessionSecretStore _accountSessionStore;
     private readonly string _databasePath;
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
     private readonly object _deliveryLock = new();
     private readonly Dictionary<string, HashSet<string>> _everyLaunchIds = new(StringComparer.Ordinal);
 
-    public NotificationProvider(AuthorizationProvider authorization)
+    public NotificationProvider(
+        AuthorizationProvider authorization,
+        IAccountSessionService accountSessionService,
+        IAccountSessionSecretStore accountSessionStore)
+        : this(
+            authorization,
+            accountSessionService,
+            accountSessionStore,
+            new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            {
+                Timeout = TimeSpan.FromSeconds(5),
+            },
+            Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
+                "https://jl-bke.com")
     {
+    }
+
+    public NotificationProvider(
+        AuthorizationProvider authorization,
+        IAccountSessionService accountSessionService,
+        IAccountSessionSecretStore accountSessionStore,
+        HttpClient httpClient,
+        string platformBaseUrl)
+    {
+        ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentException.ThrowIfNullOrWhiteSpace(platformBaseUrl);
+
         _authorization = authorization;
+        _accountSessionService = accountSessionService;
+        _accountSessionStore = accountSessionStore;
         var dataDir = Environment.GetEnvironmentVariable("BKE_AGENT_DATA_DIR")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "bke_licensing_agent");
         _databasePath = Path.Combine(dataDir, "agent.db");
 
-        var platformBaseUrl = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
-        if (!Uri.TryCreate(platformBaseUrl, UriKind.Absolute, out var baseUri))
+        var normalizedPlatformBaseUrl = platformBaseUrl.TrimEnd('/');
+        if (!Uri.TryCreate(normalizedPlatformBaseUrl, UriKind.Absolute, out var baseUri))
         {
             throw new InvalidOperationException("BKE_PLATFORM_BASE_URL is invalid");
         }
@@ -76,10 +106,7 @@ public sealed class NotificationProvider : INotificationService
             throw new InvalidOperationException("Product broadcast authority must use HTTPS");
         }
         _platformBaseUri = baseUri;
-        _http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
-        {
-            Timeout = TimeSpan.FromSeconds(5),
-        };
+        _http = httpClient;
     }
 
     public async Task<TypedNotificationResponse> RequestAsync(
@@ -147,14 +174,24 @@ public sealed class NotificationProvider : INotificationService
                 }
             }
 
-            if (!Presentations.TryGetValue(row.Code, out var presentation))
+            Presentation presentation;
+            if (row.Title is not null && row.Body is not null && row.Category is not null)
+            {
+                presentation = new Presentation(row.Title, row.Body, row.Category);
+            }
+            else if (Presentations.TryGetValue(row.Code, out var knownPresentation))
+            {
+                presentation = knownPresentation;
+            }
+            else
             {
                 throw new InvalidDataException($"Unsupported persisted notification code: {row.Code}");
             }
+
             var everyLaunch = IsEveryLaunch(row.ProductId, row.Id);
             items.Add(new NotificationItem(
                 row.Id,
-                "bke-licensing-agent",
+                row.Source ?? "bke-licensing-agent",
                 presentation.Title,
                 presentation.Body,
                 presentation.Category,
@@ -294,6 +331,152 @@ public sealed class NotificationProvider : INotificationService
         {
             // Broadcast delivery is best-effort and never becomes local authorization authority.
         }
+
+        try
+        {
+            await SyncAccountNotificationsAsync(productId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // Account notification synchronization is best-effort and never changes authorization.
+        }
+    }
+
+    private async Task SyncAccountNotificationsAsync(
+        string productId,
+        CancellationToken cancellationToken)
+    {
+        var session = await _accountSessionService.StatusAsync(
+            new AccountSessionStatusRequest($"notification-sync-{Guid.NewGuid():N}"),
+            cancellationToken);
+        if (!string.Equals(session.Status, "AUTHENTICATED", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var stored = await _accountSessionStore.ReadAsync(cancellationToken);
+        if (stored is not ActiveAccountSessionState active)
+        {
+            return;
+        }
+
+        var uri = new Uri(
+            _platformBaseUri,
+            $"/api/agent-sessions/notifications?product_id={Uri.EscapeDataString(productId)}&limit=200");
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.UserAgent.ParseAdd("BKE-Licensing-Agent/1");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", active.AccessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString());
+
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.NotFound)
+        {
+            return;
+        }
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            throw new InvalidDataException(
+                $"Account notification authority returned HTTP {(int)response.StatusCode}");
+        }
+
+        if (!response.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var protocolValues) ||
+            protocolValues.SingleOrDefault() != AccountSessionRemote.ProtocolVersion)
+        {
+            throw new InvalidDataException(
+                "Account notification protocol version drifted.");
+        }
+
+        await using var stream =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken);
+        var root = document.RootElement;
+
+        if (root.ValueKind != JsonValueKind.Object ||
+            BoundedString(root, "status", 32) != "ok" ||
+            BoundedString(root, "account_id", 256) != active.Account.AccountId ||
+            BoundedString(root, "product_id", 128) != productId ||
+            !root.TryGetProperty("notifications", out var notifications) ||
+            notifications.ValueKind != JsonValueKind.Array ||
+            notifications.GetArrayLength() > 200)
+        {
+            throw new InvalidDataException(
+                "Invalid account notification response.");
+        }
+
+        foreach (var raw in notifications.EnumerateArray())
+        {
+            if (raw.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification item.");
+            }
+
+            var id = BoundedString(raw, "id", 128);
+            var source = BoundedString(raw, "source", 128);
+            var eventName = BoundedString(raw, "event", 128);
+            var title = BoundedString(raw, "title", 256);
+            var body = BoundedString(raw, "body", 4096);
+            var category = AccountCategory(
+                BoundedString(raw, "category", 32));
+            var priority = BoundedString(raw, "priority", 32);
+            var severity = priority switch
+            {
+                "LOW" or "NORMAL" => "information",
+                "HIGH" or "URGENT" => "warning",
+                _ => throw new InvalidDataException(
+                    "Invalid account notification priority."),
+            };
+            var createdAt = BoundedString(raw, "created_at", 64);
+            if (!DateTimeOffset.TryParse(createdAt, out var created))
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification created_at.");
+            }
+
+            string? expiresAt = null;
+            if (raw.TryGetProperty("expires_at", out var expiry) &&
+                expiry.ValueKind != JsonValueKind.Null)
+            {
+                if (expiry.ValueKind != JsonValueKind.String ||
+                    !DateTimeOffset.TryParse(expiry.GetString(), out var parsedExpiry))
+                {
+                    throw new InvalidDataException(
+                        "Invalid account notification expires_at.");
+                }
+                expiresAt = parsedExpiry.ToUniversalTime().ToString("O");
+            }
+
+            EnsureAccountNotification(
+                productId,
+                id,
+                source,
+                eventName,
+                title,
+                body,
+                category,
+                severity,
+                created.ToUniversalTime().ToString("O"),
+                expiresAt);
+        }
     }
 
     private async Task SyncAsync(string productId, string version, CancellationToken cancellationToken)
@@ -393,6 +576,75 @@ public sealed class NotificationProvider : INotificationService
         }
     }
 
+    private void EnsureAccountNotification(
+        string productId,
+        string id,
+        string source,
+        string code,
+        string title,
+        string body,
+        string category,
+        string severity,
+        string createdAt,
+        string? expiresAt)
+    {
+        using var connection = OpenDatabase();
+        using var transaction = connection.BeginTransaction();
+
+        using (var existing = connection.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText =
+                "SELECT product_id FROM notifications WHERE id=$id";
+            existing.Parameters.AddWithValue("$id", id);
+            var existingProduct = existing.ExecuteScalar() as string;
+            if (existingProduct is not null &&
+                !string.Equals(
+                    existingProduct,
+                    productId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Account notification id crossed product scope.");
+            }
+        }
+
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO notifications (
+                id, product_id, code, source, title, body, category,
+                severity, state, created_at, expires_at, dismissed_at
+            ) VALUES (
+                $id, $product_id, $code, $source, $title, $body, $category,
+                $severity, 'unread', $created_at, $expires_at, NULL
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                code=excluded.code,
+                source=excluded.source,
+                title=excluded.title,
+                body=excluded.body,
+                category=excluded.category,
+                severity=excluded.severity,
+                created_at=excluded.created_at,
+                expires_at=excluded.expires_at
+            """;
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$product_id", productId);
+        command.Parameters.AddWithValue("$code", code);
+        command.Parameters.AddWithValue("$source", source);
+        command.Parameters.AddWithValue("$title", title);
+        command.Parameters.AddWithValue("$body", body);
+        command.Parameters.AddWithValue("$category", category);
+        command.Parameters.AddWithValue("$severity", severity);
+        command.Parameters.AddWithValue("$created_at", createdAt);
+        command.Parameters.AddWithValue(
+            "$expires_at",
+            (object?)expiresAt ?? DBNull.Value);
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
     private NotificationRow EnsureNotification(
         string productId,
         string code,
@@ -407,7 +659,7 @@ public sealed class NotificationProvider : INotificationService
         using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
-            select.CommandText = "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
+            select.CommandText = "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
             select.Parameters.AddWithValue("$product_id", productId);
             select.Parameters.AddWithValue("$code", code);
             using var reader = select.ExecuteReader();
@@ -419,7 +671,7 @@ public sealed class NotificationProvider : INotificationService
         {
             using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
-            insert.CommandText = "INSERT INTO notifications (id, product_id, code, severity, state, created_at, expires_at, dismissed_at) VALUES ($id,$product_id,$code,$severity,'unread',$created_at,$expires_at,NULL)";
+            insert.CommandText = "INSERT INTO notifications (id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at) VALUES ($id,$product_id,$code,NULL,NULL,NULL,NULL,$severity,'unread',$created_at,$expires_at,NULL)";
             insert.Parameters.AddWithValue("$id", notificationId);
             insert.Parameters.AddWithValue("$product_id", productId);
             insert.Parameters.AddWithValue("$code", code);
@@ -457,7 +709,7 @@ public sealed class NotificationProvider : INotificationService
         using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
-            select.CommandText = "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
+            select.CommandText = "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
             select.Parameters.AddWithValue("$product_id", productId);
             select.Parameters.AddWithValue("$code", code);
             using var reader = select.ExecuteReader();
@@ -476,8 +728,8 @@ public sealed class NotificationProvider : INotificationService
         using var connection = OpenDatabase();
         using var command = connection.CreateCommand();
         command.CommandText = includeDismissed
-            ? "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id ORDER BY created_at DESC LIMIT $limit"
-            : "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND state != 'dismissed' ORDER BY created_at DESC LIMIT $limit";
+            ? "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id ORDER BY created_at DESC LIMIT $limit"
+            : "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND state != 'dismissed' ORDER BY created_at DESC LIMIT $limit";
         command.Parameters.AddWithValue("$product_id", productId);
         command.Parameters.AddWithValue("$limit", limit);
         using var reader = command.ExecuteReader();
@@ -526,6 +778,33 @@ public sealed class NotificationProvider : INotificationService
         return connection;
     }
 
+    private static string AccountCategory(string category) => category switch
+    {
+        "LICENSE" => "Licensing",
+        "UPDATE" => "Update",
+        "SECURITY" or "OPERATIONAL" => "System",
+        "TRANSACTIONAL" => "General",
+        "CUSTOM" => "Product",
+        _ => throw new InvalidDataException(
+            "Invalid account notification category."),
+    };
+
+    private static string BoundedString(
+        JsonElement value,
+        string property,
+        int maximumLength)
+    {
+        if (!value.TryGetProperty(property, out var element) ||
+            element.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(element.GetString()) ||
+            element.GetString()!.Length > maximumLength)
+        {
+            throw new InvalidDataException(
+                $"Account notification {property} is invalid.");
+        }
+        return element.GetString()!;
+    }
+
     private static string? NotificationState(SqliteConnection connection, string productId, string notificationId)
     {
         using var command = connection.CreateCommand();
@@ -563,11 +842,15 @@ public sealed class NotificationProvider : INotificationService
         reader.GetString(0),
         reader.GetString(1),
         reader.GetString(2),
-        reader.GetString(3),
-        reader.GetString(4),
-        reader.GetString(5),
+        reader.IsDBNull(3) ? null : reader.GetString(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4),
+        reader.IsDBNull(5) ? null : reader.GetString(5),
         reader.IsDBNull(6) ? null : reader.GetString(6),
-        reader.IsDBNull(7) ? null : reader.GetString(7));
+        reader.GetString(7),
+        reader.GetString(8),
+        reader.GetString(9),
+        reader.IsDBNull(10) ? null : reader.GetString(10),
+        reader.IsDBNull(11) ? null : reader.GetString(11));
 
     private static string RequiredString(JsonElement value, string property)
     {
@@ -637,6 +920,10 @@ public sealed class NotificationProvider : INotificationService
         string Id,
         string ProductId,
         string Code,
+        string? Source,
+        string? Title,
+        string? Body,
+        string? Category,
         string Severity,
         string State,
         string CreatedAt,

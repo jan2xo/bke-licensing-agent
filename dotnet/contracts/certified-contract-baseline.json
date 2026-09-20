@@ -179,7 +179,7 @@
   },
   "storage": {
     "engine": "sqlite",
-    "schema_version": 8,
+    "schema_version": 9,
     "tables": {
       "schema_version": [
         "version"
@@ -259,6 +259,10 @@
         "id",
         "product_id",
         "code",
+        "source",
+        "title",
+        "body",
+        "category",
         "severity",
         "state",
         "created_at",

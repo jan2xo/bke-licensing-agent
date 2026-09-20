@@ -10,7 +10,7 @@ public static class LocalAgentContract
     public const int DefaultPort = 43873;
     public const long MaxJsonBodyBytes = 32_768;
     public const int MaxChunkLineBytes = 8_192;
-    public const int StorageSchemaVersion = 8;
+    public const int StorageSchemaVersion = 9;
 
     public const string LicenseCenterBrowserPath = "/license-center";
     public const string AuthorizePath = "/v1/authorize";
