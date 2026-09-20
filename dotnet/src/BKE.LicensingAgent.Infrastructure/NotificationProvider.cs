@@ -62,7 +62,29 @@ public sealed class NotificationProvider : INotificationService
         AuthorizationProvider authorization,
         IAccountSessionService accountSessionService,
         IAccountSessionSecretStore accountSessionStore)
+        : this(
+            authorization,
+            accountSessionService,
+            accountSessionStore,
+            new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            {
+                Timeout = TimeSpan.FromSeconds(5),
+            },
+            Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
+                "https://jl-bke.com")
     {
+    }
+
+    public NotificationProvider(
+        AuthorizationProvider authorization,
+        IAccountSessionService accountSessionService,
+        IAccountSessionSecretStore accountSessionStore,
+        HttpClient httpClient,
+        string platformBaseUrl)
+    {
+        ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentException.ThrowIfNullOrWhiteSpace(platformBaseUrl);
+
         _authorization = authorization;
         _accountSessionService = accountSessionService;
         _accountSessionStore = accountSessionStore;
@@ -70,8 +92,8 @@ public sealed class NotificationProvider : INotificationService
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "bke_licensing_agent");
         _databasePath = Path.Combine(dataDir, "agent.db");
 
-        var platformBaseUrl = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
-        if (!Uri.TryCreate(platformBaseUrl, UriKind.Absolute, out var baseUri))
+        var normalizedPlatformBaseUrl = platformBaseUrl.TrimEnd('/');
+        if (!Uri.TryCreate(normalizedPlatformBaseUrl, UriKind.Absolute, out var baseUri))
         {
             throw new InvalidOperationException("BKE_PLATFORM_BASE_URL is invalid");
         }
@@ -84,10 +106,7 @@ public sealed class NotificationProvider : INotificationService
             throw new InvalidOperationException("Product broadcast authority must use HTTPS");
         }
         _platformBaseUri = baseUri;
-        _http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
-        {
-            Timeout = TimeSpan.FromSeconds(5),
-        };
+        _http = httpClient;
     }
 
     public async Task<TypedNotificationResponse> RequestAsync(
