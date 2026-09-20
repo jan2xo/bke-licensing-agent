@@ -1,111 +1,66 @@
 # BKE Licensing Agent
 
-=================================================
+**Current implementation:** .NET 10 Generation 2  
+**Version:** 2.0.0 candidate  
+**Windows architectures:** x64/AMD64 and ARM64  
+**Production release:** pending signing/cutover
 
-BKE Licensing Agent
+The BKE Licensing Agent is the shared, product-agnostic licensing, authorization, notification, update, and trusted-execution layer for BKE software.
 
-Version: 1.0.0
+The active repository tree is now **.NET 10-only**. The retired Generation 1 Python implementation remains available only through Git history and historical certification records.
 
-Status:
+## Active implementation
 
-Engineering Complete
+- `dotnet/src/BKE.LicensingAgent.Bootstrap/` — stable Windows service bootstrap
+- `dotnet/src/BKE.LicensingAgent.Host/` — loopback runtime host
+- `dotnet/src/BKE.LicensingAgent.Infrastructure/` — licensing/update/platform implementations
+- `dotnet/src/BKE.LicensingAgent.Desktop/` — native Avalonia License Center
+- `dotnet/src/BKE.LicensingAgent.Updater/` — elevated privileged update helper
+- `dotnet/src/BKE.LicensingAgent.Provisioner/` — privileged machine trust provisioner
+- `dotnet/tools/BKE.LicensingAgent.ReleaseTooling/` — release/trust/key tooling
+- `packaging/windows/` — canonical x64 and ARM64 installers
+- `certification/` — retained real-machine certification scripts/evidence documentation
 
-Implementation:
-✓ Complete
+## Windows machine contract
 
-Verification:
-✓ Complete
-
-Documentation:
-✓ Complete
-
-Self Audit:
-✓ Complete
-
-Independent Audit:
-Pending
-
-SOL Truth Audit:
-Pending
-
-Demo Product Certification:
-Pending
-
-Production Release:
-Pending
-
-=================================================
-
-A reusable, product-agnostic licensing and application management agent for BKE Digital Solutions.
-
-This repository contains the foundation for discovering BKE applications through `bke.manifest.json`, validating manifests, communicating with the BKE licensing platform, and enforcing licensing and update workflows without hardcoded product-specific logic.
-
-## What is included
-
-- `src/bke_licensing_agent/`: core Python package
-- `schemas/bke-manifest.schema.json`: manifest validation schema
-- `tests/`: unit and integration test skeletons
-- `docs/`: architecture, status, and implementation documentation
-- `samples/bke-demo-product/`: product-agnostic reference product
-- `certification/`: manual certification procedures
-- The Demo Product now requests authorization through the typed Licensing Agent boundary before entering RUNNING state.
-
-Phase 3 adds a typed HTTPS client foundation under
-`src/bke_licensing_agent/api/`. Configure an `https://` base URL through
-`ApiConfig`; HTTP is accepted only for explicitly enabled local/test use.
-Authentication, entitlement enforcement, and production endpoint availability
-remain out of scope for this phase.
-
-Phase 4 adds authentication and secure session management through the OS
-keyring. Authentication proves identity only; it does not activate licenses or
-authorize application launch.
-
-Phase 5 adds online device identity, entitlement lookup, activation, and
-verification. The platform remains authoritative; local activation metadata
-never authorizes launch.
-
-## Quick Start
-
-This repository contains the product-agnostic BKE Licensing Agent, typed
-License Center API, signed lease verification, and Demo Product reference.
-Source development targets macOS, Linux, and Windows with Python 3.12+.
-
-Layout: `src/` implementation, `samples/` Demo Product, `tests/` tests,
-`docs/` guides, and `packaging/` bundle entry points.
-
-Setup: [Windows](docs/getting-started/windows.md) · [macOS](docs/getting-started/macos.md) · [Linux](docs/getting-started/linux.md).
-See [packaging](docs/packaging-foundation.md), [architecture](docs/architecture.md), and [troubleshooting](docs/getting-started/troubleshooting.md).
-
-## Getting started
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip
-python -m pip install -e .
+```text
+BKE-Licensing-Agent
+        ↓
+service\bke-licensing-agent-service.exe
+        ↓
+runtime\bke-licensing-agent-runtime.exe
+        ↓
+127.0.0.1 / ::1 :43873
 ```
 
-Run the CLI:
+Supporting executables are also native .NET 10:
 
-```bash
-python -m bke_licensing_agent scan --paths "."
+```text
+license-center\bke-license-center.exe
+updater\bke-updater-core.exe
+provisioning\bke-privileged-provisioner.exe
 ```
 
-Run `bke-agent`, `bke-license-center`, or `python samples/bke-demo-product/demo_app.py`.
+## Build
 
-## Project goals
+Requires the .NET 10 SDK.
 
-This agent is designed to:
+```powershell
+dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
+dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
+```
 
-- discover installed BKE products from configured locations
-- validate application manifests
-- identify supported products and versions
-- manage licensing state securely
-- support controlled offline operation
-- prepare for update and launch workflows
+Publish all native Windows support executables:
 
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\publish_dotnet_windows_payloads.ps1 -Version 2.0.0 -Architecture all
+```
 
+The supported Windows release matrix is x64/AMD64 (Intel + AMD 64-bit) and ARM64.
 
+## Certification state
+
+Runtime bridge, canonical installer migration, signed self-update pre-publication, and broken-update rollback have all passed their certified phases. The .NET-only convergence is a new post-certification packaging/runtime wave and must pass its own hosted x64 and persistent ARM64 acceptance before production signing.
 
 # BKE Licensing Agent Installation & Product Integration Standard
 

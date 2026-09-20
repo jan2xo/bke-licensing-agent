@@ -1,0 +1,247 @@
+name: .NET-only Gen2 production installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - refactor/dotnet-only-agent
+    paths:
+      - ".github/workflows/dotnet-production-installer.yml"
+      - "dotnet/**"
+      - "packaging/windows/bke-licensing-agent.iss"
+      - "packaging/windows/bke-licensing-agent-arm64.iss"
+      - "certification/windows_dotnet_only_arm64.ps1"
+      - "scripts/publish_dotnet_windows_payloads.ps1"
+  pull_request:
+    paths:
+      - ".github/workflows/dotnet-production-installer.yml"
+      - "dotnet/**"
+      - "packaging/windows/bke-licensing-agent.iss"
+      - "packaging/windows/bke-licensing-agent-arm64.iss"
+      - "certification/windows_dotnet_only_arm64.ps1"
+      - "scripts/publish_dotnet_windows_payloads.ps1"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Native x64 install + ARM64 package
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GEN2_VERSION: "2.0.0"
+      SERVICE_NAME: BKE-Licensing-Agent
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Validate ARM64 acceptance verifier
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path "certification/windows_dotnet_only_arm64.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_.Message }; throw "ARM64 verifier parse failed" }
+
+      - name: Build current .NET-only contracts
+        shell: pwsh
+        run: |
+          dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Updater/BKE.LicensingAgent.Updater.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj --configuration Release
+          dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
+
+      - name: Publish native .NET support payloads
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:GEN2_VERSION -Architecture all
+
+      - name: Generate disposable package trust with .NET
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id dotnet-installer-target-v1 --policy-id dotnet-installer-only --update-key-id dotnet-installer-update-v1
+          if ($LASTEXITCODE -ne 0) { throw "disposable trust generation failed" }
+
+      - name: Publish x64 + ARM64 service/runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service-arm64 | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime-arm64 | Out-Null
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-service
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-runtime
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-service-arm64
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-runtime-arm64
+
+      - name: Verify every packaged executable architecture
+        shell: pwsh
+        run: |
+          function Assert-PeMachine([string]$Path,[int]$Expected) {
+            $bytes=[IO.File]::ReadAllBytes((Resolve-Path $Path))
+            $offset=[BitConverter]::ToInt32($bytes,0x3c)
+            $signature="PE"+[char]0+[char]0
+            if ([Text.Encoding]::ASCII.GetString($bytes,$offset,4) -ne $signature) { throw "invalid PE: $Path" }
+            $machine=[BitConverter]::ToUInt16($bytes,$offset+4)
+            if ($machine -ne $Expected) { throw ("wrong PE machine {0}: 0x{1:X4}" -f $Path,$machine) }
+          }
+
+          foreach ($path in @(
+            "dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe",
+            "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe",
+            "dist/windows/bke-license-center-x64/bke-license-center.exe",
+            "dist/windows/bke-updater-core-x64/bke-updater-core.exe",
+            "dist/windows/bke-privileged-provisioner-x64/bke-privileged-provisioner.exe"
+          )) { Assert-PeMachine $path 0x8664 }
+
+          foreach ($path in @(
+            "dist/windows/bke-licensing-agent-service-arm64/bke-licensing-agent-service.exe",
+            "dist/windows/bke-licensing-agent-runtime-arm64/bke-licensing-agent-runtime.exe",
+            "dist/windows/bke-license-center-arm64/bke-license-center.exe",
+            "dist/windows/bke-updater-core-arm64/bke-updater-core.exe",
+            "dist/windows/bke-privileged-provisioner-arm64/bke-privileged-provisioner.exe"
+          )) { Assert-PeMachine $path 0xAA64 }
+
+      - name: Compile canonical x64 + ARM64 installers
+        shell: pwsh
+        run: |
+          $iscc=Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
+          & $iscc packaging/windows/bke-licensing-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "x64 installer compile failed" }
+          & $iscc packaging/windows/bke-licensing-agent-arm64.iss
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 installer compile failed" }
+
+      - name: Defender scan installers
+        shell: pwsh
+        run: |
+          $platformRoot=Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform"
+          $mp=Get-ChildItem $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $mp) { $fallback=Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"; if (Test-Path $fallback) { $mp=Get-Item $fallback } }
+          if ($null -eq $mp) { throw "Defender unavailable" }
+          foreach ($path in @(
+            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe",
+            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe"
+          )) {
+            & $mp.FullName -Scan -ScanType 3 -File (Resolve-Path $path).Path -DisableRemediation
+            if ($LASTEXITCODE -ne 0) { throw "Defender failed for $path" }
+          }
+
+      - name: Fresh-install canonical x64 .NET-only Agent
+        shell: pwsh
+        run: |
+          $installer=(Resolve-Path "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe").Path
+          $log=Join-Path $env:RUNNER_TEMP "dotnet-only-install.log"
+          $p=Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { if (Test-Path $log) { Get-Content $log }; throw "installer failed: $($p.ExitCode)" }
+
+          $svc=Get-Service -Name $env:SERVICE_NAME -ErrorAction SilentlyContinue
+          if ($null -eq $svc) {
+            if (Test-Path $log) {
+              Write-Host "===== INNO INSTALL LOG ====="
+              Get-Content $log
+              Write-Host "===== END INNO INSTALL LOG ====="
+            }
+            throw "BKE-Licensing-Agent service is missing after installer exit zero"
+          }
+          $svc.WaitForStatus("Running",[TimeSpan]::FromSeconds(30))
+          $root=Join-Path $env:ProgramFiles "BKE Digital Solutions\Licensing Agent"
+
+          foreach ($path in @(
+            (Join-Path $root "service\bke-licensing-agent-service.exe"),
+            (Join-Path $root "runtime\bke-licensing-agent-runtime.exe"),
+            (Join-Path $root "license-center\bke-license-center.exe"),
+            (Join-Path $root "updater\bke-updater-core.exe"),
+            (Join-Path $root "provisioning\bke-privileged-provisioner.exe")
+          )) { if (!(Test-Path $path)) { throw "installed .NET payload missing: $path" } }
+
+          $licenseCenterSmoke = Start-Process -FilePath (Join-Path $root "license-center\bke-license-center.exe") -ArgumentList "--smoke" -Wait -PassThru
+          if ($licenseCenterSmoke.ExitCode -ne 0) { throw "installed .NET License Center smoke failed: $($licenseCenterSmoke.ExitCode)" }
+
+          $deadline=(Get-Date).AddSeconds(45)
+          do {
+            try {
+              $response=Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:43873/license-center?product_id=dotnet-only-health&version=2.0.0&installation_id=installer-health" -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { break }
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+          if ($null -eq $response -or $response.StatusCode -ne 200) { throw ".NET-only local API did not become healthy" }
+
+          $record=Get-CimInstance Win32_Service -Filter "Name='$env:SERVICE_NAME'"
+          if ($record.StartMode -ne "Auto") { throw "service is not Automatic" }
+          if ($record.StartName -notin @("LocalSystem","NT AUTHORITY\SYSTEM")) { throw "service identity drifted" }
+
+          $privilegedConfigPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\privileged-update.json"
+          if (!(Test-Path $privilegedConfigPath)) {
+            throw ".NET provisioner did not create privileged-update.json"
+          }
+
+          $privilegedConfig = Get-Content $privilegedConfigPath -Raw | ConvertFrom-Json
+          $expectedUpdater = Join-Path $root "updater\bke-updater-core.exe"
+          if ([IO.Path]::GetFullPath([string]$privilegedConfig.helper_executable) -ne [IO.Path]::GetFullPath($expectedUpdater)) {
+            throw "privileged updater helper path drifted: $($privilegedConfig.helper_executable)"
+          }
+
+          $pythonResidue = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop |
+            Where-Object {
+              $_.Extension -in @(".py",".pyc",".pyd") -or
+              $_.Name -match "^python\d+(?:\.\d+)?\.dll$" -or
+              $_.Name -eq "base_library.zip"
+            }
+          if ($pythonResidue) {
+            $pythonResidue | ForEach-Object { Write-Error "Retired Python residue: $($_.FullName)" }
+            throw "Python/PyInstaller residue remains in canonical .NET-only installation"
+          }
+
+          Write-Host ".NET-only canonical x64 fresh install: PASS"
+
+      - name: Assemble ARM64 .NET-only UTM acceptance kit
+        shell: pwsh
+        run: |
+          $package="dist/dotnet-only-arm64-kit"
+          New-Item -ItemType Directory -Force $package | Out-Null
+          Copy-Item "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe" $package
+          Copy-Item "certification/windows_dotnet_only_arm64.ps1" $package
+          @"
+          BKE Licensing Agent 2.0.0 - .NET-only ARM64 acceptance
+
+          Source SHA: $env:GITHUB_SHA
+
+          This candidate contains native .NET 10 implementations of:
+          - stable bootstrap service
+          - Agent runtime
+          - License Center
+          - privileged updater helper
+          - privileged provisioner
+
+          Run Prepare -> Install -> Collect with windows_dotnet_only_arm64.ps1 on the persistent Windows 11 ARM64 UTM machine.
+          "@ | Set-Content (Join-Path $package "README-DOTNET-ONLY.txt") -Encoding utf8
+          Compress-Archive -Path "$package/*" -DestinationPath "dist/BKE-Licensing-Agent-2.0.0-Windows-arm64-DOTNET-ONLY-$env:GITHUB_SHA.zip" -Force
+
+      - name: Upload .NET-only candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-2.0.0-Windows-DOTNET-ONLY
+          path: |
+            dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe
+            dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe
+            dist/BKE-Licensing-Agent-2.0.0-Windows-arm64-DOTNET-ONLY-*.zip
+          if-no-files-found: error
+          retention-days: 14
