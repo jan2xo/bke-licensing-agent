@@ -160,7 +160,11 @@ public sealed class NotificationProvider : INotificationService
             {
                 presentation = new Presentation(row.Title, row.Body, row.Category);
             }
-            else if (!Presentations.TryGetValue(row.Code, out presentation!))
+            else if (Presentations.TryGetValue(row.Code, out var knownPresentation))
+            {
+                presentation = knownPresentation;
+            }
+            else
             {
                 throw new InvalidDataException($"Unsupported persisted notification code: {row.Code}");
             }
