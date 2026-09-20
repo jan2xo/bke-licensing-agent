@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
+using BKE.LicensingAgent.Storage;
 
 namespace BKE.LicensingAgent.Updater;
 
@@ -44,9 +45,20 @@ internal static class Program
         "last_update_policy_revision","last_target_policy_revision",
     };
 
+    private static readonly HashSet<string> ManifestRequiredFields = new(StringComparer.Ordinal)
+    {
+        "schemaVersion","productId","displayName","version","entryPoint",
+        "updateChannel","minimumAgentVersion","platform","architecture",
+    };
+
+    private static readonly HashSet<string> ManifestAllowedFields = new(
+        ManifestRequiredFields.Concat(["publisher", "icon"]),
+        StringComparer.Ordinal);
+
     private static readonly Regex HashPattern = new("^[a-f0-9]{64}$", RegexOptions.CultureInvariant);
     private static readonly Regex RequestIdPattern = new("^[A-Za-z0-9_.-]{16,128}$", RegexOptions.CultureInvariant);
     private static readonly Regex PolicyIdPattern = new("^[A-Za-z0-9_.-]{8,128}$", RegexOptions.CultureInvariant);
+    private static readonly Regex ProductIdPattern = new("^[a-z0-9-]+$", RegexOptions.CultureInvariant);
 
     public static int Main(string[] args)
     {
@@ -125,6 +137,7 @@ internal static class Program
         var provisionPlan = ComposeProvisionPlan(
             provisionRequest,
             target,
+            runtimeRoot,
             stagedRoot,
             transactionRoot,
             options.TransactionId);
@@ -512,6 +525,7 @@ internal static class Program
     private static ProvisionPlan ComposeProvisionPlan(
         VerifiedProvisionRequest request,
         VerifiedTarget target,
+        string runtimeRoot,
         string stagedRoot,
         string? transactionRoot,
         string? transactionId)
@@ -533,9 +547,14 @@ internal static class Program
             throw new InvalidDataException("authorized entry point escapes install root");
 
         return new ProvisionPlan(
+            ResolveAgentDataRoot(runtimeRoot),
+            request.ProductId,
+            request.Platform,
+            request.Architecture,
             installRoot,
             stage,
             executable,
+            target.EntryPoint,
             request.TargetVersion,
             transactionRoot,
             transactionId);
@@ -566,6 +585,7 @@ internal static class Program
             if (!File.Exists(plan.Executable))
                 throw new InvalidDataException("installed entry point is missing after commit");
 
+            RegisterInstalledProduct(plan);
             WriteProvisionTransaction(plan, "COMMITTED", null);
         }
         catch (Exception exception)
@@ -895,6 +915,144 @@ internal static class Program
         }
     }
 
+    private static string ResolveAgentDataRoot(string runtimeRoot)
+    {
+        var runtime = new DirectoryInfo(Path.GetFullPath(runtimeRoot));
+        if (!string.Equals(runtime.Name, "runtime", StringComparison.OrdinalIgnoreCase) ||
+            runtime.Parent is null ||
+            !string.Equals(runtime.Parent.Name, "privileged", StringComparison.OrdinalIgnoreCase) ||
+            runtime.Parent.Parent is null)
+        {
+            throw new InvalidDataException(
+                "privileged runtime root is not under the canonical Agent data root");
+        }
+
+        var dataRoot = runtime.Parent.Parent.FullName;
+        if (Path.GetPathRoot(dataRoot) == dataRoot)
+        {
+            throw new InvalidDataException("Agent data root is invalid");
+        }
+
+        return dataRoot;
+    }
+
+    private static void RegisterInstalledProduct(ProvisionPlan plan)
+    {
+        var manifestPath = Path.GetFullPath(
+            Path.Combine(plan.InstallRoot, "bke.manifest.json"));
+        if (!IsUnder(plan.InstallRoot, manifestPath) || !File.Exists(manifestPath))
+        {
+            throw new InvalidDataException(
+                "installed product manifest is missing");
+        }
+
+        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException(
+                "installed product manifest is not an object");
+        }
+
+        var fields = root.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!ManifestRequiredFields.IsSubsetOf(fields) ||
+            !fields.IsSubsetOf(ManifestAllowedFields))
+        {
+            throw new InvalidDataException(
+                "installed product manifest fields are invalid");
+        }
+
+        if (!root.TryGetProperty("schemaVersion", out var schemaVersion) ||
+            schemaVersion.ValueKind != JsonValueKind.Number ||
+            !schemaVersion.TryGetInt32(out var schema) ||
+            schema != 1)
+        {
+            throw new InvalidDataException(
+                "installed product manifest schema is unsupported");
+        }
+
+        var productId = RequiredString(root, "productId");
+        var displayName = RequiredString(root, "displayName");
+        var version = RequiredString(root, "version");
+        var entryPoint = RequiredString(root, "entryPoint");
+        var channel = RequiredString(root, "updateChannel");
+        var minimumAgentVersion = RequiredString(root, "minimumAgentVersion");
+        var platform = RequiredString(root, "platform");
+        var architecture = RequiredString(root, "architecture");
+
+        if (!ProductIdPattern.IsMatch(productId) ||
+            productId != plan.ProductId ||
+            version != plan.TargetVersion ||
+            platform != plan.Platform ||
+            !ArchitecturesEquivalent(architecture, plan.Architecture) ||
+            displayName.Length > 256 ||
+            channel is not ("stable" or "beta" or "alpha"))
+        {
+            throw new InvalidDataException(
+                "installed product manifest identity does not match the authorized install");
+        }
+
+        _ = SemanticVersion.Parse(version);
+        _ = SemanticVersion.Parse(minimumAgentVersion);
+
+        var normalizedEntry = entryPoint
+            .Replace('/', Path.DirectorySeparatorChar)
+            .Replace('\\', Path.DirectorySeparatorChar);
+        if (Path.IsPathRooted(normalizedEntry) ||
+            normalizedEntry.Split(Path.DirectorySeparatorChar)
+                .Any(part => part is "" or "." or "..") ||
+            !string.Equals(
+                normalizedEntry,
+                plan.EntryPoint
+                    .Replace('/', Path.DirectorySeparatorChar)
+                    .Replace('\\', Path.DirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "installed product manifest entry point is invalid");
+        }
+
+        var entryPointPath = Path.GetFullPath(
+            Path.Combine(plan.InstallRoot, normalizedEntry));
+        if (!IsUnder(plan.InstallRoot, entryPointPath) ||
+            !PathEquals(entryPointPath, plan.Executable) ||
+            !File.Exists(entryPointPath))
+        {
+            throw new InvalidDataException(
+                "installed product manifest entry point is unavailable");
+        }
+
+        AgentDatabase.RegisterDiscoveredProduct(
+            plan.AgentDataRoot,
+            new DiscoveredProductRegistration(
+                productId,
+                displayName,
+                version,
+                manifestPath,
+                plan.InstallRoot,
+                entryPointPath,
+                DateTimeOffset.UtcNow));
+    }
+
+    private static bool ArchitecturesEquivalent(string left, string right)
+    {
+        static string Normalize(string value) =>
+            value.Trim().ToLowerInvariant() switch
+            {
+                "amd64" or "x86_64" or "x64" => "x64",
+                "arm64" or "aarch64" => "arm64",
+                "x86" or "i386" or "i686" => "x86",
+                _ => value.Trim().ToLowerInvariant(),
+            };
+
+        return string.Equals(
+            Normalize(left),
+            Normalize(right),
+            StringComparison.Ordinal);
+    }
+
     private static void CopyDirectory(string source, string destination)
     {
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException(source);
@@ -1029,9 +1187,14 @@ internal static class Program
         string? ReadyMarker, double StartupTimeout);
 
     private sealed record ProvisionPlan(
+        string AgentDataRoot,
+        string ProductId,
+        string Platform,
+        string Architecture,
         string InstallRoot,
         string StagedRoot,
         string Executable,
+        string EntryPoint,
         string TargetVersion,
         string? TransactionRoot,
         string? TransactionId);
