@@ -46,7 +46,7 @@ BKE.LicensingAgent.ReleaseTooling
 - Replaceable Agent runtime: `runtime\bke-licensing-agent-runtime.exe`
 - Durable state: `%ProgramData%\BKE Digital Solutions\Licensing Agent`
 - Local API: loopback-only port `43873`
-- Existing schema-8 durable state remains compatible; language convergence alone does not authorize a schema bump.
+- Current durable schema is 9. Existing schema-8 state is migrated automatically to schema 9, preserving notification read/dismiss state while adding Digital Solutions-owned notification presentation metadata.
 
 ## Windows release matrix
 
