@@ -151,7 +151,9 @@
       ],
       "local_responses_expose_cloud_tokens": false,
       "local_responses_expose_download_urls": false,
-      "local_responses_expose_install_paths": false
+      "local_responses_expose_install_paths": false,
+      "fresh_database_bootstrap_owner": "bke-licensing-agent",
+      "provision_commit_requires_inventory_registration": true
     },
     "software_open": {
       "capability_id": "bke.software-open",
@@ -268,7 +270,9 @@
       "automatic schema bump",
       "database deletion",
       "installation identity reset"
-    ]
+    ],
+    "fresh_bootstrap_required": true,
+    "discovered_product_registration_owner": "privileged-provision"
   },
   "outbound_defaults": {
     "https_required_outside_explicit_local_or_test": true,
