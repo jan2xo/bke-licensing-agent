@@ -571,8 +571,8 @@ static async Task CertifyAuthenticatedAccountNotificationSync()
 
         Require(first.Status == "Succeeded", "authenticated account notification feed failed");
         var received = first.Items.SingleOrDefault(item =>
-            item.Id == "bke-11111111-2222-3333-4444-555555555555");
-        Require(received is not null, "account notification was not synchronized");
+            item.Id == "bke-11111111-2222-3333-4444-555555555555")
+            ?? throw new InvalidOperationException("account notification was not synchronized");
         Require(received.Source == "payments", "account notification source drifted");
         Require(received.Title == "Payment received", "Digital Solutions notification title drifted");
         Require(received.Body == "Payment for order TEST-1 was confirmed.", "Digital Solutions notification body drifted");
