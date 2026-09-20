@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
 using BKE.LicensingAgent.Storage;
+using BKE.LicensingAgent.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 var inventoryPath = Path.Combine(AppContext.BaseDirectory, "certified-contract-baseline.json");
@@ -133,6 +134,7 @@ Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "softwar
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
 
+CertifyRuntimeEnvironmentBoundary();
 CertifyFreshStorageBootstrap(storage);
 await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
@@ -151,6 +153,118 @@ Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software open entitlement, execution-type, and path-hiding boundary certified");
 return;
+
+static void CertifyRuntimeEnvironmentBoundary()
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "bke-agent-env-cert-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    var envPath = Path.Combine(root, ".env");
+
+    var originalEnvironment =
+        Environment.GetEnvironmentVariable(
+            AgentRuntimeEnvironmentLoader.EnvironmentVariableName);
+    var originalPlatform =
+        Environment.GetEnvironmentVariable(
+            AgentRuntimeEnvironmentLoader.PlatformBaseUrlVariableName);
+    var originalInsecure =
+        Environment.GetEnvironmentVariable(
+            "BKE_AGENT_VNEXT_ALLOW_INSECURE_LOCAL");
+
+    try
+    {
+        Environment.SetEnvironmentVariable(
+            AgentRuntimeEnvironmentLoader.EnvironmentVariableName,
+            null,
+            EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable(
+            AgentRuntimeEnvironmentLoader.PlatformBaseUrlVariableName,
+            "https://jl-bke.com",
+            EnvironmentVariableTarget.Process);
+
+        File.WriteAllText(
+            envPath,
+            "BKE_ENVIRONMENT=utm\n" +
+            "BKE_PLATFORM_BASE_URL=https://utm-bke.invalid\n");
+
+        var loaded = AgentRuntimeEnvironmentLoader.Load(envPath);
+        Require(
+            loaded.Name == AgentRuntimeEnvironmentLoader.UtmEnvironment,
+            "Agent .env did not select UTM environment");
+        Require(
+            loaded.PlatformBaseUrl == "https://utm-bke.invalid",
+            "Agent .env did not override stray process-level platform authority");
+
+        File.WriteAllText(
+            envPath,
+            "BKE_ENVIRONMENT=utm\n" +
+            "BKE_PLATFORM_BASE_URL=https://jl-bke.com\n");
+        RequireThrows<InvalidOperationException>(
+            () => AgentRuntimeEnvironmentLoader.Load(envPath),
+            "UTM environment accepted production Digital Solutions authority");
+
+        File.WriteAllText(
+            envPath,
+            "BKE_ENVIRONMENT=utm\n");
+        Environment.SetEnvironmentVariable(
+            AgentRuntimeEnvironmentLoader.PlatformBaseUrlVariableName,
+            null,
+            EnvironmentVariableTarget.Process);
+        RequireThrows<InvalidOperationException>(
+            () => AgentRuntimeEnvironmentLoader.Load(envPath),
+            "UTM environment accepted a missing Digital Solutions authority");
+
+        File.WriteAllText(
+            envPath,
+            "BKE_ENVIRONMENT=utm\n" +
+            "BKE_PLATFORM_BASE_URL=http://127.0.0.1:3000\n" +
+            "BKE_AGENT_VNEXT_ALLOW_INSECURE_LOCAL=1\n");
+        loaded = AgentRuntimeEnvironmentLoader.Load(envPath);
+        Require(
+            loaded.PlatformBaseUrl == "http://127.0.0.1:3000",
+            "Agent .env did not preserve disposable loopback authority");
+
+        RequireThrows<InvalidDataException>(
+            () => AgentRuntimeEnvironmentLoader.Parse(
+                "BKE_AGENT_DATA_DIR=C:\\unsafe\n"),
+            "Agent .env accepted installer-owned data directory override");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(
+            AgentRuntimeEnvironmentLoader.EnvironmentVariableName,
+            originalEnvironment,
+            EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable(
+            AgentRuntimeEnvironmentLoader.PlatformBaseUrlVariableName,
+            originalPlatform,
+            EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable(
+            "BKE_AGENT_VNEXT_ALLOW_INSECURE_LOCAL",
+            originalInsecure,
+            EnvironmentVariableTarget.Process);
+
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+static void RequireThrows<TException>(
+    Action action,
+    string message)
+    where TException : Exception
+{
+    try
+    {
+        action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
+}
 
 static void CertifyFreshStorageBootstrap(JsonElement storage)
 {
