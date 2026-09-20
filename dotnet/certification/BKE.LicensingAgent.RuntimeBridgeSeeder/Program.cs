@@ -16,7 +16,7 @@ const string InstallationId = "runtime-bridge-installation";
 const string LicenseId = "runtime-bridge-license";
 const string LeaseId = "runtime-bridge-lease";
 const string KeyId = "runtime-bridge-state-key";
-const int ExpectedSchemaVersion = 8;
+const int ExpectedSchemaVersion = 9;
 
 if (!OperatingSystem.IsWindows())
 {
