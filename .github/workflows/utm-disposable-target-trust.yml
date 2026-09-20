@@ -30,6 +30,7 @@ jobs:
         shell: pwsh
         run: |
           foreach ($path in @(
+            "certification/utm/Prepare-BkeAgent-UtmEnvironment.ps1",
             "certification/utm/Install-RenderDock-UtmTargetTrust.ps1",
             "certification/utm/Remove-RenderDock-UtmTargetTrust.ps1",
             "certification/utm/Collect-BkeLauncher-UtmEvidence.ps1"
@@ -55,6 +56,7 @@ jobs:
 
           root="dist/utm-render-dock-target-trust"
           mkdir -p "$root/x64" "$root/arm64"
+          cp certification/utm/Prepare-BkeAgent-UtmEnvironment.ps1 "$root/"
           cp certification/utm/Install-RenderDock-UtmTargetTrust.ps1 "$root/"
           cp certification/utm/Remove-RenderDock-UtmTargetTrust.ps1 "$root/"
           cp certification/utm/README-RenderDock-UtmTargetTrust.md "$root/README.md"
@@ -94,6 +96,7 @@ jobs:
           set -euo pipefail
           root="dist/utm-render-dock-target-trust"
 
+          test -f "$root/Prepare-BkeAgent-UtmEnvironment.ps1"
           test -f "$root/x64/target-keys/utm-render-dock-x64-target-v1.pem"
           test -f "$root/x64/target-policies/utm-render-dock-windows-x64-v1.json"
           test -f "$root/arm64/target-keys/utm-render-dock-arm64-target-v1.pem"
