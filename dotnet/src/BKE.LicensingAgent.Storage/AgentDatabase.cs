@@ -13,7 +13,7 @@ public sealed record DiscoveredProductRegistration(
 
 public static class AgentDatabase
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     private static readonly IReadOnlyDictionary<int, string[]> Migrations =
         new Dictionary<int, string[]>
@@ -208,6 +208,45 @@ public static class AgentDatabase
                 """
                 CREATE INDEX IF NOT EXISTS idx_notifications_product_state_created
                 ON notifications(product_id, state, created_at DESC)
+                """,
+            ],
+            [9] =
+            [
+                """
+                CREATE TABLE notifications_v9 (
+                    id TEXT PRIMARY KEY,
+                    product_id TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    source TEXT,
+                    title TEXT,
+                    body TEXT,
+                    category TEXT,
+                    severity TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    dismissed_at TEXT
+                )
+                """,
+                """
+                INSERT INTO notifications_v9 (
+                    id, product_id, code, source, title, body, category,
+                    severity, state, created_at, expires_at, dismissed_at
+                )
+                SELECT
+                    id, product_id, code, NULL, NULL, NULL, NULL,
+                    severity, state, created_at, expires_at, dismissed_at
+                FROM notifications
+                """,
+                "DROP TABLE notifications",
+                "ALTER TABLE notifications_v9 RENAME TO notifications",
+                """
+                CREATE INDEX idx_notifications_product_state_created
+                ON notifications(product_id, state, created_at DESC)
+                """,
+                """
+                CREATE INDEX idx_notifications_product_code
+                ON notifications(product_id, code)
                 """,
             ],
         };
