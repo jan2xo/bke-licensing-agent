@@ -1,4 +1,6 @@
+using System.Net;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BKE.LicensingAgent.Application;
@@ -137,6 +139,7 @@ Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-
 CertifyRuntimeEnvironmentBoundary();
 CertifyFreshStorageBootstrap(storage);
 CertifyNotificationSchemaUpgrade();
+await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
@@ -467,6 +470,161 @@ static void CertifyNotificationSchemaUpgrade()
     }
     finally
     {
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+static async Task CertifyAuthenticatedAccountNotificationSync()
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "bke-agent-account-notification-sync-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    var originalDataDir = Environment.GetEnvironmentVariable("BKE_AGENT_DATA_DIR");
+
+    try
+    {
+        Environment.SetEnvironmentVariable(
+            "BKE_AGENT_DATA_DIR",
+            root,
+            EnvironmentVariableTarget.Process);
+        AgentDatabase.EnsureInitialized(root);
+
+        var productRoot = Path.Combine(root, "notification-sync-product");
+        Directory.CreateDirectory(productRoot);
+        var manifestPath = Path.Combine(productRoot, "bke.manifest.json");
+        var entryPointPath = Path.Combine(productRoot, "RENDER DOCK.exe");
+        File.WriteAllText(entryPointPath, "notification sync fixture", new UTF8Encoding(false));
+        File.WriteAllText(
+            manifestPath,
+            """
+            {"schemaVersion":1,"productId":"bke-render-dock","displayName":"Render Dock","version":"1.0.2","entryPoint":"RENDER DOCK.exe","updateChannel":"stable","minimumAgentVersion":"2.0.0","platform":"windows","architecture":"arm64"}
+            """,
+            new UTF8Encoding(false));
+
+        var databasePath = AgentDatabase.DatabasePath(root);
+        using (var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = databasePath,
+                Mode = SqliteOpenMode.ReadWrite,
+            }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO discovered_products (
+                    product_id, display_name, version, manifest_path,
+                    product_root, entry_point_path, discovered_at
+                ) VALUES (
+                    'bke-render-dock',
+                    'Render Dock',
+                    '1.0.2',
+                    $manifest_path,
+                    $product_root,
+                    $entry_point_path,
+                    '2026-09-20T12:00:00.0000000+00:00'
+                )
+                """;
+            command.Parameters.AddWithValue("$manifest_path", manifestPath);
+            command.Parameters.AddWithValue("$product_root", productRoot);
+            command.Parameters.AddWithValue("$entry_point_path", entryPointPath);
+            command.ExecuteNonQuery();
+        }
+
+        var account = new AccountSessionAccount(
+            "user-1",
+            "user@example.com",
+            "account-1",
+            "INDIVIDUAL",
+            "Account One");
+        var store = new FakeAccountSessionStore();
+        await store.WriteAsync(
+            new ActiveAccountSessionState(
+                "account-access-secret",
+                "refresh-secret",
+                "session-1",
+                new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero),
+                account),
+            CancellationToken.None);
+
+        var handler = new FakeNotificationAuthorityHandler();
+        using var http = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(5),
+        };
+        var provider = new NotificationProvider(
+            new AuthorizationProvider(),
+            new FakeAuthenticatedAccountSessionService(account),
+            store,
+            http,
+            "https://utm-digital.example");
+
+        var request = new NotificationFeedRequest(
+            "bke-render-dock",
+            "1.0.2",
+            "notification-sync-installation",
+            50,
+            false);
+        var first = await provider.FeedAsync(request, CancellationToken.None);
+
+        Require(first.Status == "Succeeded", "authenticated account notification feed failed");
+        var received = first.Items.SingleOrDefault(item =>
+            item.Id == "bke-11111111-2222-3333-4444-555555555555");
+        Require(received is not null, "account notification was not synchronized");
+        Require(received.Source == "payments", "account notification source drifted");
+        Require(received.Title == "Payment received", "Digital Solutions notification title drifted");
+        Require(received.Body == "Payment for order TEST-1 was confirmed.", "Digital Solutions notification body drifted");
+        Require(received.Category == "General", "transactional notification category mapping drifted");
+        Require(received.Severity == "Information", "normal account notification severity drifted");
+        Require(received.State == "Unread", "new account notification was not unread");
+        Require(handler.SawBearer, "account notification sync omitted Agent-owned bearer token");
+        Require(handler.SawProtocol, "account notification sync omitted account-session protocol version");
+
+        var marked = await provider.MarkReadAsync(
+            new NotificationMutationRequest(
+                "bke-render-dock",
+                "1.0.2",
+                "notification-sync-installation",
+                received.Id),
+            CancellationToken.None);
+        Require(marked.Status == "Succeeded", "account notification mark-read failed");
+
+        var second = await provider.FeedAsync(request, CancellationToken.None);
+        var resynchronized = second.Items.Single(item => item.Id == received.Id);
+        Require(
+            resynchronized.State == "Read",
+            "account notification re-sync reset local read state");
+
+        using var verification = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = databasePath,
+                Mode = SqliteOpenMode.ReadOnly,
+            }.ToString());
+        verification.Open();
+        using var verify = verification.CreateCommand();
+        verify.CommandText = """
+            SELECT code, source, title, body, category, state
+            FROM notifications
+            WHERE id='bke-11111111-2222-3333-4444-555555555555'
+            """;
+        using var reader = verify.ExecuteReader();
+        Require(reader.Read(), "synchronized account notification was not persisted");
+        Require(reader.GetString(0) == "PAYMENT_RECEIVED", "persisted account notification event drifted");
+        Require(reader.GetString(1) == "payments", "persisted account notification source drifted");
+        Require(reader.GetString(2) == "Payment received", "persisted account notification title drifted");
+        Require(reader.GetString(3) == "Payment for order TEST-1 was confirmed.", "persisted account notification body drifted");
+        Require(reader.GetString(4) == "General", "persisted account notification category drifted");
+        Require(reader.GetString(5) == "read", "persisted local notification state drifted");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable(
+            "BKE_AGENT_DATA_DIR",
+            originalDataDir,
+            EnvironmentVariableTarget.Process);
         try { Directory.Delete(root, recursive: true); } catch { }
     }
 }
@@ -878,6 +1036,96 @@ sealed class ManualTimeProvider : TimeProvider
     public override DateTimeOffset GetUtcNow() => _now;
 
     public void Advance(TimeSpan duration) => _now = _now.Add(duration);
+}
+
+sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
+{
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = request.RequestUri?.AbsolutePath
+            ?? throw new InvalidOperationException("notification authority URI missing");
+
+        if (path == "/api/licensing-agent/notifications")
+        {
+            return Task.FromResult(JsonResponse(
+                """
+                {
+                  "capabilityId":"bke.product-broadcasts",
+                  "contractVersion":1,
+                  "source":"bke-digital-solutions",
+                  "productId":"bke-render-dock",
+                  "version":"1.0.2",
+                  "broadcasts":[]
+                }
+                """));
+        }
+
+        if (path == "/api/agent-sessions/notifications")
+        {
+            SawBearer =
+                request.Headers.Authorization?.Scheme == "Bearer" &&
+                request.Headers.Authorization.Parameter == "account-access-secret";
+            SawProtocol =
+                request.Headers.TryGetValues(
+                    "x-bke-account-session-version",
+                    out var versions) &&
+                versions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+
+            if (!SawBearer || !SawProtocol ||
+                request.RequestUri?.Query.Contains(
+                    "product_id=bke-render-dock",
+                    StringComparison.Ordinal) != true)
+            {
+                return Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            }
+
+            var response = JsonResponse(
+                """
+                {
+                  "status":"ok",
+                  "account_id":"account-1",
+                  "product_id":"bke-render-dock",
+                  "notifications":[
+                    {
+                      "id":"bke-11111111-2222-3333-4444-555555555555",
+                      "source":"payments",
+                      "event":"PAYMENT_RECEIVED",
+                      "title":"Payment received",
+                      "body":"Payment for order TEST-1 was confirmed.",
+                      "category":"TRANSACTIONAL",
+                      "priority":"NORMAL",
+                      "created_at":"2026-09-20T12:00:00.000Z",
+                      "expires_at":null,
+                      "data":{"orderNumber":"TEST-1"}
+                    }
+                  ]
+                }
+                """);
+            response.Headers.TryAddWithoutValidation(
+                "x-bke-account-session-version",
+                AccountSessionRemote.ProtocolVersion);
+            return Task.FromResult(response);
+        }
+
+        return Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+
+    private static HttpResponseMessage JsonResponse(string json) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json"),
+        };
 }
 
 sealed class FakeAccountSessionStore : IAccountSessionSecretStore
