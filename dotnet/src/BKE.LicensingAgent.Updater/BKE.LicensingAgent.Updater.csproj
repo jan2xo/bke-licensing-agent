@@ -7,4 +7,7 @@
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BKE.LicensingAgent.Storage/BKE.LicensingAgent.Storage.csproj" />
+  </ItemGroup>
 </Project>
