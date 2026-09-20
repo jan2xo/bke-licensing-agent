@@ -4,6 +4,20 @@ using BKE.LicensingAgent.Host;
 using BKE.LicensingAgent.Infrastructure;
 using BKE.LicensingAgent.Storage;
 
+try
+{
+    var runtimeEnvironment =
+        AgentRuntimeEnvironmentLoader.LoadDefault();
+    Console.WriteLine(
+        $"BKE Licensing Agent environment: {runtimeEnvironment.Name}");
+}
+catch (Exception exception)
+{
+    Console.Error.WriteLine(
+        $"BKE Licensing Agent environment bootstrap failed: {exception.Message}");
+    return 78;
+}
+
 var agentDataDir =
     Environment.GetEnvironmentVariable("BKE_AGENT_DATA_DIR") ??
     Path.Combine(

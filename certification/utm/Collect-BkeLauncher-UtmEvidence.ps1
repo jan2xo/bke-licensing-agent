@@ -95,9 +95,53 @@ Write-JsonEvidence "07-utm-target-trust.json" ([ordered]@{
     }
 })
 
+$agentEnvPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\.env"
+$environmentEvidence = [ordered]@{
+    exists = Test-Path $agentEnvPath
+    environment = $null
+    platform_scheme = $null
+    platform_host = $null
+    production_authority = $null
+}
+if (Test-Path $agentEnvPath) {
+    $safeValues = @{}
+    foreach ($line in Get-Content -LiteralPath $agentEnvPath) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith("#")) {
+            continue
+        }
+        $separator = $trimmed.IndexOf("=")
+        if ($separator -le 0) {
+            continue
+        }
+        $name = $trimmed.Substring(0, $separator).Trim()
+        if ($name -in @("BKE_ENVIRONMENT", "BKE_PLATFORM_BASE_URL")) {
+            $safeValues[$name] = $trimmed.Substring($separator + 1).Trim().Trim('"').Trim("'")
+        }
+    }
+
+    $environmentEvidence.environment = $safeValues["BKE_ENVIRONMENT"]
+    if ($safeValues.ContainsKey("BKE_PLATFORM_BASE_URL")) {
+        $platformUri = $null
+        if ([Uri]::TryCreate(
+            $safeValues["BKE_PLATFORM_BASE_URL"],
+            [UriKind]::Absolute,
+            [ref]$platformUri
+        )) {
+            $environmentEvidence.platform_scheme = $platformUri.Scheme
+            $environmentEvidence.platform_host = $platformUri.Host
+            $hostName = $platformUri.Host.TrimEnd(".")
+            $environmentEvidence.production_authority =
+                ($hostName -ieq "jl-bke.com") -or
+                $hostName.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase)
+        }
+    }
+}
+Write-JsonEvidence "08-agent-environment.json" $environmentEvidence
+
 $productRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Render Dock"
 $entryPoint = Join-Path $productRoot "RENDER DOCK.exe"
-Write-JsonEvidence "08-render-dock-local.json" ([ordered]@{
+Write-JsonEvidence "09-render-dock-local.json" ([ordered]@{
     product_root = $productRoot
     product_root_exists = Test-Path $productRoot
     entry_point_exists = Test-Path $entryPoint

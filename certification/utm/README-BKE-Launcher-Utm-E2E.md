@@ -2,16 +2,20 @@
 
 TEST ONLY. Do not treat disposable target trust or unsigned candidates as production release material.
 
+This certification must not use the production Digital Solutions deployment, production database, live PayMongo credentials, production webhooks, or production signing/encryption secrets.
+
 ## Owner gates before the VM test
 
 Do not begin the true cloud-backed install path until all of these are deliberately available:
 
-1. Digital Solutions stack is available at the Agent's HTTPS platform base:
-   - PR #177 — account-first foundation
-   - PR #179 — Agent device authorization
-   - PR #180 — Agent software catalog
-   - PR #181 — standalone provision authorization
-2. Digital Solutions runtime has:
+1. A disposable Digital Solutions V3 instance is running at a non-production authority.
+   - It uses the same merged V3 application code.
+   - It has its own disposable PostgreSQL data.
+   - It uses PayMongo test credentials only.
+   - PAYMONGO_LIVEMODE=false.
+   - It does not use production webhook, signing, encryption, email, storage, or backup credentials.
+   - Its hostname must not be jl-bke.com or any *.jl-bke.com host.
+2. The disposable Digital Solutions runtime has:
    - V3_AGENT_ACCOUNT_SESSION_ENABLED=true
    - AGENT_ACCOUNT_SESSION_PEPPER configured with a non-placeholder secret of at least 48 characters
    - AGENT_ACCOUNT_SESSION_ENCRYPTION_KEY configured with a non-placeholder secret of at least 48 characters
@@ -37,14 +41,41 @@ The Render Dock workflow artifact alone is not sufficient for the real install f
 
 ## Candidate inputs
 
-Use only exact-head CI artifacts from the open draft stacks:
+Use only artifacts produced from the current merged Agent and Launcher main lines plus
+the stable Render Dock v1.0.2 release. Verify artifact digests shown by GitHub before
+moving files into the VM.
 
-- Licensing Agent PR #44 — Agent with account/catalog/install/Open capabilities and interactive user-session launch.
-- Launcher PR #3 — self-contained Windows x64 + ARM64 Launcher with Install + Open UX.
-- Render Dock PR #20 — architecture-aware x64 + ARM64 updater release candidate.
-- Licensing Agent PR #43 — UTM-TEST-ONLY Render Dock target trust.
+The UTM trust bundle contains:
+- Prepare-BkeAgent-UtmEnvironment.ps1
+- Install-RenderDock-UtmTargetTrust.ps1
+- Remove-RenderDock-UtmTargetTrust.ps1
+- Collect-BkeLauncher-UtmEvidence.ps1
+- architecture-specific disposable Render Dock target trust
 
-Verify artifact digests shown by GitHub before moving files into the VM.
+## Phase 0 — disposable Digital Solutions
+
+Bring up the disposable Digital Solutions V3 instance first.
+
+Its canonical runtime file remains exactly:
+
+```text
+.env
+```
+
+Use disposable/test values only. At minimum:
+- V3_AGENT_ACCOUNT_SESSION_ENABLED=true
+- unique UTM AGENT_ACCOUNT_SESSION_PEPPER
+- unique UTM AGENT_ACCOUNT_SESSION_ENCRYPTION_KEY
+- disposable database credentials
+- PayMongo test secret/webhook credentials
+- PAYMONGO_LIVEMODE=false
+- test/disposable signing and encryption material
+- non-production email/storage/backup configuration
+
+Do not copy the VPS production .env into UTM.
+
+Record the disposable Digital Solutions base URL. This is the only cloud authority the
+UTM Agent may use.
 
 ## Phase A — clean-machine evidence
 
@@ -53,20 +84,39 @@ Before installing anything:
 1. Take a UTM snapshot.
 2. Confirm there is no pre-existing:
    - C:\Program Files\BKE Digital Solutions\Render Dock
-3. Install the exact-head Licensing Agent ARM64 candidate.
-4. Reboot if the installer/acceptance kit requires it.
-5. Confirm the BKE-Licensing-Agent service is Running.
-6. Extract this UTM test-trust bundle.
-7. Open elevated PowerShell in the extracted bundle and run:
+3. Extract the UTM test-trust bundle before installing the Agent.
+4. Open elevated PowerShell in the extracted bundle and write the Agent UTM environment:
+
+   powershell -ExecutionPolicy Bypass -File .\Prepare-BkeAgent-UtmEnvironment.ps1 -PlatformBaseUrl "https://<disposable-digital-solutions>"
+
+   If and only if Digital Solutions is intentionally on the same machine loopback over HTTP:
+
+   powershell -ExecutionPolicy Bypass -File .\Prepare-BkeAgent-UtmEnvironment.ps1 -PlatformBaseUrl "http://127.0.0.1:<port>" -AllowInsecureLoopback
+
+5. Inspect only the non-secret Agent environment fields:
+
+   Get-Content "$env:ProgramData\BKE Digital Solutions\Licensing Agent\.env"
+
+   Required:
+   - BKE_ENVIRONMENT=utm
+   - BKE_PLATFORM_BASE_URL points only to the disposable instance
+   - no jl-bke.com authority
+6. Install the current Licensing Agent ARM64 candidate.
+7. Reboot if the installer/acceptance kit requires it.
+8. Confirm the BKE-Licensing-Agent service is Running.
+9. Install disposable Render Dock target trust:
 
    powershell -ExecutionPolicy Bypass -File .\Install-RenderDock-UtmTargetTrust.ps1
 
-8. Capture evidence:
+10. Capture evidence:
 
    powershell -ExecutionPolicy Bypass -File .\Collect-BkeLauncher-UtmEvidence.ps1 -OutputDirectory .\evidence-before-login
 
 Expected:
 - Agent health reachable on 127.0.0.1:43873
+- Agent started with BKE_ENVIRONMENT=utm
+- Agent authority is the disposable Digital Solutions instance
+- production jl-bke.com authority is rejected by configuration
 - UTM test trust marker present
 - Render Dock not installed
 
