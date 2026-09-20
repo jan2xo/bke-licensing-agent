@@ -8,6 +8,7 @@
     <ProjectReference Include="../../src/BKE.LicensingAgent.Contracts/BKE.LicensingAgent.Contracts.csproj" />
     <ProjectReference Include="../../src/BKE.LicensingAgent.Application/BKE.LicensingAgent.Application.csproj" />
     <ProjectReference Include="../../src/BKE.LicensingAgent.Storage/BKE.LicensingAgent.Storage.csproj" />
+    <ProjectReference Include="../../src/BKE.LicensingAgent.Infrastructure/BKE.LicensingAgent.Infrastructure.csproj" />
     <Content Include="../../contracts/certified-contract-baseline.json" Link="certified-contract-baseline.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
