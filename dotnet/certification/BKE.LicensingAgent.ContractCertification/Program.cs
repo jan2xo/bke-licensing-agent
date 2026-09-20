@@ -136,6 +136,7 @@ Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-
 
 CertifyRuntimeEnvironmentBoundary();
 CertifyFreshStorageBootstrap(storage);
+CertifyNotificationSchemaUpgrade();
 await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
@@ -143,7 +144,9 @@ await CertifySoftwareOpenBoundary();
 
 var notificationColumns = storage.GetProperty("tables").GetProperty("notifications")
     .EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal);
-Require(!notificationColumns.Contains("delivery_mode"), "EVERY_LAUNCH must not force a schema-8 delivery_mode column");
+Require(!notificationColumns.Contains("delivery_mode"), "EVERY_LAUNCH must not force a durable delivery_mode column");
+Require(notificationColumns.Contains("title") && notificationColumns.Contains("body") && notificationColumns.Contains("source") && notificationColumns.Contains("category"),
+    "notification presentation ownership columns are missing");
 
 Console.WriteLine("BKE Licensing Agent .NET 10 Gen2 contract certification: PASS");
 Console.WriteLine($"Routes certified: {contractRoutes.Count}");
@@ -314,6 +317,153 @@ static void CertifyFreshStorageBootstrap(JsonElement storage)
         }
 
         Require(actualTables.SetEquals(expectedTables), "fresh storage table inventory drifted");
+
+        var expectedNotificationColumns = storage.GetProperty("tables")
+            .GetProperty("notifications")
+            .EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        using var notificationColumns = connection.CreateCommand();
+        notificationColumns.CommandText = "PRAGMA table_info(notifications)";
+        using var notificationReader = notificationColumns.ExecuteReader();
+        var actualNotificationColumns = new List<string>();
+        while (notificationReader.Read())
+        {
+            actualNotificationColumns.Add(notificationReader.GetString(1));
+        }
+        Require(
+            actualNotificationColumns.SequenceEqual(expectedNotificationColumns),
+            "fresh notification storage columns drifted");
+    }
+    finally
+    {
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
+static void CertifyNotificationSchemaUpgrade()
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "bke-agent-notification-v8-upgrade-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var path = AgentDatabase.DatabasePath(root);
+        using (var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+            }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version(version) VALUES (8);
+                CREATE TABLE notifications (
+                    id TEXT PRIMARY KEY,
+                    product_id TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    dismissed_at TEXT,
+                    UNIQUE(product_id, code)
+                );
+                INSERT INTO notifications (
+                    id, product_id, code, severity, state,
+                    created_at, expires_at, dismissed_at
+                ) VALUES (
+                    'legacy-notification',
+                    'bke-render-dock',
+                    'BETA_ENDED',
+                    'warning',
+                    'read',
+                    '2026-09-20T00:00:00.0000000+00:00',
+                    NULL,
+                    NULL
+                );
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        AgentDatabase.EnsureInitialized(root);
+
+        using var upgraded = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadWrite,
+            }.ToString());
+        upgraded.Open();
+
+        using (var version = upgraded.CreateCommand())
+        {
+            version.CommandText = "SELECT version FROM schema_version LIMIT 1";
+            Require(
+                Convert.ToInt32(version.ExecuteScalar()) ==
+                    LocalAgentContract.StorageSchemaVersion,
+                "notification v8 upgrade did not reach current schema");
+        }
+
+        using (var preserved = upgraded.CreateCommand())
+        {
+            preserved.CommandText = """
+                SELECT state, source, title, body, category
+                FROM notifications
+                WHERE id='legacy-notification'
+                """;
+            using var reader = preserved.ExecuteReader();
+            Require(reader.Read(), "notification v8 row was not preserved");
+            Require(reader.GetString(0) == "read", "notification read state was not preserved");
+            Require(reader.IsDBNull(1) && reader.IsDBNull(2) &&
+                    reader.IsDBNull(3) && reader.IsDBNull(4),
+                "legacy notification unexpectedly gained fabricated presentation");
+        }
+
+        using (var multiple = upgraded.CreateCommand())
+        {
+            multiple.CommandText = """
+                INSERT INTO notifications (
+                    id, product_id, code, source, title, body, category,
+                    severity, state, created_at, expires_at, dismissed_at
+                ) VALUES
+                (
+                    'account-payment-1',
+                    'bke-render-dock',
+                    'PAYMENT_RECEIVED',
+                    'payments',
+                    'Payment received',
+                    'Payment confirmed.',
+                    'General',
+                    'information',
+                    'unread',
+                    '2026-09-20T01:00:00.0000000+00:00',
+                    NULL,
+                    NULL
+                ),
+                (
+                    'account-payment-2',
+                    'bke-render-dock',
+                    'PAYMENT_RECEIVED',
+                    'payments',
+                    'Payment received',
+                    'Another payment confirmed.',
+                    'General',
+                    'information',
+                    'unread',
+                    '2026-09-20T02:00:00.0000000+00:00',
+                    NULL,
+                    NULL
+                );
+                """;
+            Require(
+                multiple.ExecuteNonQuery() == 2,
+                "schema v9 did not permit multiple account notifications per code");
+        }
     }
     finally
     {
