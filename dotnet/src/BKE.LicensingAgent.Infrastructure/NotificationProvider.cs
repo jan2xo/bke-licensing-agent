@@ -553,6 +553,75 @@ public sealed class NotificationProvider : INotificationService
         }
     }
 
+    private void EnsureAccountNotification(
+        string productId,
+        string id,
+        string source,
+        string code,
+        string title,
+        string body,
+        string category,
+        string severity,
+        string createdAt,
+        string? expiresAt)
+    {
+        using var connection = OpenDatabase();
+        using var transaction = connection.BeginTransaction();
+
+        using (var existing = connection.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText =
+                "SELECT product_id FROM notifications WHERE id=$id";
+            existing.Parameters.AddWithValue("$id", id);
+            var existingProduct = existing.ExecuteScalar() as string;
+            if (existingProduct is not null &&
+                !string.Equals(
+                    existingProduct,
+                    productId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Account notification id crossed product scope.");
+            }
+        }
+
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO notifications (
+                id, product_id, code, source, title, body, category,
+                severity, state, created_at, expires_at, dismissed_at
+            ) VALUES (
+                $id, $product_id, $code, $source, $title, $body, $category,
+                $severity, 'unread', $created_at, $expires_at, NULL
+            )
+            ON CONFLICT(id) DO UPDATE SET
+                code=excluded.code,
+                source=excluded.source,
+                title=excluded.title,
+                body=excluded.body,
+                category=excluded.category,
+                severity=excluded.severity,
+                created_at=excluded.created_at,
+                expires_at=excluded.expires_at
+            """;
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$product_id", productId);
+        command.Parameters.AddWithValue("$code", code);
+        command.Parameters.AddWithValue("$source", source);
+        command.Parameters.AddWithValue("$title", title);
+        command.Parameters.AddWithValue("$body", body);
+        command.Parameters.AddWithValue("$category", category);
+        command.Parameters.AddWithValue("$severity", severity);
+        command.Parameters.AddWithValue("$created_at", createdAt);
+        command.Parameters.AddWithValue(
+            "$expires_at",
+            (object?)expiresAt ?? DBNull.Value);
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
     private NotificationRow EnsureNotification(
         string productId,
         string code,
@@ -684,6 +753,33 @@ public sealed class NotificationProvider : INotificationService
         }.ToString());
         connection.Open();
         return connection;
+    }
+
+    private static string AccountCategory(string category) => category switch
+    {
+        "LICENSE" => "Licensing",
+        "UPDATE" => "Update",
+        "SECURITY" or "OPERATIONAL" => "System",
+        "TRANSACTIONAL" => "General",
+        "CUSTOM" => "Product",
+        _ => throw new InvalidDataException(
+            "Invalid account notification category."),
+    };
+
+    private static string BoundedString(
+        JsonElement value,
+        string property,
+        int maximumLength)
+    {
+        if (!value.TryGetProperty(property, out var element) ||
+            element.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(element.GetString()) ||
+            element.GetString()!.Length > maximumLength)
+        {
+            throw new InvalidDataException(
+                $"Account notification {property} is invalid.");
+        }
+        return element.GetString()!;
     }
 
     private static string? NotificationState(SqliteConnection connection, string productId, string notificationId)
