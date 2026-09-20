@@ -434,7 +434,7 @@ public sealed class NotificationProvider : INotificationService
         using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
-            select.CommandText = "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
+            select.CommandText = "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
             select.Parameters.AddWithValue("$product_id", productId);
             select.Parameters.AddWithValue("$code", code);
             using var reader = select.ExecuteReader();
@@ -446,7 +446,7 @@ public sealed class NotificationProvider : INotificationService
         {
             using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
-            insert.CommandText = "INSERT INTO notifications (id, product_id, code, severity, state, created_at, expires_at, dismissed_at) VALUES ($id,$product_id,$code,$severity,'unread',$created_at,$expires_at,NULL)";
+            insert.CommandText = "INSERT INTO notifications (id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at) VALUES ($id,$product_id,$code,NULL,NULL,NULL,NULL,$severity,'unread',$created_at,$expires_at,NULL)";
             insert.Parameters.AddWithValue("$id", notificationId);
             insert.Parameters.AddWithValue("$product_id", productId);
             insert.Parameters.AddWithValue("$code", code);
@@ -484,7 +484,7 @@ public sealed class NotificationProvider : INotificationService
         using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
-            select.CommandText = "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
+            select.CommandText = "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND code=$code";
             select.Parameters.AddWithValue("$product_id", productId);
             select.Parameters.AddWithValue("$code", code);
             using var reader = select.ExecuteReader();
@@ -503,8 +503,8 @@ public sealed class NotificationProvider : INotificationService
         using var connection = OpenDatabase();
         using var command = connection.CreateCommand();
         command.CommandText = includeDismissed
-            ? "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id ORDER BY created_at DESC LIMIT $limit"
-            : "SELECT id, product_id, code, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND state != 'dismissed' ORDER BY created_at DESC LIMIT $limit";
+            ? "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id ORDER BY created_at DESC LIMIT $limit"
+            : "SELECT id, product_id, code, source, title, body, category, severity, state, created_at, expires_at, dismissed_at FROM notifications WHERE product_id=$product_id AND state != 'dismissed' ORDER BY created_at DESC LIMIT $limit";
         command.Parameters.AddWithValue("$product_id", productId);
         command.Parameters.AddWithValue("$limit", limit);
         using var reader = command.ExecuteReader();
@@ -590,11 +590,15 @@ public sealed class NotificationProvider : INotificationService
         reader.GetString(0),
         reader.GetString(1),
         reader.GetString(2),
-        reader.GetString(3),
-        reader.GetString(4),
-        reader.GetString(5),
+        reader.IsDBNull(3) ? null : reader.GetString(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4),
+        reader.IsDBNull(5) ? null : reader.GetString(5),
         reader.IsDBNull(6) ? null : reader.GetString(6),
-        reader.IsDBNull(7) ? null : reader.GetString(7));
+        reader.GetString(7),
+        reader.GetString(8),
+        reader.GetString(9),
+        reader.IsDBNull(10) ? null : reader.GetString(10),
+        reader.IsDBNull(11) ? null : reader.GetString(11));
 
     private static string RequiredString(JsonElement value, string property)
     {
@@ -664,6 +668,10 @@ public sealed class NotificationProvider : INotificationService
         string Id,
         string ProductId,
         string Code,
+        string? Source,
+        string? Title,
+        string? Body,
+        string? Category,
         string Severity,
         string State,
         string CreatedAt,
