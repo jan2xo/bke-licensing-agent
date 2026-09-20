@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -49,15 +50,22 @@ public sealed class NotificationProvider : INotificationService
         };
 
     private readonly AuthorizationProvider _authorization;
+    private readonly IAccountSessionService _accountSessionService;
+    private readonly IAccountSessionSecretStore _accountSessionStore;
     private readonly string _databasePath;
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
     private readonly object _deliveryLock = new();
     private readonly Dictionary<string, HashSet<string>> _everyLaunchIds = new(StringComparer.Ordinal);
 
-    public NotificationProvider(AuthorizationProvider authorization)
+    public NotificationProvider(
+        AuthorizationProvider authorization,
+        IAccountSessionService accountSessionService,
+        IAccountSessionSecretStore accountSessionStore)
     {
         _authorization = authorization;
+        _accountSessionService = accountSessionService;
+        _accountSessionStore = accountSessionStore;
         var dataDir = Environment.GetEnvironmentVariable("BKE_AGENT_DATA_DIR")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "bke_licensing_agent");
         _databasePath = Path.Combine(dataDir, "agent.db");
@@ -147,14 +155,20 @@ public sealed class NotificationProvider : INotificationService
                 }
             }
 
-            if (!Presentations.TryGetValue(row.Code, out var presentation))
+            Presentation presentation;
+            if (row.Title is not null && row.Body is not null && row.Category is not null)
+            {
+                presentation = new Presentation(row.Title, row.Body, row.Category);
+            }
+            else if (!Presentations.TryGetValue(row.Code, out presentation!))
             {
                 throw new InvalidDataException($"Unsupported persisted notification code: {row.Code}");
             }
+
             var everyLaunch = IsEveryLaunch(row.ProductId, row.Id);
             items.Add(new NotificationItem(
                 row.Id,
-                "bke-licensing-agent",
+                row.Source ?? "bke-licensing-agent",
                 presentation.Title,
                 presentation.Body,
                 presentation.Category,
@@ -293,6 +307,19 @@ public sealed class NotificationProvider : INotificationService
         catch
         {
             // Broadcast delivery is best-effort and never becomes local authorization authority.
+        }
+
+        try
+        {
+            await SyncAccountNotificationsAsync(productId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            // Account notification synchronization is best-effort and never changes authorization.
         }
     }
 
