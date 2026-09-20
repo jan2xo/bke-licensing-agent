@@ -39,7 +39,6 @@ jobs:
           # Pin the exact V2 authority candidate that passed full CI before this proof.
           ref: edfee191b25815cd58ea8d7a5fc8741e6f08865b
           path: .ci/bke-digital-solutions
-          token: ${{ secrets.BKE_UPDATER_CORE_READ_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
