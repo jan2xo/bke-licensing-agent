@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
+using BKE.LicensingAgent.Storage;
+using Microsoft.Data.Sqlite;
 
 var inventoryPath = Path.Combine(AppContext.BaseDirectory, "certified-contract-baseline.json");
 using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
@@ -17,6 +19,9 @@ Require(localApi.GetProperty("default_port").GetInt32() == LocalAgentContract.De
 Require(localApi.GetProperty("max_json_body_bytes").GetInt64() == LocalAgentContract.MaxJsonBodyBytes, "body limit mismatch");
 Require(localApi.GetProperty("max_chunk_line_bytes").GetInt32() == LocalAgentContract.MaxChunkLineBytes, "chunk-line limit mismatch");
 Require(storage.GetProperty("schema_version").GetInt32() == LocalAgentContract.StorageSchemaVersion, "storage schema mismatch");
+Require(AgentDatabase.CurrentSchemaVersion == LocalAgentContract.StorageSchemaVersion, "shared storage schema constant drifted");
+Require(storage.GetProperty("fresh_bootstrap_required").GetBoolean(), "fresh storage bootstrap requirement drifted");
+Require(storage.GetProperty("discovered_product_registration_owner").GetString() == "privileged-provision", "discovered-product registration ownership drifted");
 
 var inventoryRoutes = localApi.GetProperty("routes")
     .EnumerateArray()
@@ -79,6 +84,8 @@ Require(softwareInstall.GetProperty("local_request_fields").EnumerateArray().Sel
 Require(softwareInstall.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "software-install cloud token exposure drifted");
 Require(softwareInstall.GetProperty("local_responses_expose_download_urls").GetBoolean() == false, "software-install download URL exposure drifted");
 Require(softwareInstall.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-install path exposure drifted");
+Require(softwareInstall.GetProperty("fresh_database_bootstrap_owner").GetString() == "bke-licensing-agent", "software-install fresh bootstrap ownership drifted");
+Require(softwareInstall.GetProperty("provision_commit_requires_inventory_registration").GetBoolean(), "software-install inventory commit requirement drifted");
 
 var softwareOpen = capabilities.GetProperty("software_open");
 Require(softwareOpen.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareOpenCapabilityId, "software-open capability id mismatch");
@@ -126,6 +133,7 @@ Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "softwar
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
 
+CertifyFreshStorageBootstrap(storage);
 await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
@@ -143,6 +151,61 @@ Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software open entitlement, execution-type, and path-hiding boundary certified");
 return;
+
+static void CertifyFreshStorageBootstrap(JsonElement storage)
+{
+    var root = Path.Combine(
+        Path.GetTempPath(),
+        "bke-agent-storage-cert-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        Require(!File.Exists(Path.Combine(root, "agent.db")), "fresh storage certification was not fresh");
+        AgentDatabase.EnsureInitialized(root);
+
+        var databasePath = AgentDatabase.DatabasePath(root);
+        Require(File.Exists(databasePath), "fresh storage bootstrap did not create agent.db");
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString());
+        connection.Open();
+
+        using (var schema = connection.CreateCommand())
+        {
+            schema.CommandText = "SELECT version FROM schema_version LIMIT 1";
+            Require(
+                Convert.ToInt32(schema.ExecuteScalar()) == LocalAgentContract.StorageSchemaVersion,
+                "fresh storage did not reach certified schema version");
+        }
+
+        var expectedTables = storage.GetProperty("tables")
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        using var tables = connection.CreateCommand();
+        tables.CommandText = """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+            """;
+        using var reader = tables.ExecuteReader();
+        var actualTables = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            actualTables.Add(reader.GetString(0));
+        }
+
+        Require(actualTables.SetEquals(expectedTables), "fresh storage table inventory drifted");
+    }
+    finally
+    {
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
 
 static async Task CertifyAccountSessionStateMachine()
 {
