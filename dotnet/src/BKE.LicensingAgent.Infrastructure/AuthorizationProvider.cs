@@ -14,7 +14,6 @@ namespace BKE.LicensingAgent.Infrastructure;
 
 public sealed class AuthorizationProvider : IAuthorizationService
 {
-    private const int ExpectedSchemaVersion = 8;
     private static readonly Regex ProductIdPattern = new("^[a-z0-9-]+$", RegexOptions.CultureInvariant);
     private static readonly Regex VersionPattern = new("^\\d+\\.\\d+\\.\\d+(?:[-+].*)?$", RegexOptions.CultureInvariant);
 
@@ -65,7 +64,7 @@ public sealed class AuthorizationProvider : IAuthorizationService
         }.ToString());
         connection.Open();
 
-        if (ReadSchemaVersion(connection) != ExpectedSchemaVersion)
+        if (ReadSchemaVersion(connection) != LocalAgentContract.StorageSchemaVersion)
         {
             return new AuthorizationResponse(false, "authorization_provider_unavailable");
         }
