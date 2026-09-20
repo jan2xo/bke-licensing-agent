@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using BKE.LicensingAgent.Storage;
+using Microsoft.Data.Sqlite;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
@@ -28,12 +30,15 @@ if (!File.Exists(helper))
 var root = Path.Combine(
     Path.GetTempPath(),
     "bke-first-install-cert-" + Guid.NewGuid().ToString("N"));
-var runtime = Path.Combine(root, "runtime");
+var dataRoot = Path.Combine(root, "agent-data");
+var runtime = Path.Combine(dataRoot, "privileged", "runtime");
 var stage = Path.Combine(runtime, "stage");
 var transactions = Path.Combine(runtime, "transactions");
 var approved = Path.Combine(root, "approved");
 var installRoot = Path.Combine(approved, "Certification Product");
 var entryPoint = "product.exe";
+var databasePath = Path.Combine(dataRoot, "agent.db");
+
 Directory.CreateDirectory(runtime);
 Directory.CreateDirectory(stage);
 Directory.CreateDirectory(transactions);
@@ -94,6 +99,44 @@ try
             ["last_target_policy_revision"] = null,
         });
 
+    // First prove that filesystem commit and local inventory are one transaction.
+    WriteManifest(stage, "9.9.9");
+    var invalidRequest = BuildRequest(
+        "agent-" + Guid.NewGuid().ToString("N"),
+        installRoot,
+        entryPoint,
+        artifactHash,
+        artifactBytes.LongLength,
+        targetHash,
+        agentPair.Private);
+    var invalidRequestPath = Path.Combine(runtime, "request-invalid.json");
+    WriteJson(invalidRequestPath, invalidRequest);
+    var invalidTransaction = "invalid-manifest-" + Guid.NewGuid().ToString("N");
+    var invalid = Run(
+        helper,
+        runtime,
+        invalidRequestPath,
+        targetPath,
+        artifactPath,
+        stage,
+        transactions,
+        invalidTransaction);
+
+    Require(invalid.ExitCode != 0, "mismatched installed manifest was accepted");
+    Require(!Directory.Exists(installRoot), "failed manifest registration left an installed product behind");
+    using (var failedState = JsonDocument.Parse(
+               File.ReadAllText(
+                   Path.Combine(transactions, invalidTransaction, "state.json"))))
+    {
+        Require(
+            failedState.RootElement.GetProperty("state").GetString() == "FAILED_CLEANED",
+            "failed manifest registration did not clean the first install");
+    }
+
+    // Now install a valid product into an otherwise empty Agent data directory.
+    WriteManifest(stage, "1.0.0");
+    Require(!File.Exists(databasePath), "fresh-install certification unexpectedly started with agent.db");
+
     var request1 = BuildRequest(
         "agent-" + Guid.NewGuid().ToString("N"),
         installRoot,
@@ -132,6 +175,48 @@ try
         Require(state.RootElement.GetProperty("target_version").GetString() == "1.0.0", "transaction target version drifted");
     }
 
+    Require(File.Exists(databasePath), "fresh first install did not create agent.db");
+    using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+           {
+               DataSource = databasePath,
+               Mode = SqliteOpenMode.ReadOnly,
+           }.ToString()))
+    {
+        connection.Open();
+
+        using (var schema = connection.CreateCommand())
+        {
+            schema.CommandText = "SELECT version FROM schema_version LIMIT 1";
+            Require(
+                Convert.ToInt32(schema.ExecuteScalar()) == AgentDatabase.CurrentSchemaVersion,
+                "fresh Agent database did not reach schema v8");
+        }
+
+        using var product = connection.CreateCommand();
+        product.CommandText = """
+            SELECT product_id, display_name, version, manifest_path, product_root, entry_point_path
+            FROM discovered_products
+            WHERE product_id = 'bke-certification-product'
+            """;
+        using var reader = product.ExecuteReader();
+        Require(reader.Read(), "fresh first install did not register discovered product");
+        Require(reader.GetString(0) == "bke-certification-product", "registered product_id drifted");
+        Require(reader.GetString(1) == "Certification Product", "registered display_name drifted");
+        Require(reader.GetString(2) == "1.0.0", "registered version drifted");
+        Require(
+            Path.GetFullPath(reader.GetString(3)) ==
+            Path.GetFullPath(Path.Combine(installRoot, "bke.manifest.json")),
+            "registered manifest path drifted");
+        Require(
+            Path.GetFullPath(reader.GetString(4)) == Path.GetFullPath(installRoot),
+            "registered product root drifted");
+        Require(
+            Path.GetFullPath(reader.GetString(5)) ==
+            Path.GetFullPath(Path.Combine(installRoot, entryPoint)),
+            "registered entry point path drifted");
+        Require(!reader.Read(), "duplicate discovered product rows were registered");
+    }
+
     var installedHashBefore = Sha256(File.ReadAllBytes(Path.Combine(installRoot, entryPoint)));
     var request2 = BuildRequest(
         "agent-" + Guid.NewGuid().ToString("N"),
@@ -160,11 +245,30 @@ try
         "duplicate first install modified the existing product");
 
     Console.WriteLine("BKE privileged first-install certification: PASS");
-    Console.WriteLine("Checks: signed Agent request, signed target policy, artifact hash/size, atomic commit, duplicate-target refusal");
+    Console.WriteLine(
+        "Checks: signed request/policy, invalid-manifest cleanup, schema-v8 bootstrap, discovered_products commit, duplicate refusal");
 }
 finally
 {
     try { Directory.Delete(root, recursive: true); } catch { }
+}
+
+static void WriteManifest(string stage, string version)
+{
+    WriteJson(
+        Path.Combine(stage, "bke.manifest.json"),
+        new SortedDictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["schemaVersion"] = 1,
+            ["productId"] = "bke-certification-product",
+            ["displayName"] = "Certification Product",
+            ["version"] = version,
+            ["entryPoint"] = "product.exe",
+            ["updateChannel"] = "stable",
+            ["minimumAgentVersion"] = "0.1.0",
+            ["platform"] = "windows",
+            ["architecture"] = "x64",
+        });
 }
 
 static (Ed25519PrivateKeyParameters Private, Ed25519PublicKeyParameters Public) KeyPair()
