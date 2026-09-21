@@ -27,7 +27,14 @@ function Invoke-AgentPost([string]$Path, [object]$Body) {
     }
 }
 
-$architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+$runtimeArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+$architecture = if ($null -ne $runtimeArchitecture) {
+    $runtimeArchitecture.ToString()
+} elseif (-not [string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITECTURE)) {
+    $env:PROCESSOR_ARCHITECTURE
+} else {
+    "unknown"
+}
 $os = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
 Write-JsonEvidence "01-machine.json" ([ordered]@{
     captured_at = [DateTimeOffset]::UtcNow.ToString("O")
