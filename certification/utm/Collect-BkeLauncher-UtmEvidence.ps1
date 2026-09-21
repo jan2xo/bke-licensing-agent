@@ -93,14 +93,18 @@ if (Test-Path $configPath) {
 Write-JsonEvidence "06-privileged-config.json" $configEvidence
 
 $trustMarker = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\UTM-TEST-ONLY-Render-Dock-target-trust.txt"
+Write-Host "[07/09] Capturing UTM target-trust marker..."
+$markerExists = [IO.File]::Exists($trustMarker)
+$markerContent = if ($markerExists) {
+    [IO.File]::ReadAllText($trustMarker)
+} else {
+    $null
+}
 Write-JsonEvidence "07-utm-target-trust.json" ([ordered]@{
-    marker_exists = Test-Path $trustMarker
-    marker = if (Test-Path $trustMarker) {
-        Get-Content -LiteralPath $trustMarker -Raw
-    } else {
-        $null
-    }
+    marker_exists = $markerExists
+    marker = $markerContent
 })
+Write-Host "[07/09] UTM target-trust marker captured."
 
 $agentEnvPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\.env"
 $environmentEvidence = [ordered]@{
