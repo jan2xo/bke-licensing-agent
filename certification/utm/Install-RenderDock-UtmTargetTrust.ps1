@@ -23,8 +23,10 @@ if (!(Test-Path $marker)) {
     throw "Disposable UTM trust marker is missing for architecture '$Architecture'."
 }
 
-if (Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
-    Select-String -Pattern "BEGIN PRIVATE KEY" -SimpleMatch -Quiet) {
+$privateKeyMatch = Get-ChildItem -LiteralPath $sourceRoot -Recurse -File |
+    Select-String -Pattern "BEGIN PRIVATE KEY" -SimpleMatch |
+    Select-Object -First 1
+if ($null -ne $privateKeyMatch) {
     throw "Refusing a disposable trust bundle that contains private-key material."
 }
 
