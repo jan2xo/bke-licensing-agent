@@ -45,6 +45,14 @@ public interface IAccountSessionService
         AccountSessionStartRequest request,
         CancellationToken cancellationToken);
 
+    Task<AccountSessionNativeContextResponse> NativeContextAsync(
+        AccountSessionNativeContextRequest request,
+        CancellationToken cancellationToken);
+
+    Task<AccountSessionNativeCompleteResponse> CompleteNativeAsync(
+        AccountSessionNativeCompleteRequest request,
+        CancellationToken cancellationToken);
+
     Task<AccountSessionStatusResponse> StatusAsync(
         AccountSessionStatusRequest request,
         CancellationToken cancellationToken);
