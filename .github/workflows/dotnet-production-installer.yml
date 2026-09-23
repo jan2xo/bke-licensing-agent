@@ -236,8 +236,9 @@ jobs:
           $managedRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Certification Product"
           if (!(Test-Path $managedRoot)) { throw "managed root-cleanup fixture was not created" }
 
-          $managedCleanup = Start-Process -FilePath $cleanup -ArgumentList "--remove-managed-products" -Wait -PassThru
-          if ($managedCleanup.ExitCode -ne 0) { throw "managed root cleanup failed: $($managedCleanup.ExitCode)" }
+          & $cleanup --remove-managed-products
+          $managedCleanupExit = $LASTEXITCODE
+          if ($managedCleanupExit -ne 0) { throw "managed root cleanup failed: $managedCleanupExit" }
           if (Test-Path $managedRoot) { throw "managed product root survived root cleanup" }
           if (!(Test-Path $sentinel)) { throw "unrelated user-data sentinel was removed" }
 
@@ -250,8 +251,9 @@ jobs:
           $legacyRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Certification Legacy Product"
           if (!(Test-Path $legacyRoot)) { throw "legacy root-cleanup fixture was not created" }
 
-          $legacyCleanup = Start-Process -FilePath $cleanup -ArgumentList "--remove-managed-products" -Wait -PassThru
-          if ($legacyCleanup.ExitCode -ne 20) { throw "LEGACY_UNKNOWN root cleanup did not fail closed with exit 20: $($legacyCleanup.ExitCode)" }
+          & $cleanup --remove-managed-products
+          $legacyCleanupExit = $LASTEXITCODE
+          if ($legacyCleanupExit -ne 20) { throw "LEGACY_UNKNOWN root cleanup did not fail closed with exit 20: $legacyCleanupExit" }
           if (!(Test-Path $legacyRoot)) { throw "LEGACY_UNKNOWN product was modified by root cleanup" }
           if (!(Test-Path $sentinel)) { throw "unrelated user-data sentinel was removed during fail-closed cleanup" }
 
