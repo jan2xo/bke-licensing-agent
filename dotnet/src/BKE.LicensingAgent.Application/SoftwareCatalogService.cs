@@ -26,7 +26,11 @@ public sealed record RemoteSoftwareCatalogItem(
 
 public sealed record LocalInstalledProduct(
     string ProductId,
-    string Version);
+    string Version,
+    string InstallProvenance = "LEGACY_UNKNOWN",
+    string UninstallStrategy = "NONE",
+    string? UninstallExecutable = null,
+    IReadOnlyList<string>? UninstallArguments = null);
 
 public sealed class SoftwareCatalogService : ISoftwareCatalogService
 {
