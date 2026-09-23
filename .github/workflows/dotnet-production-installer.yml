@@ -108,7 +108,8 @@ jobs:
             "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe",
             "dist/windows/bke-license-center-x64/bke-license-center.exe",
             "dist/windows/bke-updater-core-x64/bke-updater-core.exe",
-            "dist/windows/bke-privileged-provisioner-x64/bke-privileged-provisioner.exe"
+            "dist/windows/bke-privileged-provisioner-x64/bke-privileged-provisioner.exe",
+            "dist/windows/bke-root-cleanup-x64/bke-root-cleanup.exe"
           )) { Assert-PeMachine $path 0x8664 }
 
           foreach ($path in @(
@@ -116,7 +117,8 @@ jobs:
             "dist/windows/bke-licensing-agent-runtime-arm64/bke-licensing-agent-runtime.exe",
             "dist/windows/bke-license-center-arm64/bke-license-center.exe",
             "dist/windows/bke-updater-core-arm64/bke-updater-core.exe",
-            "dist/windows/bke-privileged-provisioner-arm64/bke-privileged-provisioner.exe"
+            "dist/windows/bke-privileged-provisioner-arm64/bke-privileged-provisioner.exe",
+            "dist/windows/bke-root-cleanup-arm64/bke-root-cleanup.exe"
           )) { Assert-PeMachine $path 0xAA64 }
 
       - name: Compile canonical x64 + ARM64 installers
@@ -168,8 +170,12 @@ jobs:
             (Join-Path $root "runtime\bke-licensing-agent-runtime.exe"),
             (Join-Path $root "license-center\bke-license-center.exe"),
             (Join-Path $root "updater\bke-updater-core.exe"),
-            (Join-Path $root "provisioning\bke-privileged-provisioner.exe")
+            (Join-Path $root "provisioning\bke-privileged-provisioner.exe"),
+            (Join-Path $root "root-cleanup\bke-root-cleanup.exe")
           )) { if (!(Test-Path $path)) { throw "installed .NET payload missing: $path" } }
+
+          $rootCleanupSmoke = Start-Process -FilePath (Join-Path $root "root-cleanup\bke-root-cleanup.exe") -ArgumentList "--smoke" -Wait -PassThru
+          if ($rootCleanupSmoke.ExitCode -ne 0) { throw "installed root cleanup smoke failed: $($rootCleanupSmoke.ExitCode)" }
 
           $licenseCenterSmoke = Start-Process -FilePath (Join-Path $root "license-center\bke-license-center.exe") -ArgumentList "--smoke" -Wait -PassThru
           if ($licenseCenterSmoke.ExitCode -ne 0) { throw "installed .NET License Center smoke failed: $($licenseCenterSmoke.ExitCode)" }
