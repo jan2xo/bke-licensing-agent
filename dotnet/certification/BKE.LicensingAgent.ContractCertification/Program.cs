@@ -44,6 +44,8 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.NotificationUnreadCountPath}",
     $"POST {LocalAgentContract.CheckUpdatesPath}",
     $"POST {LocalAgentContract.OpenUpdateCenterPath}",
+    $"POST {LocalAgentContract.AccountSessionDeviceContextPath}",
+    $"POST {LocalAgentContract.AccountSessionCompletePath}",
     $"POST {LocalAgentContract.AccountSessionStartPath}",
     $"POST {LocalAgentContract.AccountSessionStatusPath}",
     $"POST {LocalAgentContract.AccountSessionLogoutPath}",
@@ -67,6 +69,10 @@ Require(accountSession.GetProperty("capability_id").GetString() == LocalAgentCon
 Require(accountSession.GetProperty("contract_version").GetInt32() == LocalAgentContract.AccountSessionContractVersion, "account-session contract version mismatch");
 Require(accountSession.GetProperty("secret_owner").GetString() == "bke-licensing-agent", "account-session secret ownership drifted");
 Require(accountSession.GetProperty("local_responses_expose_tokens").GetBoolean() == false, "account-session local secret exposure drifted");
+Require(accountSession.GetProperty("native_credentials_owner").GetString() == "bke-launcher-to-digital-solutions", "native credential ownership drifted");
+Require(accountSession.GetProperty("device_context_exposes_cloud_secrets").GetBoolean() == false, "device context secret boundary drifted");
+Require(accountSession.GetProperty("native_complete_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "handoff_code"]), "native complete request widened");
 
 var softwareCatalog = capabilities.GetProperty("software_catalog");
 Require(softwareCatalog.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareCatalogCapabilityId, "software-catalog capability id mismatch");
@@ -133,6 +139,9 @@ Require(JsonName<NotificationFeedRequest>(nameof(NotificationFeedRequest.Include
 Require(JsonName<NotificationItem>(nameof(NotificationItem.DeliveryMode)) == "delivery_mode", "notification delivery_mode wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.CurrentVersion)) == "current_version", "update current_version wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.RequestedVersion)) == "requested_version", "update requested_version wire name mismatch");
+Require(JsonName<AccountSessionDeviceContextRequest>(nameof(AccountSessionDeviceContextRequest.CorrelationId)) == "correlation_id", "account-session device context correlation_id wire name mismatch");
+Require(JsonName<AccountSessionCompleteRequest>(nameof(AccountSessionCompleteRequest.CorrelationId)) == "correlation_id", "account-session complete correlation_id wire name mismatch");
+Require(JsonName<AccountSessionCompleteRequest>(nameof(AccountSessionCompleteRequest.HandoffCode)) == "handoff_code", "account-session complete handoff_code wire name mismatch");
 Require(JsonName<AccountSessionStartRequest>(nameof(AccountSessionStartRequest.CorrelationId)) == "correlation_id", "account-session start correlation_id wire name mismatch");
 Require(JsonName<AccountSessionStatusRequest>(nameof(AccountSessionStatusRequest.CorrelationId)) == "correlation_id", "account-session status correlation_id wire name mismatch");
 Require(JsonName<AccountSessionLogoutRequest>(nameof(AccountSessionLogoutRequest.CorrelationId)) == "correlation_id", "account-session logout correlation_id wire name mismatch");
@@ -151,7 +160,7 @@ Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activat
 Require(MethodNames<ILicenseCenterService>().SetEquals(["OpenAsync"]), "License Center port drifted");
 Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
-Require(MethodNames<IAccountSessionService>().SetEquals(["StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
+Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
@@ -802,6 +811,41 @@ static async Task CertifyAccountSessionStateMachine()
     Require(logout.Status == "SIGNED_OUT", "logout did not clear local authority");
     Require(logout.Error?.Code == "REMOTE_REVOKE_FAILED", "remote revoke failure was not surfaced");
     Require(store.State is null, "local account session survived logout revoke failure");
+
+    var nativeRemote = new FakeAccountSessionRemote();
+    nativeRemote.NativeExchanges.Enqueue(new RemoteAccountSessionPoll(
+        "approved",
+        AccessToken: "native-access-secret",
+        RefreshToken: "native-refresh-secret",
+        SessionId: "native-session-1",
+        ExpiresIn: TimeSpan.FromMinutes(15),
+        RefreshExpiresIn: TimeSpan.FromDays(30),
+        Account: new AccountSessionAccount(
+            "user-native",
+            "native@example.com",
+            "account-native",
+            "ORGANIZATION",
+            "Native Organization")));
+    var nativeStore = new FakeAccountSessionStore();
+    var nativeService = new AccountSessionService(nativeRemote, nativeStore, clock);
+    var native = await nativeService.CompleteAsync(
+        new AccountSessionCompleteRequest(
+            "cert-native-complete",
+            "native-handoff-secret"),
+        CancellationToken.None);
+    Require(native.Status == "AUTHENTICATED", "native handoff did not authenticate");
+    Require(native.Account?.AccountId == "account-native", "native handoff account drifted");
+    Require(nativeRemote.NativeExchangeCount == 1, "native handoff was not exchanged exactly once");
+    Require(nativeRemote.LastNativeHandoff == "native-handoff-secret", "native handoff value drifted before remote exchange");
+    var nativeWire = JsonSerializer.Serialize(native);
+    Require(!nativeWire.Contains("native-handoff-secret", StringComparison.Ordinal), "native handoff leaked to local response");
+    Require(!nativeWire.Contains("native-access-secret", StringComparison.Ordinal), "native access token leaked to local response");
+    Require(!nativeWire.Contains("native-refresh-secret", StringComparison.Ordinal), "native refresh token leaked to local response");
+    Require(nativeStore.State is ActiveAccountSessionState nativeActive &&
+            nativeActive.AccessToken == "native-access-secret" &&
+            nativeActive.RefreshToken == "native-refresh-secret",
+        "native session material did not enter secret-store custody");
+    Require(nativeRemote.AcknowledgeCount == 1, "native handoff was not acknowledged after secure-store write");
 }
 
 static async Task CertifySoftwareCatalogBoundary()
@@ -1324,10 +1368,13 @@ sealed class FakeAccountSessionRemote : IAccountSessionRemote
 {
     public int StartCount { get; private set; }
     public int PollCount { get; private set; }
+    public int NativeExchangeCount { get; private set; }
+    public string? LastNativeHandoff { get; private set; }
     public int RefreshCount { get; private set; }
     public int AcknowledgeCount { get; private set; }
     public bool ThrowOnRevoke { get; set; }
     public Queue<RemoteAccountSessionPoll> Polls { get; } = new();
+    public Queue<RemoteAccountSessionPoll> NativeExchanges { get; } = new();
     public Queue<RemoteAccountSessionRefresh> Refreshes { get; } = new();
 
     public Task<RemoteAccountSessionStart> StartAsync(CancellationToken cancellationToken)
@@ -1351,6 +1398,15 @@ sealed class FakeAccountSessionRemote : IAccountSessionRemote
             throw new InvalidOperationException("secret-store device code drifted");
         }
         return Task.FromResult(Polls.Dequeue());
+    }
+
+    public Task<RemoteAccountSessionPoll> ExchangeNativeAsync(
+        string handoffCode,
+        CancellationToken cancellationToken)
+    {
+        NativeExchangeCount += 1;
+        LastNativeHandoff = handoffCode;
+        return Task.FromResult(NativeExchanges.Dequeue());
     }
 
     public Task<RemoteAccountSessionRefresh> RefreshAsync(
@@ -1394,6 +1450,11 @@ sealed class FakeAuthenticatedAccountSessionService : IAccountSessionService
     public FakeAuthenticatedAccountSessionService(AccountSessionAccount account) =>
         _account = account;
 
+    public Task<AccountSessionCompleteResponse> CompleteAsync(
+        AccountSessionCompleteRequest request,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
     public Task<AccountSessionStartResponse> StartAsync(
         AccountSessionStartRequest request,
         CancellationToken cancellationToken) =>
@@ -1417,6 +1478,11 @@ sealed class FakeAuthenticatedAccountSessionService : IAccountSessionService
 
 sealed class FakeUnauthenticatedAccountSessionService : IAccountSessionService
 {
+    public Task<AccountSessionCompleteResponse> CompleteAsync(
+        AccountSessionCompleteRequest request,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
     public Task<AccountSessionStartResponse> StartAsync(
         AccountSessionStartRequest request,
         CancellationToken cancellationToken) =>
