@@ -253,23 +253,26 @@ public sealed class PrivilegedUpdateCenterProvider :
                 false));
         }
 
-        ProductContext product;
-        TargetPolicy target;
-        PrivilegedConfig config;
-        try
-        {
-            product = LoadProduct(productId, version)
-                ?? throw new FileNotFoundException("managed product inventory is unavailable");
-            config = LoadPrivilegedConfig();
-            target = ResolveTargetPolicy(product, config);
-            ValidateRemovalTarget(product, target, config);
-        }
-        catch (FileNotFoundException)
+        var product = LoadProduct(productId, version);
+        if (product is null)
         {
             return Task.FromResult(new StandaloneRemovalResult(
                 "NOT_INSTALLED",
                 "not_installed",
                 false));
+        }
+
+        TargetPolicy target;
+        PrivilegedConfig config;
+        try
+        {
+            config = LoadPrivilegedConfig();
+            target = ResolveTargetPolicy(product, config);
+            var targetDenial = ValidateRemovalTarget(product, target, config);
+            if (targetDenial is not null)
+            {
+                return Task.FromResult(targetDenial);
+            }
         }
         catch
         {
@@ -353,7 +356,7 @@ public sealed class PrivilegedUpdateCenterProvider :
             false));
     }
 
-    private void ValidateRemovalTarget(
+    private StandaloneRemovalResult? ValidateRemovalTarget(
         ProductContext product,
         TargetPolicy target,
         PrivilegedConfig config)
@@ -366,14 +369,20 @@ public sealed class PrivilegedUpdateCenterProvider :
                 NormalizeWindowsRelative(product.EntryPoint),
                 StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException("managed product inventory does not match signed target policy");
+            return new StandaloneRemovalResult(
+                "TARGET_MISMATCH",
+                "target_mismatch",
+                false);
         }
 
         if (config.ApprovedInstallRoots
             .Select(NormalizeWindowsAbsolute)
             .Any(root => string.Equals(root.TrimEnd('\\'), installRoot.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
         {
-            throw new InvalidDataException("approved platform root cannot be removed as a product");
+            return new StandaloneRemovalResult(
+                "PROTECTED_TARGET",
+                "protected_platform_root",
+                false);
         }
 
         var programFiles = NormalizeWindowsAbsolute(
@@ -390,8 +399,13 @@ public sealed class PrivilegedUpdateCenterProvider :
                 WindowsUnder(installRoot, protectedRoot) ||
                 WindowsUnder(protectedRoot, installRoot)))
         {
-            throw new InvalidDataException("managed product target overlaps protected BKE platform infrastructure");
+            return new StandaloneRemovalResult(
+                "PROTECTED_TARGET",
+                "protected_platform_infrastructure",
+                false);
         }
+
+        return null;
     }
 
     private void RemoveInventoryRows(string productId)
