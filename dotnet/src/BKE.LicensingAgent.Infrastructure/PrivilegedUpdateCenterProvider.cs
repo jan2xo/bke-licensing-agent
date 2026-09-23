@@ -1820,7 +1820,7 @@ public sealed class PrivilegedUpdateCenterProvider :
         var fields = policy.EnumerateObject()
             .Select(item => item.Name)
             .ToHashSet(StringComparer.Ordinal);
-        var uninstall = schema switch
+        UninstallPolicy? uninstall = schema switch
         {
             "bke.install-target-policy.v1" when fields.SetEquals(TargetPolicyV1Keys) => null,
             "bke.install-target-policy.v2" when fields.SetEquals(TargetPolicyV2Keys) =>
