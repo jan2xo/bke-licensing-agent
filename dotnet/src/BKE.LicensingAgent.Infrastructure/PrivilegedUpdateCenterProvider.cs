@@ -1589,6 +1589,8 @@ public sealed class PrivilegedUpdateCenterProvider :
                 config.ApprovedInstallRoots,
             ["expected_channel"] =
                 config.ExpectedChannel,
+            ["last_update_policy_revision"] = null,
+            ["last_target_policy_revision"] = null,
         };
         WriteJson(
             Path.Combine(runtimeRoot, "trust.json"),
@@ -1729,6 +1731,8 @@ public sealed class PrivilegedUpdateCenterProvider :
             ["target_keys"] = config.TargetKeys.ToDictionary(pair => pair.Key, pair => Convert.ToBase64String(pair.Value.GetEncoded()), StringComparer.Ordinal),
             ["approved_install_roots"] = config.ApprovedInstallRoots,
             ["expected_channel"] = config.ExpectedChannel,
+            ["last_update_policy_revision"] = null,
+            ["last_target_policy_revision"] = null,
         };
         WriteJson(Path.Combine(runtimeRoot, "trust.json"), trust);
 
