@@ -77,6 +77,8 @@ builder.Services.AddSingleton<UpdateProvider>();
 builder.Services.AddSingleton<PrivilegedUpdateCenterProvider>();
 builder.Services.AddSingleton<IStandaloneSoftwareProvisioner>(services =>
     services.GetRequiredService<PrivilegedUpdateCenterProvider>());
+builder.Services.AddSingleton<IStandaloneSoftwareRemover>(services =>
+    services.GetRequiredService<PrivilegedUpdateCenterProvider>());
 builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
 builder.Services.AddSingleton<IAccountSessionRemote>(_ => new AccountSessionRemote());
 builder.Services.AddSingleton<IAccountSessionSecretStore>(_ => new WindowsDpapiAccountSessionSecretStore());
@@ -109,6 +111,10 @@ builder.Services.AddSingleton<ILocalProductLauncher>(services =>
 builder.Services.AddSingleton<ISoftwareOpenService>(services => new SoftwareOpenService(
     services.GetRequiredService<ISoftwareCatalogService>(),
     services.GetRequiredService<ILocalProductLauncher>()));
+builder.Services.AddSingleton<ISoftwareRemoveService>(services => new SoftwareRemoveService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<ILocalProductInventory>(),
+    services.GetRequiredService<IStandaloneSoftwareRemover>()));
 builder.Services.AddSingleton<UnavailableProviders>();
 
 var app = builder.Build();
@@ -424,6 +430,21 @@ app.MapPost(LocalAgentContract.SoftwareOpenPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.SoftwareRemovePath, async (
+    SoftwareRemoveRequest request,
+    ISoftwareRemoveService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidSoftwareProductId(request.ProductId))
+    {
+        return SoftwareRemoveInvalidRequest();
+    }
+
+    var response = await service.RemoveAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 await app.RunAsync();
 return 0;
 
@@ -532,6 +553,18 @@ static IResult SoftwareOpenInvalidRequest() =>
         new SoftwareOpenError(
             "INVALID_REQUEST",
             "The software open request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult SoftwareRemoveInvalidRequest() =>
+    Results.Json(new SoftwareRemoveResponse(
+        LocalAgentContract.SoftwareRemoveCapabilityId,
+        LocalAgentContract.SoftwareRemoveContractVersion,
+        "FAILED",
+        "invalid_request",
+        new SoftwareRemoveError(
+            "INVALID_REQUEST",
+            "The software remove request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
