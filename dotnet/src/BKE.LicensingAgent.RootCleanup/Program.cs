@@ -47,7 +47,7 @@ internal static class Program
                 EnvironmentVariableTarget.Process);
 
             var inventory = new SqliteProductInventory(dataRoot);
-            var installed = await inventory.ReadAsync(
+            var installed = await inventory.ReadForRemovalAsync(
                 CancellationToken.None);
 
             if (installed.Count == 0)
@@ -86,7 +86,7 @@ internal static class Program
                     $"BKE root cleanup removed {product.ProductId}: {result.Status}/{result.Reason}");
             }
 
-            var remaining = await inventory.ReadAsync(
+            var remaining = await inventory.ReadForRemovalAsync(
                 CancellationToken.None);
             if (remaining.Count != 0)
             {
