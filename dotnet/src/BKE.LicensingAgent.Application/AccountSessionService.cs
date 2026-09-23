@@ -8,6 +8,10 @@ public interface IAccountSessionRemote
 
     Task<RemoteAccountSessionPoll> PollAsync(string deviceCode, CancellationToken cancellationToken);
 
+    Task<RemoteAccountSessionPoll> ExchangeNativeAsync(
+        string handoffCode,
+        CancellationToken cancellationToken);
+
     Task<RemoteAccountSessionRefresh> RefreshAsync(
         string refreshToken,
         CancellationToken cancellationToken);
@@ -88,6 +92,122 @@ public sealed class AccountSessionService : IAccountSessionService
         _remote = remote;
         _store = store;
         _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    public async Task<AccountSessionCompleteResponse> CompleteAsync(
+        AccountSessionCompleteRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var now = _timeProvider.GetUtcNow();
+            var existing = await _store.ReadAsync(cancellationToken);
+            if (existing is ActiveAccountSessionState active)
+            {
+                return CompleteResponse(
+                    "FAILED",
+                    active.Account,
+                    Error(
+                        "SESSION_ALREADY_ACTIVE",
+                        "Sign out before connecting a different BKE account.",
+                        false));
+            }
+
+            if (existing is PendingAccountSessionState pending)
+            {
+                try
+                {
+                    await _remote.RevokeAsync(
+                        null,
+                        null,
+                        pending.DeviceCode,
+                        cancellationToken);
+                }
+                catch
+                {
+                    // Native sign-in supersedes any local legacy device-code attempt.
+                    // The remote pending authorization has its own short expiry.
+                }
+                await _store.ClearAsync(cancellationToken);
+            }
+
+            RemoteAccountSessionPoll exchanged;
+            try
+            {
+                exchanged = await _remote.ExchangeNativeAsync(
+                    request.HandoffCode,
+                    cancellationToken);
+            }
+            catch
+            {
+                return CompleteResponse(
+                    "FAILED",
+                    null,
+                    Error(
+                        "REMOTE_UNAVAILABLE",
+                        "BKE native account handoff is temporarily unavailable.",
+                        true));
+            }
+
+            switch (exchanged.Status)
+            {
+                case "access_denied":
+                    return CompleteResponse(
+                        "DENIED",
+                        null,
+                        Error("ACCESS_DENIED", "BKE native account handoff was denied.", false));
+                case "expired_token":
+                    return CompleteResponse(
+                        "EXPIRED",
+                        null,
+                        Error("AUTHORIZATION_EXPIRED", "BKE native account handoff expired.", false));
+                case "approved":
+                    if (!ValidApprovedPoll(exchanged, now))
+                    {
+                        return CompleteResponse(
+                            "FAILED",
+                            null,
+                            Error(
+                                "INVALID_REMOTE_RESPONSE",
+                                "BKE native account handoff returned an invalid approval.",
+                                false));
+                    }
+
+                    var next = new ActiveAccountSessionState(
+                        exchanged.AccessToken!,
+                        exchanged.RefreshToken!,
+                        exchanged.SessionId,
+                        now.Add(exchanged.ExpiresIn!.Value),
+                        now.Add(exchanged.RefreshExpiresIn!.Value),
+                        exchanged.Account!);
+                    await _store.WriteAsync(next, cancellationToken);
+                    try
+                    {
+                        await _remote.AcknowledgeAsync(
+                            next.AccessToken,
+                            cancellationToken);
+                    }
+                    catch
+                    {
+                        // Durable local custody already succeeded. The server-side
+                        // encrypted handoff bundle is short-lived and refresh erases it.
+                    }
+                    return CompleteResponse("AUTHENTICATED", next.Account, null);
+                default:
+                    return CompleteResponse(
+                        "FAILED",
+                        null,
+                        Error(
+                            "INVALID_REMOTE_RESPONSE",
+                            "BKE native account handoff returned an invalid state.",
+                            false));
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task<AccountSessionStartResponse> StartAsync(
@@ -482,6 +602,17 @@ public sealed class AccountSessionService : IAccountSessionService
                !string.IsNullOrWhiteSpace(account.DisplayName) &&
                account.AccountType is "INDIVIDUAL" or "ORGANIZATION";
     }
+
+    private static AccountSessionCompleteResponse CompleteResponse(
+        string status,
+        AccountSessionAccount? account,
+        AccountSessionError? error) =>
+        new(
+            LocalAgentContract.AccountSessionCapabilityId,
+            LocalAgentContract.AccountSessionContractVersion,
+            status,
+            account,
+            error);
 
     private static AccountSessionStartResponse StartResponse(
         string status,

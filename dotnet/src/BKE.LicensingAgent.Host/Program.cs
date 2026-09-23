@@ -344,6 +344,42 @@ app.MapPost(LocalAgentContract.OpenUpdateCenterPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountSessionDeviceContextPath, (
+    AccountSessionDeviceContextRequest request) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountSessionDeviceContextInvalidRequest();
+    }
+
+    var identity = MachineIdentityProvider.Calculate();
+    return Results.Json(new AccountSessionDeviceContextResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "READY",
+        identity.DeviceId,
+        Environment.MachineName,
+        MachineIdentityProvider.ProtocolPlatform(identity.Platform),
+        MachineIdentityProvider.ProtocolArchitecture(identity.Architecture),
+        null), statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountSessionCompletePath, async (
+    AccountSessionCompleteRequest request,
+    IAccountSessionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        string.IsNullOrWhiteSpace(request.HandoffCode) ||
+        request.HandoffCode.Length is < 32 or > 256)
+    {
+        return AccountSessionCompleteInvalidRequest();
+    }
+
+    var response = await service.CompleteAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountSessionStartPath, async (
     AccountSessionStartRequest request,
     IAccountSessionService service,
@@ -491,6 +527,27 @@ static string LicenseCenterPage(string productId, string version, string install
         .Replace("__BKE_VERSION__", safeVersion, StringComparison.Ordinal)
         .Replace("__BKE_CONTEXT__", contextJson, StringComparison.Ordinal);
 }
+
+static IResult AccountSessionDeviceContextInvalidRequest() =>
+    Results.Json(new AccountSessionDeviceContextResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "FAILED",
+        null,
+        null,
+        null,
+        null,
+        new AccountSessionError("INVALID_REQUEST", "The account-session device-context request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountSessionCompleteInvalidRequest() =>
+    Results.Json(new AccountSessionCompleteResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "FAILED",
+        null,
+        new AccountSessionError("INVALID_REQUEST", "The account-session completion request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
 
 static IResult AccountSessionStartInvalidRequest() =>
     Results.Json(new AccountSessionStartResponse(
