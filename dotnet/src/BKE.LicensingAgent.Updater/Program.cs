@@ -32,6 +32,11 @@ internal static class Program
         "platform","architecture","release_id","artifact_id","artifact_sha256","artifact_size","content_type",
         "published_at","issued_at","revision","signing_key_id","algorithm","signature",
     };
+    private static readonly HashSet<string> UpdateV2Fields = new(StringComparer.Ordinal)
+    {
+        "schema","product_id","current_version","target_version","channel","platform","architecture",
+        "source_authority","repository","tag","issued_at","expires_at","signing_key_id","algorithm","signature",
+    };
 
     private static readonly HashSet<string> TargetV1Fields = new(StringComparer.Ordinal)
     {
@@ -380,42 +385,115 @@ internal static class Program
             targetHash);
     }
 
-    private static VerifiedUpdate VerifyUpdate(JsonElement root, TrustedRuntime trust, VerifiedRequest request)
+    private static VerifiedUpdate VerifyUpdate(
+        JsonElement root,
+        TrustedRuntime trust,
+        VerifiedRequest request)
     {
-        RequireExact(root, UpdateFields, "update policy");
-        if (RequiredString(root, "schema") != "bke.update-policy.v1" ||
-            RequiredString(root, "algorithm") != "Ed25519")
+        var schema = RequiredString(root, "schema");
+        if (schema == "bke.update-policy.v1")
+        {
+            RequireExact(root, UpdateFields, "update policy");
+            if (RequiredString(root, "algorithm") != "Ed25519")
+                throw new InvalidDataException("unsupported update policy contract");
+
+            if (RequiredString(root, "product_id") != request.ProductId)
+                throw new InvalidDataException("product_id mismatch");
+            if (RequiredString(root, "platform") != request.Platform)
+                throw new InvalidDataException("platform mismatch");
+            if (RequiredString(root, "architecture") != request.Architecture)
+                throw new InvalidDataException("architecture mismatch");
+            if (RequiredString(root, "channel") != trust.ExpectedChannel)
+                throw new InvalidDataException("channel mismatch");
+
+            var current = SemanticVersion.Parse(RequiredString(root, "current_version"));
+            var latest = SemanticVersion.Parse(RequiredString(root, "latest_version"));
+            var minimum = SemanticVersion.Parse(RequiredString(root, "minimum_supported_version"));
+            if (minimum.CompareTo(latest) > 0)
+                throw new InvalidDataException("minimum version exceeds latest version");
+            _ = current;
+
+            var revision = RequiredInt(root, "revision");
+            if (revision < 0)
+                throw new InvalidDataException("invalid policy revision");
+            if (trust.LastUpdateRevision is not null && revision <= trust.LastUpdateRevision)
+                throw new InvalidDataException("stale policy");
+
+            var keyId = RequiredString(root, "signing_key_id");
+            if (!trust.DigitalKeys.TryGetValue(keyId, out var key))
+                throw new InvalidDataException("unknown signing key");
+            VerifySignature(root, key, "invalid policy signature");
+
+            return new VerifiedUpdate(
+                RequiredString(root, "product_id"),
+                RequiredString(root, "current_version"),
+                RequiredString(root, "latest_version"),
+                RequiredString(root, "platform"),
+                RequiredString(root, "architecture"),
+                RequiredHash(root, "artifact_sha256"),
+                RequiredLong(root, "artifact_size"));
+        }
+
+        if (schema != "bke.update-policy.v2")
             throw new InvalidDataException("unsupported update policy contract");
 
-        if (RequiredString(root, "product_id") != request.ProductId) throw new InvalidDataException("product_id mismatch");
-        if (RequiredString(root, "platform") != request.Platform) throw new InvalidDataException("platform mismatch");
-        if (RequiredString(root, "architecture") != request.Architecture) throw new InvalidDataException("architecture mismatch");
-        if (RequiredString(root, "channel") != trust.ExpectedChannel) throw new InvalidDataException("channel mismatch");
+        RequireExact(root, UpdateV2Fields, "update policy");
+        if (RequiredString(root, "algorithm") != "Ed25519" ||
+            RequiredString(root, "source_authority") != "GITHUB_RELEASES")
+            throw new InvalidDataException("unsupported update policy contract");
 
-        var current = SemanticVersion.Parse(RequiredString(root, "current_version"));
-        var latest = SemanticVersion.Parse(RequiredString(root, "latest_version"));
-        var minimum = SemanticVersion.Parse(RequiredString(root, "minimum_supported_version"));
-        if (minimum.CompareTo(latest) > 0) throw new InvalidDataException("minimum version exceeds latest version");
-        _ = current;
+        if (RequiredString(root, "product_id") != request.ProductId)
+            throw new InvalidDataException("product_id mismatch");
+        if (RequiredString(root, "current_version") != request.CurrentVersion)
+            throw new InvalidDataException("current version mismatch");
+        if (RequiredString(root, "target_version") != request.TargetVersion)
+            throw new InvalidDataException("target version mismatch");
+        if (RequiredString(root, "platform") != request.Platform)
+            throw new InvalidDataException("platform mismatch");
+        if (RequiredString(root, "architecture") != request.Architecture)
+            throw new InvalidDataException("architecture mismatch");
+        if (RequiredString(root, "channel") != trust.ExpectedChannel)
+            throw new InvalidDataException("channel mismatch");
 
-        var revision = RequiredInt(root, "revision");
-        if (revision < 0) throw new InvalidDataException("invalid policy revision");
-        if (trust.LastUpdateRevision is not null && revision <= trust.LastUpdateRevision)
-            throw new InvalidDataException("stale policy");
+        var currentV2 = SemanticVersion.Parse(RequiredString(root, "current_version"));
+        var targetV2 = SemanticVersion.Parse(RequiredString(root, "target_version"));
+        if (targetV2.CompareTo(currentV2) <= 0)
+            throw new InvalidDataException("target version is not newer");
 
-        var keyId = RequiredString(root, "signing_key_id");
-        if (!trust.DigitalKeys.TryGetValue(keyId, out var key))
+        var repository = RequiredString(root, "repository");
+        if (!Regex.IsMatch(
+                repository,
+                "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+                RegexOptions.CultureInvariant))
+            throw new InvalidDataException("invalid GitHub repository");
+        if (RequiredString(root, "tag") != "v" + request.TargetVersion)
+            throw new InvalidDataException("GitHub tag mismatch");
+
+        if (!DateTimeOffset.TryParse(RequiredString(root, "issued_at"), out var issuedAt) ||
+            !DateTimeOffset.TryParse(RequiredString(root, "expires_at"), out var expiresAt))
+            throw new InvalidDataException("invalid update policy lifetime");
+        issuedAt = issuedAt.ToUniversalTime();
+        expiresAt = expiresAt.ToUniversalTime();
+        var now = DateTimeOffset.UtcNow;
+        if (issuedAt > now.AddSeconds(30) ||
+            expiresAt <= now ||
+            expiresAt <= issuedAt ||
+            expiresAt - issuedAt > TimeSpan.FromMinutes(5))
+            throw new InvalidDataException("expired or excessive update policy lifetime");
+
+        var v2KeyId = RequiredString(root, "signing_key_id");
+        if (!trust.DigitalKeys.TryGetValue(v2KeyId, out var v2Key))
             throw new InvalidDataException("unknown signing key");
-        VerifySignature(root, key, "invalid policy signature");
+        VerifySignature(root, v2Key, "invalid policy signature");
 
         return new VerifiedUpdate(
-            RequiredString(root, "product_id"),
-            RequiredString(root, "current_version"),
-            RequiredString(root, "latest_version"),
-            RequiredString(root, "platform"),
-            RequiredString(root, "architecture"),
-            RequiredHash(root, "artifact_sha256"),
-            RequiredLong(root, "artifact_size"));
+            request.ProductId,
+            request.CurrentVersion,
+            request.TargetVersion,
+            request.Platform,
+            request.Architecture,
+            request.ArtifactSha256,
+            request.ArtifactSize);
     }
 
     private static VerifiedTarget VerifyTarget(JsonElement root, TrustedRuntime trust)

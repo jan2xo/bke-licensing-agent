@@ -51,6 +51,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.AccountSessionLogoutPath}",
     $"POST {LocalAgentContract.SoftwareCatalogPath}",
     $"POST {LocalAgentContract.SoftwareInstallPath}",
+    $"POST {LocalAgentContract.SoftwareUpdatePath}",
     $"POST {LocalAgentContract.SoftwareOpenPath}",
     $"POST {LocalAgentContract.SoftwareRemovePath}",
 };
@@ -96,6 +97,23 @@ Require(softwareInstall.GetProperty("local_responses_expose_download_urls").GetB
 Require(softwareInstall.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-install path exposure drifted");
 Require(softwareInstall.GetProperty("fresh_database_bootstrap_owner").GetString() == "bke-licensing-agent", "software-install fresh bootstrap ownership drifted");
 Require(softwareInstall.GetProperty("provision_commit_requires_inventory_registration").GetBoolean(), "software-install inventory commit requirement drifted");
+
+var softwareUpdate = capabilities.GetProperty("software_update");
+Require(softwareUpdate.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareUpdateCapabilityId, "software-update capability id mismatch");
+Require(softwareUpdate.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareUpdateContractVersion, "software-update contract version mismatch");
+Require(softwareUpdate.GetProperty("account_session_required").GetBoolean(), "software-update account-session requirement drifted");
+Require(softwareUpdate.GetProperty("cloud_authorization_owner").GetString() == "bke-digital-solutions", "software-update cloud authority drifted");
+Require(softwareUpdate.GetProperty("release_authority").GetString() == "github-releases", "software-update release authority drifted");
+Require(softwareUpdate.GetProperty("privileged_update_owner").GetString() == "bke-licensing-agent", "software-update privileged owner drifted");
+Require(softwareUpdate.GetProperty("update_policy_schema").GetString() == "bke.update-policy.v2", "software-update policy schema drifted");
+Require(softwareUpdate.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "product_id"]), "software-update local request widened");
+Require(softwareUpdate.GetProperty("supported_install_provenance").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["BKE_MANAGED_PACKAGE"]), "software-update provenance boundary drifted");
+Require(softwareUpdate.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "software-update cloud token exposure drifted");
+Require(softwareUpdate.GetProperty("local_responses_expose_download_urls").GetBoolean() == false, "software-update download URL exposure drifted");
+Require(softwareUpdate.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-update install path exposure drifted");
+Require(softwareUpdate.GetProperty("rollback_required").GetBoolean(), "software-update rollback requirement drifted");
 
 var softwareOpen = capabilities.GetProperty("software_open");
 Require(softwareOpen.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareOpenCapabilityId, "software-open capability id mismatch");
@@ -150,6 +168,8 @@ Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType))
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.CorrelationId)) == "correlation_id", "software-install correlation_id wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.ProductId)) == "product_id", "software-install product_id wire name mismatch");
+Require(JsonName<SoftwareUpdateRequest>(nameof(SoftwareUpdateRequest.CorrelationId)) == "correlation_id", "software-update correlation_id wire name mismatch");
+Require(JsonName<SoftwareUpdateRequest>(nameof(SoftwareUpdateRequest.ProductId)) == "product_id", "software-update product_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.CorrelationId)) == "correlation_id", "software-open correlation_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.ProductId)) == "product_id", "software-open product_id wire name mismatch");
 Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.CorrelationId)) == "correlation_id", "software-remove correlation_id wire name mismatch");
@@ -162,6 +182,7 @@ Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsyn
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
+Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
 Require(MethodNames<ISoftwareRemoveService>().SetEquals(["RemoveAsync"]), "software-remove port drifted");
@@ -173,6 +194,7 @@ await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
+await CertifySoftwareUpdateBoundary();
 await CertifySoftwareOpenBoundary();
 await CertifySoftwareRemoveBoundary();
 
@@ -995,6 +1017,121 @@ static async Task CertifySoftwareInstallBoundary()
     Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful install denial was flattened");
 }
 
+static async Task CertifySoftwareUpdateBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-update",
+        "updater@example.com",
+        "account-update",
+        "INDIVIDUAL",
+        "Update Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "update-access-secret",
+            "update-refresh-secret",
+            "update-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var inventory = new FakeLocalProductInventory(
+        new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+        {
+            ["bke-render-dock"] = new(
+                "bke-render-dock",
+                "1.0.1",
+                "BKE_MANAGED_PACKAGE",
+                "MANAGED_DIRECTORY"),
+        });
+    var authorization = new StandaloneUpdateAuthorization(
+        "bke-render-dock",
+        "1.0.1",
+        "1.0.2",
+        "jan2xo/BKE_RENDER_DOCK",
+        "v1.0.2",
+        """{"schema":"bke.update-policy.v2","signature":"hidden"}""");
+    var remote = new FakeStandaloneUpdateAuthorizationRemote(
+        new StandaloneUpdateAuthorizationResult(
+            "UPDATE_AVAILABLE",
+            authorization));
+    var updater = new FakeStandaloneSoftwareUpdater(
+        new StandaloneUpdateResult(
+            "STARTED",
+            "update_started",
+            false));
+    var service = new SoftwareUpdateService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        inventory,
+        remote,
+        updater);
+
+    var response = await service.UpdateAsync(
+        new SoftwareUpdateRequest(
+            "cert-update",
+            "bke-render-dock"),
+        CancellationToken.None);
+
+    Require(response.Status == "STARTED", "software update did not enter STARTED");
+    Require(response.State == "update_started", "software update state drifted");
+    Require(remote.AccessToken == "update-access-secret", "software update remote did not receive Agent-owned access token");
+    Require(remote.ProductId == "bke-render-dock", "software update remote product drifted");
+    Require(remote.CurrentVersion == "1.0.1", "software update remote current version drifted");
+    Require(updater.ProductId == "bke-render-dock", "software update privileged product drifted");
+    Require(updater.CurrentVersion == "1.0.1", "software update privileged current version drifted");
+    Require(updater.Authorization?.TargetVersion == "1.0.2", "software update target authority drifted");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("update-access-secret", StringComparison.Ordinal), "software update access token leaked to local response");
+    Require(!wire.Contains("update-refresh-secret", StringComparison.Ordinal), "software update refresh token leaked to local response");
+    Require(!wire.Contains("github.com", StringComparison.OrdinalIgnoreCase), "software update release URL leaked to local response");
+    Require(!wire.Contains("BKE_RENDER_DOCK", StringComparison.Ordinal), "software update repository identity leaked to local response");
+    Require(!wire.Contains("Program Files", StringComparison.OrdinalIgnoreCase), "software update install path leaked to local response");
+
+    var unsupportedRemote = new FakeStandaloneUpdateAuthorizationRemote(
+        new StandaloneUpdateAuthorizationResult("UPDATE_AVAILABLE", authorization));
+    var unsupportedUpdater = new FakeStandaloneSoftwareUpdater(
+        new StandaloneUpdateResult("STARTED", "update_started", false));
+    var unsupported = new SoftwareUpdateService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        new FakeLocalProductInventory(
+            new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+            {
+                ["bke-render-dock"] = new(
+                    "bke-render-dock",
+                    "1.0.1",
+                    "PRODUCT_INSTALLER",
+                    "INSTALLER_EXECUTABLE"),
+            }),
+        unsupportedRemote,
+        unsupportedUpdater);
+    var unsupportedResponse = await unsupported.UpdateAsync(
+        new SoftwareUpdateRequest(
+            "cert-update-provenance",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(unsupportedResponse.Error?.Code == "UNSUPPORTED_PROVENANCE", "software update accepted installer-owned provenance");
+    Require(unsupportedRemote.ProductId is null, "software update called cloud authority for unsupported provenance");
+    Require(unsupportedUpdater.ProductId is null, "software update invoked privileged updater for unsupported provenance");
+
+    var denied = new SoftwareUpdateService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        inventory,
+        new FakeStandaloneUpdateAuthorizationRemote(
+            new StandaloneUpdateAuthorizationResult("NOT_ENTITLED")),
+        updater);
+    var deniedResponse = await denied.UpdateAsync(
+        new SoftwareUpdateRequest(
+            "cert-update-denied",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful update denial was flattened");
+}
+
 static async Task CertifySoftwareOpenBoundary()
 {
     var account = new AccountSessionAccount(
@@ -1557,6 +1694,47 @@ sealed class FakeStandaloneSoftwareProvisioner(
         StandaloneProvisionAuthorization authorization,
         CancellationToken cancellationToken)
     {
+        Authorization = authorization;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStandaloneUpdateAuthorizationRemote(
+    StandaloneUpdateAuthorizationResult result)
+    : IStandaloneUpdateAuthorizationRemote
+{
+    public string? AccessToken { get; private set; }
+    public string? ProductId { get; private set; }
+    public string? CurrentVersion { get; private set; }
+
+    public Task<StandaloneUpdateAuthorizationResult> AuthorizeAsync(
+        string accessToken,
+        string productId,
+        string currentVersion,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        ProductId = productId;
+        CurrentVersion = currentVersion;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStandaloneSoftwareUpdater(
+    StandaloneUpdateResult result)
+    : IStandaloneSoftwareUpdater
+{
+    public string? ProductId { get; private set; }
+    public string? CurrentVersion { get; private set; }
+    public StandaloneUpdateAuthorization? Authorization { get; private set; }
+
+    public Task<StandaloneUpdateResult> UpdateAsync(
+        LocalInstalledProduct installed,
+        StandaloneUpdateAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        ProductId = installed.ProductId;
+        CurrentVersion = installed.Version;
         Authorization = authorization;
         return Task.FromResult(result);
     }
