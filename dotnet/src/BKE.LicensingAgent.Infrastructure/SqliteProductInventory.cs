@@ -21,7 +21,16 @@ public sealed class SqliteProductInventory : ILocalProductInventory
     }
 
     public Task<IReadOnlyDictionary<string, LocalInstalledProduct>> ReadAsync(
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        ReadCoreAsync(cancellationToken, requireEntryPoint: true);
+
+    public Task<IReadOnlyDictionary<string, LocalInstalledProduct>> ReadForRemovalAsync(
+        CancellationToken cancellationToken) =>
+        ReadCoreAsync(cancellationToken, requireEntryPoint: false);
+
+    private Task<IReadOnlyDictionary<string, LocalInstalledProduct>> ReadCoreAsync(
+        CancellationToken cancellationToken,
+        bool requireEntryPoint)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -92,7 +101,7 @@ public sealed class SqliteProductInventory : ILocalProductInventory
                 string.IsNullOrWhiteSpace(productId) ||
                 string.IsNullOrWhiteSpace(version) ||
                 string.IsNullOrWhiteSpace(entryPointPath) ||
-                !File.Exists(entryPointPath))
+                (requireEntryPoint && !File.Exists(entryPointPath)))
             {
                 continue;
             }
