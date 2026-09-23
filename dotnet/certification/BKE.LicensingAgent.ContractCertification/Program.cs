@@ -360,6 +360,23 @@ static void CertifyFreshStorageBootstrap(JsonElement storage)
         Require(
             actualNotificationColumns.SequenceEqual(expectedNotificationColumns),
             "fresh notification storage columns drifted");
+
+        var expectedProductColumns = storage.GetProperty("tables")
+            .GetProperty("discovered_products")
+            .EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        using var productColumns = connection.CreateCommand();
+        productColumns.CommandText = "PRAGMA table_info(discovered_products)";
+        using var productReader = productColumns.ExecuteReader();
+        var actualProductColumns = new List<string>();
+        while (productReader.Read())
+        {
+            actualProductColumns.Add(productReader.GetString(1));
+        }
+        Require(
+            actualProductColumns.SequenceEqual(expectedProductColumns),
+            "fresh discovered-product storage columns drifted");
     }
     finally
     {
@@ -388,6 +405,28 @@ static void CertifyNotificationSchemaUpgrade()
             command.CommandText = """
                 CREATE TABLE schema_version (version INTEGER NOT NULL);
                 INSERT INTO schema_version(version) VALUES (8);
+                CREATE TABLE discovered_products (
+                    product_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    manifest_path TEXT NOT NULL,
+                    product_root TEXT NOT NULL,
+                    entry_point_path TEXT NOT NULL,
+                    discovered_at TEXT NOT NULL,
+                    PRIMARY KEY (manifest_path)
+                );
+                INSERT INTO discovered_products (
+                    product_id, display_name, version, manifest_path,
+                    product_root, entry_point_path, discovered_at
+                ) VALUES (
+                    'legacy-product',
+                    'Legacy Product',
+                    '1.0.0',
+                    'C:\\legacy\\bke.manifest.json',
+                    'C:\\legacy',
+                    'C:\\legacy\\legacy.exe',
+                    '2026-09-19T00:00:00.0000000+00:00'
+                );
                 CREATE TABLE notifications (
                     id TEXT PRIMARY KEY,
                     product_id TEXT NOT NULL,
@@ -448,6 +487,22 @@ static void CertifyNotificationSchemaUpgrade()
             Require(reader.IsDBNull(1) && reader.IsDBNull(2) &&
                     reader.IsDBNull(3) && reader.IsDBNull(4),
                 "legacy notification unexpectedly gained fabricated presentation");
+        }
+
+        using (var legacyProduct = upgraded.CreateCommand())
+        {
+            legacyProduct.CommandText = """
+                SELECT install_provenance, uninstall_strategy,
+                       uninstall_executable, uninstall_arguments_json
+                FROM discovered_products
+                WHERE product_id='legacy-product'
+                """;
+            using var reader = legacyProduct.ExecuteReader();
+            Require(reader.Read(), "legacy discovered product was not preserved");
+            Require(reader.GetString(0) == "LEGACY_UNKNOWN", "legacy product gained unsafe install provenance");
+            Require(reader.GetString(1) == "NONE", "legacy product gained unsafe uninstall strategy");
+            Require(reader.IsDBNull(2) && reader.IsDBNull(3),
+                "legacy product gained fabricated uninstall command metadata");
         }
 
         using (var multiple = upgraded.CreateCommand())
