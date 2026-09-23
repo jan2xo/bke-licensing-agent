@@ -5,8 +5,7 @@ namespace BKE.LicensingAgent.Application;
 public interface IStandaloneSoftwareRemover
 {
     Task<StandaloneRemovalResult> RemoveAsync(
-        string productId,
-        string version,
+        LocalInstalledProduct product,
         CancellationToken cancellationToken);
 }
 
@@ -90,8 +89,7 @@ public sealed class SoftwareRemoveService : ISoftwareRemoveService
             try
             {
                 result = await _remover.RemoveAsync(
-                    product.ProductId,
-                    product.Version,
+                    product,
                     cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -138,6 +136,14 @@ public sealed class SoftwareRemoveService : ISoftwareRemoveService
             "The installed product does not match its verified BKE install target.",
         "PROTECTED_TARGET" =>
             "The requested removal target is protected BKE platform infrastructure.",
+        "UNINSTALL_STRATEGY_UNAVAILABLE" =>
+            "This installation has no trusted uninstall strategy.",
+        "UNINSTALL_STRATEGY_MISMATCH" =>
+            "The installed product uninstall strategy does not match signed BKE policy.",
+        "UNINSTALL_EXECUTABLE_MISSING" =>
+            "The product uninstaller is missing from the verified install root.",
+        "UNINSTALL_VERIFICATION_FAILED" =>
+            "The product uninstaller completed but the installed product is still present.",
         "REMOVE_FAILED" =>
             "The managed product could not be removed.",
         _ =>
