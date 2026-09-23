@@ -16,7 +16,9 @@ using Org.BouncyCastle.OpenSsl;
 
 namespace BKE.LicensingAgent.Infrastructure;
 
-public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisioner
+public sealed class PrivilegedUpdateCenterProvider :
+    IStandaloneSoftwareProvisioner,
+    IStandaloneSoftwareRemover
 {
     private const string ProtocolVersion = "bke.licensing.v3";
     private const string UpdatePackageContentType = "application/vnd.bke.update-package+zip";
@@ -234,6 +236,180 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
                 "privileged_handoff_failed",
                 true);
         }
+    }
+
+    public Task<StandaloneRemovalResult> RemoveAsync(
+        string productId,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "UNSUPPORTED_PLATFORM",
+                "unsupported_platform",
+                false));
+        }
+
+        ProductContext product;
+        TargetPolicy target;
+        PrivilegedConfig config;
+        try
+        {
+            product = LoadProduct(productId, version)
+                ?? throw new FileNotFoundException("managed product inventory is unavailable");
+            config = LoadPrivilegedConfig();
+            target = ResolveTargetPolicy(product, config);
+            ValidateRemovalTarget(product, target, config);
+        }
+        catch (FileNotFoundException)
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "NOT_INSTALLED",
+                "not_installed",
+                false));
+        }
+        catch
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "TARGET_POLICY_UNAVAILABLE",
+                "target_policy_unavailable",
+                false));
+        }
+
+        var installRoot = Path.GetFullPath(target.InstallRoot);
+        if (!Directory.Exists(installRoot))
+        {
+            try
+            {
+                RemoveInventoryRows(productId);
+            }
+            catch
+            {
+                // A stale inventory row is already ignored when its entry point is absent.
+            }
+
+            return Task.FromResult(new StandaloneRemovalResult(
+                "NOT_INSTALLED",
+                "not_installed",
+                false));
+        }
+
+        var tombstone = installRoot + ".bke-remove-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            Directory.Move(installRoot, tombstone);
+        }
+        catch
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "remove_stage_failed",
+                true));
+        }
+
+        try
+        {
+            RemoveInventoryRows(productId);
+        }
+        catch
+        {
+            try
+            {
+                if (!Directory.Exists(installRoot) && Directory.Exists(tombstone))
+                {
+                    Directory.Move(tombstone, installRoot);
+                }
+            }
+            catch
+            {
+                // Preserve the original inventory failure. A later repair/removal may reconcile.
+            }
+
+            return Task.FromResult(new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "inventory_cleanup_failed",
+                true));
+        }
+
+        try
+        {
+            if (Directory.Exists(tombstone))
+            {
+                Directory.Delete(tombstone, recursive: true);
+            }
+        }
+        catch
+        {
+            // The signed install root is already detached and no longer discovered.
+            // Residual tombstone cleanup is non-authoritative and must not resurrect inventory.
+        }
+
+        return Task.FromResult(new StandaloneRemovalResult(
+            "REMOVED",
+            "removed",
+            false));
+    }
+
+    private void ValidateRemovalTarget(
+        ProductContext product,
+        TargetPolicy target,
+        PrivilegedConfig config)
+    {
+        var installRoot = NormalizeWindowsAbsolute(target.InstallRoot);
+        var inventoryRoot = NormalizeWindowsAbsolute(product.ProductRoot);
+        if (!string.Equals(installRoot, inventoryRoot, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                NormalizeWindowsRelative(target.EntryPoint),
+                NormalizeWindowsRelative(product.EntryPoint),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("managed product inventory does not match signed target policy");
+        }
+
+        if (config.ApprovedInstallRoots
+            .Select(NormalizeWindowsAbsolute)
+            .Any(root => string.Equals(root.TrimEnd('\\'), installRoot.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidDataException("approved platform root cannot be removed as a product");
+        }
+
+        var programFiles = NormalizeWindowsAbsolute(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+        var protectedRoots = new[]
+        {
+            Path.Combine(programFiles, "BKE Digital Solutions", "Licensing Agent"),
+            Path.Combine(programFiles, "BKE Digital Solutions", "BKE"),
+        };
+
+        if (protectedRoots
+            .Select(NormalizeWindowsAbsolute)
+            .Any(protectedRoot => WindowsUnder(installRoot, protectedRoot)))
+        {
+            throw new InvalidDataException("managed product target overlaps protected BKE platform infrastructure");
+        }
+    }
+
+    private void RemoveInventoryRows(string productId)
+    {
+        if (!File.Exists(_databasePath))
+        {
+            return;
+        }
+
+        using var connection = OpenDatabase(SqliteOpenMode.ReadWrite);
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE FROM discovered_products
+            WHERE product_id=$product_id
+            """;
+        command.Parameters.AddWithValue("$product_id", productId);
+        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     public async Task<OpenUpdateCenterResponse> OpenAsync(
