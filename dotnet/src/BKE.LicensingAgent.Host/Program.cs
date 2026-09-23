@@ -77,6 +77,8 @@ builder.Services.AddSingleton<UpdateProvider>();
 builder.Services.AddSingleton<PrivilegedUpdateCenterProvider>();
 builder.Services.AddSingleton<IStandaloneSoftwareProvisioner>(services =>
     services.GetRequiredService<PrivilegedUpdateCenterProvider>());
+builder.Services.AddSingleton<IStandaloneSoftwareUpdater>(services =>
+    services.GetRequiredService<PrivilegedUpdateCenterProvider>());
 builder.Services.AddSingleton<IStandaloneSoftwareRemover>(services =>
     services.GetRequiredService<PrivilegedUpdateCenterProvider>());
 builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
@@ -105,6 +107,15 @@ builder.Services.AddSingleton<ISoftwareInstallService>(services => new SoftwareI
     services.GetRequiredService<ILocalProductInventory>(),
     services.GetRequiredService<IStandaloneProvisionAuthorizationRemote>(),
     services.GetRequiredService<IStandaloneSoftwareProvisioner>()));
+builder.Services.AddSingleton<StandaloneUpdateAuthorizationRemote>();
+builder.Services.AddSingleton<IStandaloneUpdateAuthorizationRemote>(services =>
+    services.GetRequiredService<StandaloneUpdateAuthorizationRemote>());
+builder.Services.AddSingleton<ISoftwareUpdateService>(services => new SoftwareUpdateService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<ILocalProductInventory>(),
+    services.GetRequiredService<IStandaloneUpdateAuthorizationRemote>(),
+    services.GetRequiredService<IStandaloneSoftwareUpdater>()));
 builder.Services.AddSingleton<SqliteProductLauncher>();
 builder.Services.AddSingleton<ILocalProductLauncher>(services =>
     services.GetRequiredService<SqliteProductLauncher>());
@@ -451,6 +462,21 @@ app.MapPost(LocalAgentContract.SoftwareInstallPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.SoftwareUpdatePath, async (
+    SoftwareUpdateRequest request,
+    ISoftwareUpdateService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidSoftwareProductId(request.ProductId))
+    {
+        return SoftwareUpdateInvalidRequest();
+    }
+
+    var response = await service.UpdateAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareOpenPath, async (
     SoftwareOpenRequest request,
     ISoftwareOpenService service,
@@ -598,6 +624,18 @@ static IResult SoftwareInstallInvalidRequest() =>
         new SoftwareInstallError(
             "INVALID_REQUEST",
             "The software install request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult SoftwareUpdateInvalidRequest() =>
+    Results.Json(new SoftwareUpdateResponse(
+        LocalAgentContract.SoftwareUpdateCapabilityId,
+        LocalAgentContract.SoftwareUpdateContractVersion,
+        "FAILED",
+        "invalid_request",
+        new SoftwareUpdateError(
+            "INVALID_REQUEST",
+            "The software update request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
