@@ -1,6 +1,6 @@
 {
   "inventory_id": "bke.licensing-agent.certified-contract-baseline",
-  "inventory_version": 3,
+  "inventory_version": 4,
   "local_api": {
     "contract_id": "bke.licensing-agent.local-api",
     "contract_version": 1,
@@ -77,6 +77,10 @@
       {
         "method": "POST",
         "path": "/v1/software/open"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/software/remove"
       }
     ],
     "removed_product_update_routes": [
@@ -167,6 +171,23 @@
       ],
       "local_responses_expose_entry_point": false,
       "local_responses_expose_install_path": false
+    },
+    "software_remove": {
+      "capability_id": "bke.software-remove",
+      "contract_version": 1,
+      "account_session_required": true,
+      "target_authority": "signed-install-target-policy",
+      "privileged_remove_owner": "bke-licensing-agent",
+      "local_request_fields": [
+        "correlation_id",
+        "product_id"
+      ],
+      "user_data_outside_install_root_preserved": true,
+      "protected_platform_roots": [
+        "BKE",
+        "Licensing Agent"
+      ],
+      "local_responses_expose_install_paths": false
     }
   },
   "notifications": {
