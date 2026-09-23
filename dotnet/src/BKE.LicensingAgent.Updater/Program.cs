@@ -1033,7 +1033,11 @@ internal static class Program
                 manifestPath,
                 plan.InstallRoot,
                 entryPointPath,
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow,
+                "BKE_MANAGED_PACKAGE",
+                "MANAGED_DIRECTORY",
+                null,
+                null));
     }
 
     private static bool ArchitecturesEquivalent(string left, string right)
