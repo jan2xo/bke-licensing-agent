@@ -1,6 +1,6 @@
 {
   "inventory_id": "bke.licensing-agent.certified-contract-baseline",
-  "inventory_version": 4,
+  "inventory_version": 5,
   "local_api": {
     "contract_id": "bke.licensing-agent.local-api",
     "contract_version": 1,
@@ -176,7 +176,7 @@
       "capability_id": "bke.software-remove",
       "contract_version": 1,
       "account_session_required": true,
-      "target_authority": "signed-install-target-policy",
+      "target_authority": "signed-install-target-policy+recorded-install-provenance",
       "privileged_remove_owner": "bke-licensing-agent",
       "local_request_fields": [
         "correlation_id",
@@ -187,7 +187,13 @@
         "BKE",
         "Licensing Agent"
       ],
-      "local_responses_expose_install_paths": false
+      "local_responses_expose_install_paths": false,
+      "install_provenance_required": true,
+      "supported_uninstall_strategies": [
+        "MANAGED_DIRECTORY",
+        "INSTALLER_EXECUTABLE"
+      ],
+      "legacy_unknown_removal_allowed": false
     }
   },
   "notifications": {
@@ -200,7 +206,7 @@
   },
   "storage": {
     "engine": "sqlite",
-    "schema_version": 9,
+    "schema_version": 10,
     "tables": {
       "schema_version": [
         "version"
@@ -212,7 +218,11 @@
         "manifest_path",
         "product_root",
         "entry_point_path",
-        "discovered_at"
+        "discovered_at",
+        "install_provenance",
+        "uninstall_strategy",
+        "uninstall_executable",
+        "uninstall_arguments_json"
       ],
       "activation_cache": [
         "product_id",
