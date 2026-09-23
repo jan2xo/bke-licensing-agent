@@ -117,6 +117,48 @@ public sealed class AccountSessionRemote : IAccountSessionRemote, IDisposable
             ParseAccount(root));
     }
 
+    public async Task<RemoteAccountSessionPoll> ExchangeNativeAsync(
+        string handoffCode,
+        CancellationToken cancellationToken)
+    {
+        var identity = MachineIdentityProvider.Calculate();
+        var payload = JsonSerializer.Serialize(new
+        {
+            device_code = handoffCode,
+            device_id = identity.DeviceId,
+        });
+
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            "/api/agent-sessions/device/token",
+            payload,
+            null,
+            cancellationToken);
+
+        using var document = await ReadJsonAsync(response, cancellationToken);
+        var root = document.RootElement;
+        var status = RequiredString(root, "status");
+
+        if (status is "access_denied" or "expired_token")
+        {
+            return new RemoteAccountSessionPoll(status);
+        }
+
+        if (status != "approved")
+        {
+            throw new InvalidDataException("Unknown BKE native handoff status");
+        }
+
+        return new RemoteAccountSessionPoll(
+            status,
+            RequiredString(root, "access_token"),
+            RequiredString(root, "refresh_token"),
+            RequiredString(root, "session_id"),
+            TimeSpan.FromSeconds(RequiredPositiveInt(root, "expires_in", 86_400)),
+            TimeSpan.FromSeconds(RequiredPositiveInt(root, "refresh_expires_in", 90 * 24 * 60 * 60)),
+            ParseAccount(root));
+    }
+
     public async Task<RemoteAccountSessionRefresh> RefreshAsync(
         string refreshToken,
         CancellationToken cancellationToken)
