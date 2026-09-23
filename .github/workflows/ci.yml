@@ -29,6 +29,7 @@ jobs:
           dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
           dotnet build dotnet/src/BKE.LicensingAgent.Updater/BKE.LicensingAgent.Updater.csproj --configuration Release
           dotnet build dotnet/src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.RootCleanup/BKE.LicensingAgent.RootCleanup.csproj --configuration Release
           dotnet build dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release
           dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
 
@@ -73,6 +74,13 @@ jobs:
           if ($process.ExitCode -ne 0) { throw ".NET License Center smoke failed: $($process.ExitCode)" }
           Write-Host ".NET License Center smoke: PASS"
 
+      - name: Smoke root-uninstall cleanup helper
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\dist\windows\bke-root-cleanup-x64\bke-root-cleanup.exe" -ArgumentList "--smoke" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "root cleanup x64 smoke failed: $($process.ExitCode)" }
+          Write-Host "BKE root cleanup smoke: PASS"
+
       - name: Certify privileged first-install helper
         shell: pwsh
         run: |
@@ -103,6 +111,8 @@ jobs:
           Assert-PeMachine "dist/windows/bke-license-center-x64/bke-license-center.exe" 0x8664
           Assert-PeMachine "dist/windows/bke-updater-core-x64/bke-updater-core.exe" 0x8664
           Assert-PeMachine "dist/windows/bke-privileged-provisioner-x64/bke-privileged-provisioner.exe" 0x8664
+          Assert-PeMachine "dist/windows/bke-root-cleanup-x64/bke-root-cleanup.exe" 0x8664
           Assert-PeMachine "dist/windows/bke-license-center-arm64/bke-license-center.exe" 0xAA64
           Assert-PeMachine "dist/windows/bke-updater-core-arm64/bke-updater-core.exe" 0xAA64
           Assert-PeMachine "dist/windows/bke-privileged-provisioner-arm64/bke-privileged-provisioner.exe" 0xAA64
+          Assert-PeMachine "dist/windows/bke-root-cleanup-arm64/bke-root-cleanup.exe" 0xAA64
