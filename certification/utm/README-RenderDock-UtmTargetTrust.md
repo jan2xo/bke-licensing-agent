@@ -3,8 +3,8 @@
 TEST ONLY. DO NOT USE THIS BUNDLE FOR PRODUCTION.
 
 This bundle contains only public Ed25519 target keys and signed
-`bke.install-target-policy.v1` documents. The signing private keys existed
-only in CI process memory and were not written to the artifact.
+`bke.install-target-policy.v2` documents. The signing private keys existed
+only in CI process memory and were not written to the artifact. The generated Render Dock policies declare a signed `MANAGED_DIRECTORY` uninstall strategy because the BKE first-install path provisions Render Dock from its verified update ZIP rather than the standalone Inno installer.
 
 For the Windows UTM test:
 
