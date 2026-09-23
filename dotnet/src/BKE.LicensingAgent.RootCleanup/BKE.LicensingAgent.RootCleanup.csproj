@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>bke-root-cleanup</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.RootCleanup</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BKE.LicensingAgent.Application/BKE.LicensingAgent.Application.csproj" />
+    <ProjectReference Include="../BKE.LicensingAgent.Infrastructure/BKE.LicensingAgent.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
