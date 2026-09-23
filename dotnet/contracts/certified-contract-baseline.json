@@ -84,6 +84,10 @@
       },
       {
         "method": "POST",
+        "path": "/v1/software/update"
+      },
+      {
+        "method": "POST",
         "path": "/v1/software/open"
       },
       {
@@ -208,6 +212,26 @@
         "INSTALLER_EXECUTABLE"
       ],
       "legacy_unknown_removal_allowed": false
+    },
+    "software_update": {
+      "capability_id": "bke.software-update",
+      "contract_version": 1,
+      "account_session_required": true,
+      "cloud_authorization_owner": "bke-digital-solutions",
+      "release_authority": "github-releases",
+      "privileged_update_owner": "bke-licensing-agent",
+      "update_policy_schema": "bke.update-policy.v2",
+      "local_request_fields": [
+        "correlation_id",
+        "product_id"
+      ],
+      "supported_install_provenance": [
+        "BKE_MANAGED_PACKAGE"
+      ],
+      "local_responses_expose_cloud_tokens": false,
+      "local_responses_expose_download_urls": false,
+      "local_responses_expose_install_paths": false,
+      "rollback_required": true
     }
   },
   "notifications": {
