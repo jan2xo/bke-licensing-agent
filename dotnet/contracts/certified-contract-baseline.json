@@ -56,6 +56,14 @@
       },
       {
         "method": "POST",
+        "path": "/v1/account-session/device-context"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/account-session/complete"
+      },
+      {
+        "method": "POST",
         "path": "/v1/account-session/start"
       },
       {
@@ -120,7 +128,13 @@
       "capability_id": "bke.account-session",
       "contract_version": 1,
       "secret_owner": "bke-licensing-agent",
-      "local_responses_expose_tokens": false
+      "local_responses_expose_tokens": false,
+      "native_credentials_owner": "bke-launcher-to-digital-solutions",
+      "device_context_exposes_cloud_secrets": false,
+      "native_complete_request_fields": [
+        "correlation_id",
+        "handoff_code"
+      ]
     },
     "product_broadcasts": {
       "capability_id": "bke.product-broadcasts",
