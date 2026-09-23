@@ -218,6 +218,50 @@ jobs:
 
           Write-Host ".NET-only canonical x64 fresh install: PASS"
 
+      - name: Certify root cleanup managed removal and fail-closed legacy handling
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramFiles "BKE Digital Solutions\Licensing Agent"
+          $cleanup = Join-Path $root "root-cleanup\bke-root-cleanup.exe"
+          if (!(Test-Path $cleanup)) { throw "installed root cleanup helper is missing" }
+
+          $sentinelRoot = Join-Path $env:RUNNER_TEMP "bke-root-cleanup-user-data"
+          $sentinel = Join-Path $sentinelRoot "sentinel.txt"
+          New-Item -ItemType Directory -Force $sentinelRoot | Out-Null
+          "preserve-me" | Set-Content $sentinel -Encoding utf8
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --seed-managed-product
+          if ($LASTEXITCODE -ne 0) { throw "managed root-cleanup fixture seeding failed" }
+
+          $managedRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Certification Product"
+          if (!(Test-Path $managedRoot)) { throw "managed root-cleanup fixture was not created" }
+
+          & $cleanup --remove-managed-products
+          $managedCleanupExit = $LASTEXITCODE
+          if ($managedCleanupExit -ne 0) { throw "managed root cleanup failed: $managedCleanupExit" }
+          if (Test-Path $managedRoot) { throw "managed product root survived root cleanup" }
+          if (!(Test-Path $sentinel)) { throw "unrelated user-data sentinel was removed" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --assert-product-absent bke-certification-product
+          if ($LASTEXITCODE -ne 0) { throw "managed product inventory row survived root cleanup" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --seed-legacy-product
+          if ($LASTEXITCODE -ne 0) { throw "legacy root-cleanup fixture seeding failed" }
+
+          $legacyRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Certification Legacy Product"
+          if (!(Test-Path $legacyRoot)) { throw "legacy root-cleanup fixture was not created" }
+
+          & $cleanup --remove-managed-products
+          $legacyCleanupExit = $LASTEXITCODE
+          if ($legacyCleanupExit -ne 20) { throw "LEGACY_UNKNOWN root cleanup did not fail closed with exit 20: $legacyCleanupExit" }
+          if (!(Test-Path $legacyRoot)) { throw "LEGACY_UNKNOWN product was modified by root cleanup" }
+          if (!(Test-Path $sentinel)) { throw "unrelated user-data sentinel was removed during fail-closed cleanup" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --assert-product-present bke-certification-legacy
+          if ($LASTEXITCODE -ne 0) { throw "LEGACY_UNKNOWN inventory row was modified by root cleanup" }
+
+          Write-Host "BKE root cleanup functional certification: PASS"
+
       - name: Assemble ARM64 .NET-only UTM acceptance kit
         shell: pwsh
         run: |
