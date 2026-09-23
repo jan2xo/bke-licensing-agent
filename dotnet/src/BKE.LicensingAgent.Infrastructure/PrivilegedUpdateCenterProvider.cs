@@ -18,6 +18,7 @@ namespace BKE.LicensingAgent.Infrastructure;
 
 public sealed class PrivilegedUpdateCenterProvider :
     IStandaloneSoftwareProvisioner,
+    IStandaloneSoftwareUpdater,
     IStandaloneSoftwareRemover
 {
     private const string ProtocolVersion = "bke.licensing.v3";
@@ -43,6 +44,12 @@ public sealed class PrivilegedUpdateCenterProvider :
         "channel", "platform", "architecture", "release_id", "artifact_id", "artifact_sha256",
         "artifact_size", "content_type", "published_at", "issued_at", "revision", "signing_key_id",
         "algorithm", "signature",
+    };
+    private static readonly HashSet<string> AccountUpdatePolicyKeys = new(StringComparer.Ordinal)
+    {
+        "schema", "product_id", "current_version", "target_version", "channel", "platform",
+        "architecture", "source_authority", "repository", "tag", "issued_at", "expires_at",
+        "signing_key_id", "algorithm", "signature",
     };
     private static readonly HashSet<string> TargetPolicyV1Keys = new(StringComparer.Ordinal)
     {
@@ -238,6 +245,189 @@ public sealed class PrivilegedUpdateCenterProvider :
                 "PRIVILEGED_HANDOFF_FAILED",
                 "privileged_handoff_failed",
                 true);
+        }
+    }
+
+    public async Task<StandaloneUpdateResult> UpdateAsync(
+        LocalInstalledProduct installed,
+        StandaloneUpdateAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return new StandaloneUpdateResult(
+                "UNSUPPORTED_PLATFORM",
+                "unsupported_platform",
+                false);
+        }
+
+        if (installed.InstallProvenance != "BKE_MANAGED_PACKAGE" ||
+            installed.UninstallStrategy != "MANAGED_DIRECTORY")
+        {
+            return new StandaloneUpdateResult(
+                "TARGET_MISMATCH",
+                "unsupported_provenance",
+                false);
+        }
+
+        var product = LoadProduct(installed.ProductId, installed.Version);
+        if (product is null)
+        {
+            return new StandaloneUpdateResult(
+                "TARGET_MISMATCH",
+                "installed_product_unavailable",
+                false);
+        }
+
+        PrivilegedConfig config;
+        TargetPolicy target;
+        VerifiedAccountUpdatePolicy verified;
+        JsonDocument policyDocument;
+        try
+        {
+            policyDocument = JsonDocument.Parse(authorization.PolicyJson);
+            verified = VerifyAccountUpdatePolicy(policyDocument.RootElement, product);
+            if (authorization.ProductId != product.ProductId ||
+                authorization.CurrentVersion != product.Version ||
+                authorization.TargetVersion != verified.TargetVersion ||
+                authorization.Repository != verified.Repository ||
+                authorization.Tag != verified.Tag)
+            {
+                policyDocument.Dispose();
+                return new StandaloneUpdateResult(
+                    "UPDATE_POLICY_INVALID",
+                    "update_policy_context_mismatch",
+                    false);
+            }
+
+            config = LoadPrivilegedConfig();
+            if (!string.Equals(config.ExpectedChannel, product.UpdateChannel, StringComparison.Ordinal))
+            {
+                policyDocument.Dispose();
+                return new StandaloneUpdateResult(
+                    "TARGET_POLICY_UNAVAILABLE",
+                    "privileged_runtime_channel_mismatch",
+                    false);
+            }
+            target = ResolveTargetPolicy(product, config);
+        }
+        catch
+        {
+            return new StandaloneUpdateResult(
+                "UPDATE_POLICY_INVALID",
+                "update_policy_invalid",
+                false);
+        }
+
+        using (policyDocument)
+        {
+            var identity = MachineIdentityProvider.Calculate();
+            var protocolArchitecture = MachineIdentityProvider.ProtocolArchitecture(identity.Architecture);
+
+            GitHubReleasePackage package;
+            try
+            {
+                package = await ResolveGitHubReleasePackageAsync(
+                    new StandaloneProvisionAuthorization(
+                        product.ProductId,
+                        verified.TargetVersion,
+                        verified.Repository,
+                        verified.Tag),
+                    protocolArchitecture,
+                    target,
+                    cancellationToken);
+            }
+            catch (GitHubReleasePackageException exception)
+            {
+                return new StandaloneUpdateResult(
+                    exception.Code,
+                    exception.Reason,
+                    exception.Retryable);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return new StandaloneUpdateResult(
+                    "RELEASE_METADATA_INVALID",
+                    "release_metadata_invalid",
+                    false);
+            }
+
+            string artifact;
+            try
+            {
+                var downloadRoot = Path.Combine(config.RuntimeRoot, "downloads", "update");
+                var destination = Path.Combine(
+                    downloadRoot,
+                    Safe($"{product.ProductId}-{verified.TargetVersion}-{package.FileName}", 220));
+                artifact = await AcquireGitHubAssetAsync(
+                    package.DownloadUrl,
+                    destination,
+                    package.Size,
+                    package.Sha256,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return new StandaloneUpdateResult(
+                    "RELEASE_DOWNLOAD_FAILED",
+                    "release_download_failed",
+                    true);
+            }
+
+            try
+            {
+                var synthetic = new VerifiedPolicy(
+                    verified.TargetVersion,
+                    product.Version,
+                    verified.Tag,
+                    package.FileName,
+                    package.Sha256,
+                    package.Size,
+                    UpdatePackageContentType,
+                    0);
+                var transactionId = Safe(
+                    $"{product.ProductId}-{verified.TargetVersion}-{Guid.NewGuid():N}",
+                    180);
+                var prepared = PreparePrivilegedInvocation(
+                    product,
+                    policyDocument.RootElement,
+                    synthetic,
+                    target,
+                    config,
+                    artifact,
+                    transactionId);
+                Launch(prepared.Command);
+                WriteTransaction(
+                    config.RuntimeRoot,
+                    transactionId,
+                    "STAGED",
+                    config.HelperExecutable);
+                return new StandaloneUpdateResult(
+                    "STARTED",
+                    "update_started",
+                    false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return new StandaloneUpdateResult(
+                    "PRIVILEGED_HANDOFF_FAILED",
+                    "privileged_handoff_failed",
+                    true);
+            }
         }
     }
 
@@ -1913,6 +2103,89 @@ public sealed class PrivilegedUpdateCenterProvider :
         throw new InvalidDataException("unsupported uninstall strategy");
     }
 
+    private VerifiedAccountUpdatePolicy VerifyAccountUpdatePolicy(
+        JsonElement policy,
+        ProductContext product)
+    {
+        if (policy.ValueKind != JsonValueKind.Object ||
+            !policy.EnumerateObject().Select(item => item.Name).ToHashSet(StringComparer.Ordinal)
+                .SetEquals(AccountUpdatePolicyKeys) ||
+            RequiredString(policy, "schema") != "bke.update-policy.v2" ||
+            RequiredString(policy, "algorithm") != "Ed25519" ||
+            RequiredString(policy, "product_id") != product.ProductId ||
+            RequiredString(policy, "current_version") != product.Version ||
+            RequiredString(policy, "channel") != product.UpdateChannel ||
+            RequiredString(policy, "platform") != product.Platform ||
+            !ArchitecturesEquivalent(
+                RequiredString(policy, "architecture"),
+                product.Architecture) ||
+            RequiredString(policy, "source_authority") != "GITHUB_RELEASES")
+        {
+            throw new InvalidDataException("unsupported account update policy");
+        }
+
+        var targetVersion = RequiredString(policy, "target_version");
+        if (!TryVersion(product.Version, out var currentParts) ||
+            !TryVersion(targetVersion, out var targetParts) ||
+            CompareVersion(targetParts, currentParts) <= 0)
+        {
+            throw new InvalidDataException("invalid account update version");
+        }
+
+        var repository = RequiredString(policy, "repository");
+        if (!Regex.IsMatch(
+                repository,
+                "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+                RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException("invalid account update repository");
+        }
+        var tag = RequiredString(policy, "tag");
+        if (tag != "v" + targetVersion)
+        {
+            throw new InvalidDataException("account update tag mismatch");
+        }
+
+        if (!DateTimeOffset.TryParse(
+                RequiredString(policy, "issued_at"),
+                out var issuedAt) ||
+            !DateTimeOffset.TryParse(
+                RequiredString(policy, "expires_at"),
+                out var expiresAt))
+        {
+            throw new InvalidDataException("invalid account update lifetime");
+        }
+        issuedAt = issuedAt.ToUniversalTime();
+        expiresAt = expiresAt.ToUniversalTime();
+        var now = DateTimeOffset.UtcNow;
+        if (issuedAt > now.AddSeconds(30) ||
+            expiresAt <= now ||
+            expiresAt <= issuedAt ||
+            expiresAt - issuedAt > TimeSpan.FromMinutes(5))
+        {
+            throw new InvalidDataException("expired or excessive account update lifetime");
+        }
+
+        var keyId = RequiredString(policy, "signing_key_id");
+        var key = LoadTrustedUpdateKey(keyId)
+            ?? throw new InvalidDataException("unknown signing key");
+        var signature = Convert.FromBase64String(
+            RequiredString(policy, "signature"));
+        var canonical = CanonicalWithoutSignature(policy);
+        var verifier = new Ed25519Signer();
+        verifier.Init(false, key);
+        verifier.BlockUpdate(canonical, 0, canonical.Length);
+        if (!verifier.VerifySignature(signature))
+        {
+            throw new CryptographicException("invalid account update policy signature");
+        }
+
+        return new VerifiedAccountUpdatePolicy(
+            targetVersion,
+            repository,
+            tag);
+    }
+
     private VerifiedPolicy VerifyPolicy(JsonElement policy, ProductContext product, int? lastRevision)
     {
         if (policy.ValueKind != JsonValueKind.Object ||
@@ -2322,6 +2595,10 @@ public sealed class PrivilegedUpdateCenterProvider :
     private sealed record VerifiedPolicy(
         string LatestVersion, string MinimumSupportedVersion, string ReleaseId, string ArtifactId,
         string ArtifactSha256, long ArtifactSize, string ContentType, int Revision);
+    private sealed record VerifiedAccountUpdatePolicy(
+        string TargetVersion,
+        string Repository,
+        string Tag);
     private sealed record TargetPolicy(
         JsonElement Raw, int Revision, string ProductId, string Platform, string Architecture,
         string InstallRoot, string EntryPoint, UninstallPolicy? Uninstall);
