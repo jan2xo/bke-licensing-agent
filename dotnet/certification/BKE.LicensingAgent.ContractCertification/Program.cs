@@ -51,6 +51,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.AccountSessionLogoutPath}",
     $"POST {LocalAgentContract.SoftwareCatalogPath}",
     $"POST {LocalAgentContract.SoftwareInstallPath}",
+    $"POST {LocalAgentContract.SoftwareUpdatePath}",
     $"POST {LocalAgentContract.SoftwareOpenPath}",
     $"POST {LocalAgentContract.SoftwareRemovePath}",
 };
@@ -96,6 +97,23 @@ Require(softwareInstall.GetProperty("local_responses_expose_download_urls").GetB
 Require(softwareInstall.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-install path exposure drifted");
 Require(softwareInstall.GetProperty("fresh_database_bootstrap_owner").GetString() == "bke-licensing-agent", "software-install fresh bootstrap ownership drifted");
 Require(softwareInstall.GetProperty("provision_commit_requires_inventory_registration").GetBoolean(), "software-install inventory commit requirement drifted");
+
+var softwareUpdate = capabilities.GetProperty("software_update");
+Require(softwareUpdate.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareUpdateCapabilityId, "software-update capability id mismatch");
+Require(softwareUpdate.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareUpdateContractVersion, "software-update contract version mismatch");
+Require(softwareUpdate.GetProperty("account_session_required").GetBoolean(), "software-update account-session requirement drifted");
+Require(softwareUpdate.GetProperty("cloud_authorization_owner").GetString() == "bke-digital-solutions", "software-update cloud authority drifted");
+Require(softwareUpdate.GetProperty("release_authority").GetString() == "github-releases", "software-update release authority drifted");
+Require(softwareUpdate.GetProperty("privileged_update_owner").GetString() == "bke-licensing-agent", "software-update privileged owner drifted");
+Require(softwareUpdate.GetProperty("update_policy_schema").GetString() == "bke.update-policy.v2", "software-update policy schema drifted");
+Require(softwareUpdate.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "product_id"]), "software-update local request widened");
+Require(softwareUpdate.GetProperty("supported_install_provenance").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["BKE_MANAGED_PACKAGE"]), "software-update provenance boundary drifted");
+Require(softwareUpdate.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "software-update cloud token exposure drifted");
+Require(softwareUpdate.GetProperty("local_responses_expose_download_urls").GetBoolean() == false, "software-update download URL exposure drifted");
+Require(softwareUpdate.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-update install path exposure drifted");
+Require(softwareUpdate.GetProperty("rollback_required").GetBoolean(), "software-update rollback requirement drifted");
 
 var softwareOpen = capabilities.GetProperty("software_open");
 Require(softwareOpen.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareOpenCapabilityId, "software-open capability id mismatch");
@@ -150,6 +168,8 @@ Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType))
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.CorrelationId)) == "correlation_id", "software-install correlation_id wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.ProductId)) == "product_id", "software-install product_id wire name mismatch");
+Require(JsonName<SoftwareUpdateRequest>(nameof(SoftwareUpdateRequest.CorrelationId)) == "correlation_id", "software-update correlation_id wire name mismatch");
+Require(JsonName<SoftwareUpdateRequest>(nameof(SoftwareUpdateRequest.ProductId)) == "product_id", "software-update product_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.CorrelationId)) == "correlation_id", "software-open correlation_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.ProductId)) == "product_id", "software-open product_id wire name mismatch");
 Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.CorrelationId)) == "correlation_id", "software-remove correlation_id wire name mismatch");
@@ -162,6 +182,7 @@ Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsyn
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
+Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
 Require(MethodNames<ISoftwareRemoveService>().SetEquals(["RemoveAsync"]), "software-remove port drifted");
