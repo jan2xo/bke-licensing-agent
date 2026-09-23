@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>BKE.LicensingAgent.RootCleanupCertification</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.RootCleanupCertification</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/BKE.LicensingAgent.Storage/BKE.LicensingAgent.Storage.csproj" />
+  </ItemGroup>
+</Project>
