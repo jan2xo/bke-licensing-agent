@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using BKE.LicensingAgent.Contracts;
 using Microsoft.Win32;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
@@ -16,7 +17,6 @@ const string InstallationId = "runtime-bridge-installation";
 const string LicenseId = "runtime-bridge-license";
 const string LeaseId = "runtime-bridge-lease";
 const string KeyId = "runtime-bridge-state-key";
-const int ExpectedSchemaVersion = 9;
 
 if (!OperatingSystem.IsWindows())
 {
@@ -155,7 +155,7 @@ using (var command = connection.CreateCommand())
 {
     command.CommandText = "SELECT version FROM schema_version LIMIT 1";
     var value = command.ExecuteScalar();
-    if (value is null || Convert.ToInt32(value, CultureInfo.InvariantCulture) != ExpectedSchemaVersion)
+    if (value is null || Convert.ToInt32(value, CultureInfo.InvariantCulture) != LocalAgentContract.StorageSchemaVersion)
     {
         Console.Error.WriteLine($"Unexpected Agent database schema version: {value ?? "<missing>"}");
         return 5;
