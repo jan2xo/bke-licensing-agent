@@ -386,7 +386,9 @@ public sealed class PrivilegedUpdateCenterProvider :
 
         if (protectedRoots
             .Select(NormalizeWindowsAbsolute)
-            .Any(protectedRoot => WindowsUnder(installRoot, protectedRoot)))
+            .Any(protectedRoot =>
+                WindowsUnder(installRoot, protectedRoot) ||
+                WindowsUnder(protectedRoot, installRoot)))
         {
             throw new InvalidDataException("managed product target overlaps protected BKE platform infrastructure");
         }
