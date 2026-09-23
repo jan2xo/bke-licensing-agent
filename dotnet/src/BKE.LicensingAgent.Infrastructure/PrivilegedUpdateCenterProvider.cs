@@ -242,8 +242,7 @@ public sealed class PrivilegedUpdateCenterProvider :
     }
 
     public Task<StandaloneRemovalResult> RemoveAsync(
-        string productId,
-        string version,
+        LocalInstalledProduct installed,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -256,7 +255,7 @@ public sealed class PrivilegedUpdateCenterProvider :
                 false));
         }
 
-        var product = LoadProduct(productId, version);
+        var product = LoadProduct(installed.ProductId, installed.Version);
         if (product is null)
         {
             return Task.FromResult(new StandaloneRemovalResult(
@@ -285,22 +284,43 @@ public sealed class PrivilegedUpdateCenterProvider :
                 false));
         }
 
+        if (target.Uninstall is null)
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "UNINSTALL_STRATEGY_UNAVAILABLE",
+                "signed_uninstall_strategy_unavailable",
+                false));
+        }
+
+        return (installed.InstallProvenance, installed.UninstallStrategy) switch
+        {
+            ("BKE_MANAGED_PACKAGE", "MANAGED_DIRECTORY")
+                when target.Uninstall.Strategy == "MANAGED_DIRECTORY" =>
+                Task.FromResult(RemoveManagedDirectory(installed, target)),
+
+            ("PRODUCT_INSTALLER", "INSTALLER_EXECUTABLE")
+                when target.Uninstall.Strategy == "INSTALLER_EXECUTABLE" =>
+                Task.FromResult(RemoveWithInstaller(installed, target, cancellationToken)),
+
+            _ => Task.FromResult(new StandaloneRemovalResult(
+                "UNINSTALL_STRATEGY_MISMATCH",
+                "uninstall_strategy_mismatch",
+                false)),
+        };
+    }
+
+    private StandaloneRemovalResult RemoveManagedDirectory(
+        LocalInstalledProduct installed,
+        TargetPolicy target)
+    {
         var installRoot = Path.GetFullPath(target.InstallRoot);
         if (!Directory.Exists(installRoot))
         {
-            try
-            {
-                RemoveInventoryRows(productId);
-            }
-            catch
-            {
-                // A stale inventory row is already ignored when its entry point is absent.
-            }
-
-            return Task.FromResult(new StandaloneRemovalResult(
+            TryRemoveStaleInventory(installed.ProductId);
+            return new StandaloneRemovalResult(
                 "NOT_INSTALLED",
                 "not_installed",
-                false));
+                false);
         }
 
         var tombstone = installRoot + ".bke-remove-" + Guid.NewGuid().ToString("N");
@@ -310,15 +330,15 @@ public sealed class PrivilegedUpdateCenterProvider :
         }
         catch
         {
-            return Task.FromResult(new StandaloneRemovalResult(
+            return new StandaloneRemovalResult(
                 "REMOVE_FAILED",
                 "remove_stage_failed",
-                true));
+                true);
         }
 
         try
         {
-            RemoveInventoryRows(productId);
+            RemoveInventoryRows(installed.ProductId);
         }
         catch
         {
@@ -334,10 +354,10 @@ public sealed class PrivilegedUpdateCenterProvider :
                 // Preserve the original inventory failure. A later repair/removal may reconcile.
             }
 
-            return Task.FromResult(new StandaloneRemovalResult(
+            return new StandaloneRemovalResult(
                 "REMOVE_FAILED",
                 "inventory_cleanup_failed",
-                true));
+                true);
         }
 
         try
@@ -349,14 +369,147 @@ public sealed class PrivilegedUpdateCenterProvider :
         }
         catch
         {
-            // The signed install root is already detached and no longer discovered.
+            // The signed product root is already detached and no longer discoverable.
             // Residual tombstone cleanup is non-authoritative and must not resurrect inventory.
         }
 
-        return Task.FromResult(new StandaloneRemovalResult(
+        return new StandaloneRemovalResult(
             "REMOVED",
-            "removed",
-            false));
+            "managed_directory_removed",
+            false);
+    }
+
+    private StandaloneRemovalResult RemoveWithInstaller(
+        LocalInstalledProduct installed,
+        TargetPolicy target,
+        CancellationToken cancellationToken)
+    {
+        var signed = target.Uninstall!;
+        if (string.IsNullOrWhiteSpace(installed.UninstallExecutable) ||
+            signed.Executable is null ||
+            !string.Equals(
+                NormalizeWindowsRelative(installed.UninstallExecutable),
+                signed.Executable,
+                StringComparison.OrdinalIgnoreCase) ||
+            installed.UninstallArguments is null ||
+            !installed.UninstallArguments.SequenceEqual(signed.Arguments, StringComparer.Ordinal))
+        {
+            return new StandaloneRemovalResult(
+                "UNINSTALL_STRATEGY_MISMATCH",
+                "installer_uninstall_metadata_mismatch",
+                false);
+        }
+
+        var installRoot = Path.GetFullPath(target.InstallRoot);
+        if (!Directory.Exists(installRoot))
+        {
+            TryRemoveStaleInventory(installed.ProductId);
+            return new StandaloneRemovalResult(
+                "NOT_INSTALLED",
+                "not_installed",
+                false);
+        }
+
+        var executable = Path.GetFullPath(
+            Path.Combine(installRoot, signed.Executable));
+        if (!WindowsUnder(installRoot, executable) || !File.Exists(executable))
+        {
+            return new StandaloneRemovalResult(
+                "UNINSTALL_EXECUTABLE_MISSING",
+                "uninstall_executable_missing",
+                false);
+        }
+
+        try
+        {
+            var start = new ProcessStartInfo
+            {
+                FileName = executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = installRoot,
+            };
+            foreach (var argument in signed.Arguments)
+            {
+                start.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(start);
+            if (process is null)
+            {
+                return new StandaloneRemovalResult(
+                    "REMOVE_FAILED",
+                    "uninstaller_start_failed",
+                    true);
+            }
+
+            while (!process.HasExited)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!process.WaitForExit(250))
+                {
+                    continue;
+                }
+            }
+
+            if (process.ExitCode != 0)
+            {
+                return new StandaloneRemovalResult(
+                    "REMOVE_FAILED",
+                    "uninstaller_failed",
+                    true);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "uninstaller_execution_failed",
+                true);
+        }
+
+        var entryPoint = Path.GetFullPath(
+            Path.Combine(installRoot, target.EntryPoint));
+        if (File.Exists(entryPoint))
+        {
+            return new StandaloneRemovalResult(
+                "UNINSTALL_VERIFICATION_FAILED",
+                "entry_point_still_present",
+                true);
+        }
+
+        try
+        {
+            RemoveInventoryRows(installed.ProductId);
+        }
+        catch
+        {
+            return new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "inventory_cleanup_failed",
+                true);
+        }
+
+        return new StandaloneRemovalResult(
+            "REMOVED",
+            "product_uninstaller_completed",
+            false);
+    }
+
+    private void TryRemoveStaleInventory(string productId)
+    {
+        try
+        {
+            RemoveInventoryRows(productId);
+        }
+        catch
+        {
+            // Missing install root remains authoritative for local execution.
+        }
     }
 
     private StandaloneRemovalResult? ValidateRemovalTarget(
