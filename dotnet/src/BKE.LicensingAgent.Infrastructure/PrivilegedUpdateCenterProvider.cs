@@ -1511,7 +1511,9 @@ public sealed class PrivilegedUpdateCenterProvider :
         if (!File.Exists(config.HelperExecutable)) throw new InvalidDataException("privileged helper unavailable");
         if (!string.Equals(target.ProductId, product.ProductId, StringComparison.Ordinal) ||
             !string.Equals(target.Platform, product.Platform, StringComparison.Ordinal) ||
-            !string.Equals(target.Architecture, product.Architecture, StringComparison.Ordinal))
+            !ArchitecturesEquivalent(
+                target.Architecture,
+                product.Architecture))
         {
             throw new InvalidDataException("target authority mismatch");
         }
@@ -1736,8 +1738,11 @@ public sealed class PrivilegedUpdateCenterProvider :
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(path));
                 var candidate = VerifyTargetPolicy(document.RootElement, config);
-                if (candidate.ProductId == product.ProductId && candidate.Platform == product.Platform &&
-                    candidate.Architecture == product.Architecture &&
+                if (candidate.ProductId == product.ProductId &&
+                    candidate.Platform == product.Platform &&
+                    ArchitecturesEquivalent(
+                        candidate.Architecture,
+                        product.Architecture) &&
                     (selected is null || candidate.Revision > selected.Revision))
                 {
                     selected = candidate with { Raw = candidate.Raw.Clone() };
