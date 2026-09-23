@@ -41,6 +41,10 @@ public interface IUpdateService
 
 public interface IAccountSessionService
 {
+    Task<AccountSessionCompleteResponse> CompleteAsync(
+        AccountSessionCompleteRequest request,
+        CancellationToken cancellationToken);
+
     Task<AccountSessionStartResponse> StartAsync(
         AccountSessionStartRequest request,
         CancellationToken cancellationToken);
