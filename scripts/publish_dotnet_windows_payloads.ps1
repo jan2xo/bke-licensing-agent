@@ -22,11 +22,13 @@ function Publish-Architecture([string]$Name, [string]$Runtime) {
     Publish-Payload "dotnet\src\BKE.LicensingAgent.Desktop\BKE.LicensingAgent.Desktop.csproj" $Runtime "bke-license-center-$Name"
     Publish-Payload "dotnet\src\BKE.LicensingAgent.Updater\BKE.LicensingAgent.Updater.csproj" $Runtime "bke-updater-core-$Name"
     Publish-Payload "dotnet\src\BKE.LicensingAgent.Provisioner\BKE.LicensingAgent.Provisioner.csproj" $Runtime "bke-privileged-provisioner-$Name"
+    Publish-Payload "dotnet\src\BKE.LicensingAgent.RootCleanup\BKE.LicensingAgent.RootCleanup.csproj" $Runtime "bke-root-cleanup-$Name"
 
     foreach ($required in @(
         (Join-Path $dist "bke-license-center-$Name\bke-license-center.exe"),
         (Join-Path $dist "bke-updater-core-$Name\bke-updater-core.exe"),
-        (Join-Path $dist "bke-privileged-provisioner-$Name\bke-privileged-provisioner.exe")
+        (Join-Path $dist "bke-privileged-provisioner-$Name\bke-privileged-provisioner.exe"),
+        (Join-Path $dist "bke-root-cleanup-$Name\bke-root-cleanup.exe")
     )) {
         if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "required .NET payload missing: $required"

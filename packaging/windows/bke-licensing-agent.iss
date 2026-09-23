@@ -44,6 +44,7 @@ Source: "..\..\dist\windows\bke-licensing-agent-runtime\*"; DestDir: "{app}\runt
 Source: "..\\..\\dist\\windows\\bke-license-center-x64\\*"; DestDir: "{app}\\license-center"; Flags: recursesubdirs ignoreversion
 Source: "..\\..\\dist\\windows\\bke-updater-core-x64\\*"; DestDir: "{app}\\updater"; Flags: recursesubdirs ignoreversion
 Source: "..\\..\\dist\\windows\\bke-privileged-provisioner-x64\\*"; DestDir: "{app}\\provisioning"; Flags: recursesubdirs ignoreversion
+Source: "..\\..\\dist\\windows\\bke-root-cleanup-x64\\*"; DestDir: "{app}\\root-cleanup"; Flags: recursesubdirs ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-keys\*.pem"; DestDir: "{app}\provisioning\target-keys"; Flags: ignoreversion
 Source: "..\..\dist\windows\privileged-payload\target-policies\*.json"; DestDir: "{app}\provisioning\target-policies"; Flags: ignoreversion
 ; Phase 9 update-authority trust contains public verification keys only.
