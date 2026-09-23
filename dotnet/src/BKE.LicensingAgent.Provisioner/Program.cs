@@ -20,11 +20,14 @@ namespace BKE.LicensingAgent.Provisioner;
 internal static class Program
 {
     private const string SigningKeyId = "agent-machine-ed25519-v1";
-    private static readonly HashSet<string> TargetPolicyFields = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> TargetPolicyV1Fields = new(StringComparer.Ordinal)
     {
         "schema", "policy_id", "revision", "product_id", "platform", "architecture",
         "install_root", "entry_point", "signing_key_id", "algorithm", "signature",
     };
+    private static readonly HashSet<string> TargetPolicyV2Fields = new(
+        TargetPolicyV1Fields.Append("uninstall"),
+        StringComparer.Ordinal);
 
     public static int Main()
     {
@@ -155,10 +158,37 @@ internal static class Program
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.EnumerateObject().Select(property => property.Name).ToHashSet(StringComparer.Ordinal).SetEquals(TargetPolicyFields) ||
-                RequiredString(root, "schema") != "bke.install-target-policy.v1" ||
-                RequiredString(root, "algorithm") != "Ed25519")
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
+            }
+
+            var schema = RequiredString(root, "schema");
+            var fields = root.EnumerateObject()
+                .Select(property => property.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+            if (schema == "bke.install-target-policy.v1")
+            {
+                if (!fields.SetEquals(TargetPolicyV1Fields))
+                {
+                    throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
+                }
+            }
+            else if (schema == "bke.install-target-policy.v2")
+            {
+                if (!fields.SetEquals(TargetPolicyV2Fields))
+                {
+                    throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
+                }
+                ValidateUninstall(root.GetProperty("uninstall"));
+            }
+            else
+            {
+                throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
+            }
+
+            if (RequiredString(root, "algorithm") != "Ed25519")
             {
                 throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
             }
@@ -202,6 +232,58 @@ internal static class Program
                 throw new InvalidDataException($"invalid target policy signature: {Path.GetFileName(path)}");
             }
         }
+    }
+
+    private static void ValidateUninstall(JsonElement uninstall)
+    {
+        if (uninstall.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("invalid uninstall policy");
+        }
+
+        var strategy = RequiredString(uninstall, "strategy");
+        var fields = uninstall.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (strategy == "MANAGED_DIRECTORY")
+        {
+            if (!fields.SetEquals(["strategy"]))
+            {
+                throw new InvalidDataException("invalid managed-directory uninstall policy");
+            }
+            return;
+        }
+
+        if (strategy == "INSTALLER_EXECUTABLE")
+        {
+            if (!fields.SetEquals(["strategy", "executable", "arguments"]))
+            {
+                throw new InvalidDataException("invalid installer-executable uninstall policy");
+            }
+
+            var executable = RequiredString(uninstall, "executable")
+                .Replace('/', '\\');
+            if (Path.IsPathRooted(executable) ||
+                executable.Split('\\', StringSplitOptions.RemoveEmptyEntries)
+                    .Any(part => part is "." or ".."))
+            {
+                throw new InvalidDataException("invalid uninstall executable");
+            }
+
+            var arguments = uninstall.GetProperty("arguments");
+            if (arguments.ValueKind != JsonValueKind.Array ||
+                arguments.GetArrayLength() > 32 ||
+                arguments.EnumerateArray().Any(item =>
+                    item.ValueKind != JsonValueKind.String ||
+                    item.GetString() is not { Length: <= 1024 }))
+            {
+                throw new InvalidDataException("invalid uninstall arguments");
+            }
+            return;
+        }
+
+        throw new InvalidDataException("unsupported uninstall strategy");
     }
 
     private static void EnsureMachineSigningKey(string path)
