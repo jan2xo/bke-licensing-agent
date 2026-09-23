@@ -1,6 +1,6 @@
 {
   "inventory_id": "bke.licensing-agent.certified-contract-baseline",
-  "inventory_version": 5,
+  "inventory_version": 6,
   "local_api": {
     "contract_id": "bke.licensing-agent.local-api",
     "contract_version": 1,
@@ -57,6 +57,14 @@
       {
         "method": "POST",
         "path": "/v1/account-session/start"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/account-session/native/context"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/account-session/native/complete"
       },
       {
         "method": "POST",
@@ -120,7 +128,15 @@
       "capability_id": "bke.account-session",
       "contract_version": 1,
       "secret_owner": "bke-licensing-agent",
-      "local_responses_expose_tokens": false
+      "local_responses_expose_tokens": false,
+      "credential_owner": "bke-digital-solutions",
+      "durable_token_owner": "bke-licensing-agent",
+      "agent_receives_password": false,
+      "native_context_exposes_secret_material": false,
+      "native_complete_request_fields": [
+        "correlation_id",
+        "handoff_code"
+      ]
     },
     "product_broadcasts": {
       "capability_id": "bke.product-broadcasts",
