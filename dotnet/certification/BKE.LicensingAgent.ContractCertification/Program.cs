@@ -106,7 +106,11 @@ var softwareRemove = capabilities.GetProperty("software_remove");
 Require(softwareRemove.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareRemoveCapabilityId, "software-remove capability id mismatch");
 Require(softwareRemove.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareRemoveContractVersion, "software-remove contract version mismatch");
 Require(softwareRemove.GetProperty("account_session_required").GetBoolean(), "software-remove account-session requirement drifted");
-Require(softwareRemove.GetProperty("target_authority").GetString() == "signed-install-target-policy", "software-remove target authority drifted");
+Require(softwareRemove.GetProperty("target_authority").GetString() == "signed-install-target-policy+recorded-install-provenance", "software-remove target authority drifted");
+Require(softwareRemove.GetProperty("install_provenance_required").GetBoolean(), "software-remove provenance requirement drifted");
+Require(softwareRemove.GetProperty("supported_uninstall_strategies").EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal)
+    .SetEquals(["MANAGED_DIRECTORY", "INSTALLER_EXECUTABLE"]), "software-remove strategies drifted");
+Require(softwareRemove.GetProperty("legacy_unknown_removal_allowed").GetBoolean() == false, "legacy-unknown removal became destructive");
 Require(softwareRemove.GetProperty("privileged_remove_owner").GetString() == "bke-licensing-agent", "software-remove privileged ownership drifted");
 Require(softwareRemove.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
     .SequenceEqual(["correlation_id", "product_id"]), "software-remove local request widened");
@@ -1038,7 +1042,11 @@ static async Task CertifySoftwareRemoveBoundary()
     var inventory = new FakeLocalProductInventory(
         new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
         {
-            ["bke-render-dock"] = new("bke-render-dock", "1.0.2"),
+            ["bke-render-dock"] = new(
+                "bke-render-dock",
+                "1.0.2",
+                "BKE_MANAGED_PACKAGE",
+                "MANAGED_DIRECTORY"),
         });
     var remover = new FakeStandaloneSoftwareRemover(
         new StandaloneRemovalResult(
@@ -1441,12 +1449,11 @@ sealed class FakeStandaloneSoftwareRemover(
     public string? Version { get; private set; }
 
     public Task<StandaloneRemovalResult> RemoveAsync(
-        string productId,
-        string version,
+        LocalInstalledProduct product,
         CancellationToken cancellationToken)
     {
-        ProductId = productId;
-        Version = version;
+        ProductId = product.ProductId;
+        Version = product.Version;
         return Task.FromResult(result);
     }
 }
