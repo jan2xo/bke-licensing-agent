@@ -189,12 +189,13 @@ try
             schema.CommandText = "SELECT version FROM schema_version LIMIT 1";
             Require(
                 Convert.ToInt32(schema.ExecuteScalar()) == AgentDatabase.CurrentSchemaVersion,
-                "fresh Agent database did not reach schema v8");
+                "fresh Agent database did not reach current schema");
         }
 
         using var product = connection.CreateCommand();
         product.CommandText = """
-            SELECT product_id, display_name, version, manifest_path, product_root, entry_point_path
+            SELECT product_id, display_name, version, manifest_path, product_root, entry_point_path,
+                   install_provenance, uninstall_strategy, uninstall_executable, uninstall_arguments_json
             FROM discovered_products
             WHERE product_id = 'bke-certification-product'
             """;
@@ -214,6 +215,10 @@ try
             Path.GetFullPath(reader.GetString(5)) ==
             Path.GetFullPath(Path.Combine(installRoot, entryPoint)),
             "registered entry point path drifted");
+        Require(reader.GetString(6) == "BKE_MANAGED_PACKAGE", "first install provenance drifted");
+        Require(reader.GetString(7) == "MANAGED_DIRECTORY", "first install uninstall strategy drifted");
+        Require(reader.IsDBNull(8), "BKE-managed package unexpectedly stored an uninstall executable");
+        Require(reader.IsDBNull(9), "BKE-managed package unexpectedly stored uninstall arguments");
         Require(!reader.Read(), "duplicate discovered product rows were registered");
     }
 
@@ -246,7 +251,7 @@ try
 
     Console.WriteLine("BKE privileged first-install certification: PASS");
     Console.WriteLine(
-        "Checks: signed request/policy, invalid-manifest cleanup, schema-v8 bootstrap, discovered_products commit, duplicate refusal");
+        "Checks: signed request/policy, invalid-manifest cleanup, current-schema bootstrap, BKE-managed provenance, discovered_products commit, duplicate refusal");
 }
 finally
 {

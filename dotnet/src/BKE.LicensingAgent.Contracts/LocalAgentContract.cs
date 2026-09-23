@@ -10,7 +10,7 @@ public static class LocalAgentContract
     public const int DefaultPort = 43873;
     public const long MaxJsonBodyBytes = 32_768;
     public const int MaxChunkLineBytes = 8_192;
-    public const int StorageSchemaVersion = 9;
+    public const int StorageSchemaVersion = 10;
 
     public const string LicenseCenterBrowserPath = "/license-center";
     public const string AuthorizePath = "/v1/authorize";
@@ -29,6 +29,7 @@ public static class LocalAgentContract
     public const string SoftwareCatalogPath = "/v1/software/catalog";
     public const string SoftwareInstallPath = "/v1/software/install";
     public const string SoftwareOpenPath = "/v1/software/open";
+    public const string SoftwareRemovePath = "/v1/software/remove";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
@@ -44,6 +45,8 @@ public static class LocalAgentContract
     public const int SoftwareInstallContractVersion = 1;
     public const string SoftwareOpenCapabilityId = "bke.software-open";
     public const int SoftwareOpenContractVersion = 1;
+    public const string SoftwareRemoveCapabilityId = "bke.software-remove";
+    public const int SoftwareRemoveContractVersion = 1;
 }
 
 public sealed record AuthorizeRequest(

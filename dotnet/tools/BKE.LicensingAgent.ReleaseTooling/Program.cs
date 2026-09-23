@@ -67,7 +67,7 @@ internal static class Program
 
         var unsigned = new SortedDictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["schema"] = "bke.install-target-policy.v1",
+            ["schema"] = "bke.install-target-policy.v2",
             ["policy_id"] = policyId,
             ["revision"] = 1,
             ["product_id"] = "bke-certification-product",
@@ -75,6 +75,10 @@ internal static class Program
             ["architecture"] = "x86_64",
             ["install_root"] = @"C:\Program Files\BKE Digital Solutions\Certification Product",
             ["entry_point"] = "product.exe",
+            ["uninstall"] = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["strategy"] = "MANAGED_DIRECTORY",
+            },
             ["signing_key_id"] = targetKeyId,
             ["algorithm"] = "Ed25519",
         };
@@ -123,6 +127,59 @@ internal static class Program
         var entryPoint = Required(options, "--entry-point");
         var targetKeyId = Required(options, "--target-key-id");
         var policyId = Required(options, "--policy-id");
+        var uninstallStrategy =
+            options.GetValueOrDefault("--uninstall-strategy") ?? "MANAGED_DIRECTORY";
+        SortedDictionary<string, object?> uninstall;
+        if (uninstallStrategy == "MANAGED_DIRECTORY")
+        {
+            uninstall = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["strategy"] = uninstallStrategy,
+            };
+        }
+        else if (uninstallStrategy == "INSTALLER_EXECUTABLE")
+        {
+            var uninstallExecutable = Required(options, "--uninstall-executable");
+            var normalizedUninstallExecutable = uninstallExecutable.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(normalizedUninstallExecutable) ||
+                normalizedUninstallExecutable.StartsWith('/') ||
+                (normalizedUninstallExecutable.Length >= 2 && normalizedUninstallExecutable[1] == ':') ||
+                normalizedUninstallExecutable.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                    .Any(part => part is "." or ".."))
+            {
+                throw new InvalidDataException(
+                    "disposable uninstall executable must be a safe relative path");
+            }
+
+            var argumentsJson =
+                options.GetValueOrDefault("--uninstall-arguments-json") ?? "[]";
+            using var argumentsDocument = JsonDocument.Parse(argumentsJson);
+            if (argumentsDocument.RootElement.ValueKind != JsonValueKind.Array ||
+                argumentsDocument.RootElement.GetArrayLength() > 32 ||
+                argumentsDocument.RootElement.EnumerateArray().Any(item =>
+                    item.ValueKind != JsonValueKind.String ||
+                    item.GetString() is not { Length: <= 1024 }))
+            {
+                throw new InvalidDataException(
+                    "disposable uninstall arguments are invalid");
+            }
+
+            uninstall = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["strategy"] = uninstallStrategy,
+                ["executable"] =
+                    normalizedUninstallExecutable.Replace('/', '\\'),
+                ["arguments"] = argumentsDocument.RootElement
+                    .EnumerateArray()
+                    .Select(item => item.GetString()!)
+                    .ToArray(),
+            };
+        }
+        else
+        {
+            throw new InvalidDataException(
+                "disposable uninstall strategy must be MANAGED_DIRECTORY or INSTALLER_EXECUTABLE");
+        }
 
         if (!System.Text.RegularExpressions.Regex.IsMatch(
                 productId,
@@ -224,7 +281,7 @@ internal static class Program
                 StringComparer.Ordinal)
             {
                 ["schema"] =
-                    "bke.install-target-policy.v1",
+                    "bke.install-target-policy.v2",
                 ["policy_id"] = policyId,
                 ["revision"] = revision,
                 ["product_id"] = productId,
@@ -233,6 +290,7 @@ internal static class Program
                 ["install_root"] = installRoot,
                 ["entry_point"] =
                     normalizedEntry.Replace('/', '\\'),
+                ["uninstall"] = uninstall,
                 ["signing_key_id"] = targetKeyId,
                 ["algorithm"] = "Ed25519",
             };

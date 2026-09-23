@@ -49,7 +49,9 @@ public sealed class SqliteProductInventory : ILocalProductInventory
 
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT product_id, version, entry_point_path
+            SELECT product_id, version, entry_point_path,
+                   install_provenance, uninstall_strategy,
+                   uninstall_executable, uninstall_arguments_json
             FROM discovered_products
             ORDER BY discovered_at DESC
             """;
@@ -64,6 +66,27 @@ public sealed class SqliteProductInventory : ILocalProductInventory
             var productId = reader.GetString(0);
             var version = reader.GetString(1);
             var entryPointPath = reader.GetString(2);
+            var installProvenance = reader.GetString(3);
+            var uninstallStrategy = reader.GetString(4);
+            var uninstallExecutable = reader.IsDBNull(5) ? null : reader.GetString(5);
+            var uninstallArgumentsJson = reader.IsDBNull(6) ? null : reader.GetString(6);
+            IReadOnlyList<string> uninstallArguments = Array.Empty<string>();
+            if (uninstallArgumentsJson is not null)
+            {
+                try
+                {
+                    uninstallArguments =
+                        System.Text.Json.JsonSerializer.Deserialize<string[]>(uninstallArgumentsJson)
+                        ?? Array.Empty<string>();
+                }
+                catch
+                {
+                    installProvenance = "LEGACY_UNKNOWN";
+                    uninstallStrategy = "NONE";
+                    uninstallExecutable = null;
+                    uninstallArguments = Array.Empty<string>();
+                }
+            }
 
             if (result.ContainsKey(productId) ||
                 string.IsNullOrWhiteSpace(productId) ||
@@ -74,7 +97,13 @@ public sealed class SqliteProductInventory : ILocalProductInventory
                 continue;
             }
 
-            result[productId] = new LocalInstalledProduct(productId, version);
+            result[productId] = new LocalInstalledProduct(
+                productId,
+                version,
+                installProvenance,
+                uninstallStrategy,
+                uninstallExecutable,
+                uninstallArguments);
         }
 
         return Task.FromResult<IReadOnlyDictionary<string, LocalInstalledProduct>>(result);

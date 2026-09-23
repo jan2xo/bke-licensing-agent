@@ -16,7 +16,9 @@ using Org.BouncyCastle.OpenSsl;
 
 namespace BKE.LicensingAgent.Infrastructure;
 
-public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisioner
+public sealed class PrivilegedUpdateCenterProvider :
+    IStandaloneSoftwareProvisioner,
+    IStandaloneSoftwareRemover
 {
     private const string ProtocolVersion = "bke.licensing.v3";
     private const string UpdatePackageContentType = "application/vnd.bke.update-package+zip";
@@ -42,11 +44,14 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
         "artifact_size", "content_type", "published_at", "issued_at", "revision", "signing_key_id",
         "algorithm", "signature",
     };
-    private static readonly HashSet<string> TargetPolicyKeys = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> TargetPolicyV1Keys = new(StringComparer.Ordinal)
     {
         "schema", "policy_id", "revision", "product_id", "platform", "architecture",
         "install_root", "entry_point", "signing_key_id", "algorithm", "signature",
     };
+    private static readonly HashSet<string> TargetPolicyV2Keys = new(
+        TargetPolicyV1Keys.Append("uninstall"),
+        StringComparer.Ordinal);
     private static readonly HashSet<string> PrivilegedConfigKeys = new(StringComparer.Ordinal)
     {
         "runtime_root", "helper_executable", "signing_key_id", "signing_private_key",
@@ -234,6 +239,349 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
                 "privileged_handoff_failed",
                 true);
         }
+    }
+
+    public Task<StandaloneRemovalResult> RemoveAsync(
+        LocalInstalledProduct installed,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "UNSUPPORTED_PLATFORM",
+                "unsupported_platform",
+                false));
+        }
+
+        var product = LoadProduct(installed.ProductId, installed.Version);
+        if (product is null)
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "NOT_INSTALLED",
+                "not_installed",
+                false));
+        }
+
+        TargetPolicy target;
+        PrivilegedConfig config;
+        try
+        {
+            config = LoadPrivilegedConfig();
+            target = ResolveTargetPolicy(product, config);
+            var targetDenial = ValidateRemovalTarget(product, target, config);
+            if (targetDenial is not null)
+            {
+                return Task.FromResult(targetDenial);
+            }
+        }
+        catch
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "TARGET_POLICY_UNAVAILABLE",
+                "target_policy_unavailable",
+                false));
+        }
+
+        if (target.Uninstall is null)
+        {
+            return Task.FromResult(new StandaloneRemovalResult(
+                "UNINSTALL_STRATEGY_UNAVAILABLE",
+                "signed_uninstall_strategy_unavailable",
+                false));
+        }
+
+        return (installed.InstallProvenance, installed.UninstallStrategy) switch
+        {
+            ("BKE_MANAGED_PACKAGE", "MANAGED_DIRECTORY")
+                when target.Uninstall.Strategy == "MANAGED_DIRECTORY" =>
+                Task.FromResult(RemoveManagedDirectory(installed, target)),
+
+            ("PRODUCT_INSTALLER", "INSTALLER_EXECUTABLE")
+                when target.Uninstall.Strategy == "INSTALLER_EXECUTABLE" =>
+                Task.FromResult(RemoveWithInstaller(installed, target, cancellationToken)),
+
+            _ => Task.FromResult(new StandaloneRemovalResult(
+                "UNINSTALL_STRATEGY_MISMATCH",
+                "uninstall_strategy_mismatch",
+                false)),
+        };
+    }
+
+    private StandaloneRemovalResult RemoveManagedDirectory(
+        LocalInstalledProduct installed,
+        TargetPolicy target)
+    {
+        var installRoot = Path.GetFullPath(target.InstallRoot);
+        if (!Directory.Exists(installRoot))
+        {
+            TryRemoveStaleInventory(installed.ProductId);
+            return new StandaloneRemovalResult(
+                "NOT_INSTALLED",
+                "not_installed",
+                false);
+        }
+
+        var tombstone = installRoot + ".bke-remove-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            Directory.Move(installRoot, tombstone);
+        }
+        catch
+        {
+            return new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "remove_stage_failed",
+                true);
+        }
+
+        try
+        {
+            RemoveInventoryRows(installed.ProductId);
+        }
+        catch
+        {
+            try
+            {
+                if (!Directory.Exists(installRoot) && Directory.Exists(tombstone))
+                {
+                    Directory.Move(tombstone, installRoot);
+                }
+            }
+            catch
+            {
+                // Preserve the original inventory failure. A later repair/removal may reconcile.
+            }
+
+            return new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "inventory_cleanup_failed",
+                true);
+        }
+
+        try
+        {
+            if (Directory.Exists(tombstone))
+            {
+                Directory.Delete(tombstone, recursive: true);
+            }
+        }
+        catch
+        {
+            // The signed product root is already detached and no longer discoverable.
+            // Residual tombstone cleanup is non-authoritative and must not resurrect inventory.
+        }
+
+        return new StandaloneRemovalResult(
+            "REMOVED",
+            "managed_directory_removed",
+            false);
+    }
+
+    private StandaloneRemovalResult RemoveWithInstaller(
+        LocalInstalledProduct installed,
+        TargetPolicy target,
+        CancellationToken cancellationToken)
+    {
+        var signed = target.Uninstall!;
+        if (string.IsNullOrWhiteSpace(installed.UninstallExecutable) ||
+            signed.Executable is null ||
+            !string.Equals(
+                NormalizeWindowsRelative(installed.UninstallExecutable),
+                signed.Executable,
+                StringComparison.OrdinalIgnoreCase) ||
+            installed.UninstallArguments is null ||
+            !installed.UninstallArguments.SequenceEqual(signed.Arguments, StringComparer.Ordinal))
+        {
+            return new StandaloneRemovalResult(
+                "UNINSTALL_STRATEGY_MISMATCH",
+                "installer_uninstall_metadata_mismatch",
+                false);
+        }
+
+        var installRoot = Path.GetFullPath(target.InstallRoot);
+        if (!Directory.Exists(installRoot))
+        {
+            TryRemoveStaleInventory(installed.ProductId);
+            return new StandaloneRemovalResult(
+                "NOT_INSTALLED",
+                "not_installed",
+                false);
+        }
+
+        var executable = Path.GetFullPath(
+            Path.Combine(installRoot, signed.Executable));
+        if (!WindowsUnder(installRoot, executable) || !File.Exists(executable))
+        {
+            return new StandaloneRemovalResult(
+                "UNINSTALL_EXECUTABLE_MISSING",
+                "uninstall_executable_missing",
+                false);
+        }
+
+        try
+        {
+            var start = new ProcessStartInfo
+            {
+                FileName = executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = installRoot,
+            };
+            foreach (var argument in signed.Arguments)
+            {
+                start.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(start);
+            if (process is null)
+            {
+                return new StandaloneRemovalResult(
+                    "REMOVE_FAILED",
+                    "uninstaller_start_failed",
+                    true);
+            }
+
+            while (!process.HasExited)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!process.WaitForExit(250))
+                {
+                    continue;
+                }
+            }
+
+            if (process.ExitCode != 0)
+            {
+                return new StandaloneRemovalResult(
+                    "REMOVE_FAILED",
+                    "uninstaller_failed",
+                    true);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "uninstaller_execution_failed",
+                true);
+        }
+
+        var entryPoint = Path.GetFullPath(
+            Path.Combine(installRoot, target.EntryPoint));
+        if (File.Exists(entryPoint))
+        {
+            return new StandaloneRemovalResult(
+                "UNINSTALL_VERIFICATION_FAILED",
+                "entry_point_still_present",
+                true);
+        }
+
+        try
+        {
+            RemoveInventoryRows(installed.ProductId);
+        }
+        catch
+        {
+            return new StandaloneRemovalResult(
+                "REMOVE_FAILED",
+                "inventory_cleanup_failed",
+                true);
+        }
+
+        return new StandaloneRemovalResult(
+            "REMOVED",
+            "product_uninstaller_completed",
+            false);
+    }
+
+    private void TryRemoveStaleInventory(string productId)
+    {
+        try
+        {
+            RemoveInventoryRows(productId);
+        }
+        catch
+        {
+            // Missing install root remains authoritative for local execution.
+        }
+    }
+
+    private StandaloneRemovalResult? ValidateRemovalTarget(
+        ProductContext product,
+        TargetPolicy target,
+        PrivilegedConfig config)
+    {
+        var installRoot = NormalizeWindowsAbsolute(target.InstallRoot);
+        var inventoryRoot = NormalizeWindowsAbsolute(product.ProductRoot);
+        if (!string.Equals(installRoot, inventoryRoot, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                NormalizeWindowsRelative(target.EntryPoint),
+                NormalizeWindowsRelative(product.EntryPoint),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return new StandaloneRemovalResult(
+                "TARGET_MISMATCH",
+                "target_mismatch",
+                false);
+        }
+
+        if (config.ApprovedInstallRoots
+            .Select(NormalizeWindowsAbsolute)
+            .Any(root => string.Equals(root.TrimEnd('\\'), installRoot.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
+        {
+            return new StandaloneRemovalResult(
+                "PROTECTED_TARGET",
+                "protected_platform_root",
+                false);
+        }
+
+        var programFiles = NormalizeWindowsAbsolute(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+        var protectedRoots = new[]
+        {
+            Path.Combine(programFiles, "BKE Digital Solutions", "Licensing Agent"),
+            Path.Combine(programFiles, "BKE Digital Solutions", "BKE"),
+        };
+
+        if (protectedRoots
+            .Select(NormalizeWindowsAbsolute)
+            .Any(protectedRoot =>
+                WindowsUnder(installRoot, protectedRoot) ||
+                WindowsUnder(protectedRoot, installRoot)))
+        {
+            return new StandaloneRemovalResult(
+                "PROTECTED_TARGET",
+                "protected_platform_infrastructure",
+                false);
+        }
+
+        return null;
+    }
+
+    private void RemoveInventoryRows(string productId)
+    {
+        if (!File.Exists(_databasePath))
+        {
+            return;
+        }
+
+        using var connection = OpenDatabase(SqliteOpenMode.ReadWrite);
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE FROM discovered_products
+            WHERE product_id=$product_id
+            """;
+        command.Parameters.AddWithValue("$product_id", productId);
+        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     public async Task<OpenUpdateCenterResponse> OpenAsync(
@@ -1463,10 +1811,24 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
 
     private TargetPolicy VerifyTargetPolicy(JsonElement policy, PrivilegedConfig config)
     {
-        if (policy.ValueKind != JsonValueKind.Object ||
-            !policy.EnumerateObject().Select(item => item.Name).ToHashSet(StringComparer.Ordinal).SetEquals(TargetPolicyKeys) ||
-            RequiredString(policy, "schema") != "bke.install-target-policy.v1" ||
-            RequiredString(policy, "algorithm") != "Ed25519" ||
+        if (policy.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("unsupported target policy contract");
+        }
+
+        var schema = RequiredString(policy, "schema");
+        var fields = policy.EnumerateObject()
+            .Select(item => item.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        UninstallPolicy? uninstall = schema switch
+        {
+            "bke.install-target-policy.v1" when fields.SetEquals(TargetPolicyV1Keys) => null,
+            "bke.install-target-policy.v2" when fields.SetEquals(TargetPolicyV2Keys) =>
+                VerifyUninstallPolicy(policy.GetProperty("uninstall")),
+            _ => throw new InvalidDataException("unsupported target policy contract"),
+        };
+
+        if (RequiredString(policy, "algorithm") != "Ed25519" ||
             RequiredString(policy, "platform") != "windows")
         {
             throw new InvalidDataException("unsupported target policy contract");
@@ -1490,7 +1852,60 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
         if (!verifier.VerifySignature(signature)) throw new CryptographicException("invalid target policy signature");
         return new TargetPolicy(
             policy.Clone(), revision, RequiredString(policy, "product_id"), "windows",
-            RequiredString(policy, "architecture"), installRoot, entryPoint);
+            RequiredString(policy, "architecture"), installRoot, entryPoint, uninstall);
+    }
+
+    private static UninstallPolicy VerifyUninstallPolicy(JsonElement uninstall)
+    {
+        if (uninstall.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("invalid uninstall policy");
+        }
+
+        var strategy = RequiredString(uninstall, "strategy");
+        var fields = uninstall.EnumerateObject()
+            .Select(item => item.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (strategy == "MANAGED_DIRECTORY")
+        {
+            if (!fields.SetEquals(["strategy"]))
+            {
+                throw new InvalidDataException("invalid managed-directory uninstall policy");
+            }
+            return new UninstallPolicy(strategy, null, Array.Empty<string>());
+        }
+
+        if (strategy == "INSTALLER_EXECUTABLE")
+        {
+            if (!fields.SetEquals(["strategy", "executable", "arguments"]))
+            {
+                throw new InvalidDataException("invalid installer-executable uninstall policy");
+            }
+
+            var executable = NormalizeWindowsRelative(RequiredString(uninstall, "executable"));
+            var argumentsNode = uninstall.GetProperty("arguments");
+            if (argumentsNode.ValueKind != JsonValueKind.Array ||
+                argumentsNode.GetArrayLength() > 32)
+            {
+                throw new InvalidDataException("invalid uninstall arguments");
+            }
+
+            var arguments = new List<string>();
+            foreach (var argument in argumentsNode.EnumerateArray())
+            {
+                if (argument.ValueKind != JsonValueKind.String ||
+                    argument.GetString() is not { Length: <= 1024 } value)
+                {
+                    throw new InvalidDataException("invalid uninstall argument");
+                }
+                arguments.Add(value);
+            }
+
+            return new UninstallPolicy(strategy, executable, arguments);
+        }
+
+        throw new InvalidDataException("unsupported uninstall strategy");
     }
 
     private VerifiedPolicy VerifyPolicy(JsonElement policy, ProductContext product, int? lastRevision)
@@ -1903,7 +2318,12 @@ public sealed class PrivilegedUpdateCenterProvider : IStandaloneSoftwareProvisio
         string LatestVersion, string MinimumSupportedVersion, string ReleaseId, string ArtifactId,
         string ArtifactSha256, long ArtifactSize, string ContentType, int Revision);
     private sealed record TargetPolicy(
-        JsonElement Raw, int Revision, string ProductId, string Platform, string Architecture, string InstallRoot, string EntryPoint);
+        JsonElement Raw, int Revision, string ProductId, string Platform, string Architecture,
+        string InstallRoot, string EntryPoint, UninstallPolicy? Uninstall);
+    private sealed record UninstallPolicy(
+        string Strategy,
+        string? Executable,
+        IReadOnlyList<string> Arguments);
     private sealed record PrivilegedConfig(
         string RuntimeRoot, string HelperExecutable, string SigningKeyId, Ed25519PrivateKeyParameters SigningPrivateKey,
         IReadOnlyDictionary<string, Ed25519PublicKeyParameters> TargetKeys, string TargetPoliciesDir,

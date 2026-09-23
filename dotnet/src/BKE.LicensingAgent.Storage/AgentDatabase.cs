@@ -9,11 +9,15 @@ public sealed record DiscoveredProductRegistration(
     string ManifestPath,
     string ProductRoot,
     string EntryPointPath,
-    DateTimeOffset DiscoveredAt);
+    DateTimeOffset DiscoveredAt,
+    string InstallProvenance = "LEGACY_UNKNOWN",
+    string UninstallStrategy = "NONE",
+    string? UninstallExecutable = null,
+    string? UninstallArgumentsJson = null);
 
 public static class AgentDatabase
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     private static readonly IReadOnlyDictionary<int, string[]> Migrations =
         new Dictionary<int, string[]>
@@ -249,6 +253,21 @@ public static class AgentDatabase
                 ON notifications(product_id, code)
                 """,
             ],
+            [10] =
+            [
+                """
+                ALTER TABLE discovered_products
+                ADD COLUMN install_provenance TEXT NOT NULL DEFAULT 'LEGACY_UNKNOWN'
+                CHECK (install_provenance IN ('LEGACY_UNKNOWN', 'BKE_MANAGED_PACKAGE', 'PRODUCT_INSTALLER'))
+                """,
+                """
+                ALTER TABLE discovered_products
+                ADD COLUMN uninstall_strategy TEXT NOT NULL DEFAULT 'NONE'
+                CHECK (uninstall_strategy IN ('NONE', 'MANAGED_DIRECTORY', 'INSTALLER_EXECUTABLE'))
+                """,
+                "ALTER TABLE discovered_products ADD COLUMN uninstall_executable TEXT",
+                "ALTER TABLE discovered_products ADD COLUMN uninstall_arguments_json TEXT",
+            ],
         };
 
     public static string DatabasePath(string dataDirectory) =>
@@ -354,6 +373,54 @@ public static class AgentDatabase
             Required(registration.ProductRoot, nameof(registration.ProductRoot))));
         var entryPointPath = Path.GetFullPath(
             Required(registration.EntryPointPath, nameof(registration.EntryPointPath)));
+        var installProvenance = Required(registration.InstallProvenance, nameof(registration.InstallProvenance));
+        var uninstallStrategy = Required(registration.UninstallStrategy, nameof(registration.UninstallStrategy));
+        if (installProvenance is not ("LEGACY_UNKNOWN" or "BKE_MANAGED_PACKAGE" or "PRODUCT_INSTALLER"))
+        {
+            throw new InvalidDataException("Discovered product install provenance is unsupported.");
+        }
+        if (uninstallStrategy is not ("NONE" or "MANAGED_DIRECTORY" or "INSTALLER_EXECUTABLE"))
+        {
+            throw new InvalidDataException("Discovered product uninstall strategy is unsupported.");
+        }
+        if (uninstallStrategy == "MANAGED_DIRECTORY" && installProvenance != "BKE_MANAGED_PACKAGE")
+        {
+            throw new InvalidDataException("Managed-directory removal requires BKE-managed installation provenance.");
+        }
+        if (uninstallStrategy == "INSTALLER_EXECUTABLE")
+        {
+            if (installProvenance != "PRODUCT_INSTALLER" ||
+                string.IsNullOrWhiteSpace(registration.UninstallExecutable) ||
+                string.IsNullOrWhiteSpace(registration.UninstallArgumentsJson))
+            {
+                throw new InvalidDataException("Installer uninstall strategy requires trusted installer provenance and metadata.");
+            }
+
+            var uninstallRelative = registration.UninstallExecutable
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+            if (Path.IsPathRooted(uninstallRelative) ||
+                uninstallRelative.Split(Path.DirectorySeparatorChar)
+                    .Any(part => part is "" or "." or ".."))
+            {
+                throw new InvalidDataException("Installer uninstall executable must be a safe relative path.");
+            }
+
+            using var arguments = System.Text.Json.JsonDocument.Parse(registration.UninstallArgumentsJson);
+            if (arguments.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array ||
+                arguments.RootElement.GetArrayLength() > 32 ||
+                arguments.RootElement.EnumerateArray().Any(item =>
+                    item.ValueKind != System.Text.Json.JsonValueKind.String ||
+                    item.GetString() is not { Length: <= 1024 }))
+            {
+                throw new InvalidDataException("Installer uninstall arguments are invalid.");
+            }
+        }
+        else if (registration.UninstallExecutable is not null ||
+                 registration.UninstallArgumentsJson is not null)
+        {
+            throw new InvalidDataException("Uninstall command metadata is only valid for installer-executable strategy.");
+        }
 
         if (!Path.IsPathFullyQualified(manifestPath) ||
             !Path.IsPathFullyQualified(productRoot) ||
@@ -391,7 +458,11 @@ public static class AgentDatabase
                 manifest_path,
                 product_root,
                 entry_point_path,
-                discovered_at
+                discovered_at,
+                install_provenance,
+                uninstall_strategy,
+                uninstall_executable,
+                uninstall_arguments_json
             ) VALUES (
                 $product_id,
                 $display_name,
@@ -399,7 +470,11 @@ public static class AgentDatabase
                 $manifest_path,
                 $product_root,
                 $entry_point_path,
-                $discovered_at
+                $discovered_at,
+                $install_provenance,
+                $uninstall_strategy,
+                $uninstall_executable,
+                $uninstall_arguments_json
             )
             """;
         command.Parameters.AddWithValue("$product_id", productId);
@@ -411,6 +486,14 @@ public static class AgentDatabase
         command.Parameters.AddWithValue(
             "$discovered_at",
             registration.DiscoveredAt.ToUniversalTime().ToString("O"));
+        command.Parameters.AddWithValue("$install_provenance", installProvenance);
+        command.Parameters.AddWithValue("$uninstall_strategy", uninstallStrategy);
+        command.Parameters.AddWithValue(
+            "$uninstall_executable",
+            (object?)registration.UninstallExecutable ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$uninstall_arguments_json",
+            (object?)registration.UninstallArgumentsJson ?? DBNull.Value);
 
         if (command.ExecuteNonQuery() != 1)
         {

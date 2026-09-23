@@ -109,22 +109,24 @@ jobs:
           fi
 
           jq -e '
-            .schema == "bke.install-target-policy.v1" and
+            .schema == "bke.install-target-policy.v2" and
             .product_id == "bke-render-dock" and
             .platform == "windows" and
             .architecture == "x86_64" and
             .install_root == "C:\\Program Files\\BKE Digital Solutions\\Render Dock" and
             .entry_point == "RENDER DOCK.exe" and
+            .uninstall.strategy == "MANAGED_DIRECTORY" and
             .algorithm == "Ed25519"
           ' "$root/x64/target-policies/utm-render-dock-windows-x64-v1.json" >/dev/null
 
           jq -e '
-            .schema == "bke.install-target-policy.v1" and
+            .schema == "bke.install-target-policy.v2" and
             .product_id == "bke-render-dock" and
             .platform == "windows" and
             .architecture == "arm64" and
             .install_root == "C:\\Program Files\\BKE Digital Solutions\\Render Dock" and
             .entry_point == "RENDER DOCK.exe" and
+            .uninstall.strategy == "MANAGED_DIRECTORY" and
             .algorithm == "Ed25519"
           ' "$root/arm64/target-policies/utm-render-dock-windows-arm64-v1.json" >/dev/null
 

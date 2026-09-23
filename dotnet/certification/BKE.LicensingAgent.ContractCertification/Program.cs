@@ -50,6 +50,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.SoftwareCatalogPath}",
     $"POST {LocalAgentContract.SoftwareInstallPath}",
     $"POST {LocalAgentContract.SoftwareOpenPath}",
+    $"POST {LocalAgentContract.SoftwareRemovePath}",
 };
 Require(inventoryRoutes.SetEquals(contractRoutes), "current route inventory mismatch");
 
@@ -101,6 +102,23 @@ Require(softwareOpen.GetProperty("local_request_fields").EnumerateArray().Select
 Require(softwareOpen.GetProperty("local_responses_expose_entry_point").GetBoolean() == false, "software-open entry-point exposure drifted");
 Require(softwareOpen.GetProperty("local_responses_expose_install_path").GetBoolean() == false, "software-open install-path exposure drifted");
 
+var softwareRemove = capabilities.GetProperty("software_remove");
+Require(softwareRemove.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareRemoveCapabilityId, "software-remove capability id mismatch");
+Require(softwareRemove.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareRemoveContractVersion, "software-remove contract version mismatch");
+Require(softwareRemove.GetProperty("account_session_required").GetBoolean(), "software-remove account-session requirement drifted");
+Require(softwareRemove.GetProperty("target_authority").GetString() == "signed-install-target-policy+recorded-install-provenance", "software-remove target authority drifted");
+Require(softwareRemove.GetProperty("install_provenance_required").GetBoolean(), "software-remove provenance requirement drifted");
+Require(softwareRemove.GetProperty("supported_uninstall_strategies").EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal)
+    .SetEquals(["MANAGED_DIRECTORY", "INSTALLER_EXECUTABLE"]), "software-remove strategies drifted");
+Require(softwareRemove.GetProperty("legacy_unknown_removal_allowed").GetBoolean() == false, "legacy-unknown removal became destructive");
+Require(softwareRemove.GetProperty("privileged_remove_owner").GetString() == "bke-licensing-agent", "software-remove privileged ownership drifted");
+Require(softwareRemove.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "product_id"]), "software-remove local request widened");
+Require(softwareRemove.GetProperty("user_data_outside_install_root_preserved").GetBoolean(), "software-remove user-data preservation drifted");
+Require(softwareRemove.GetProperty("protected_platform_roots").EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal)
+    .SetEquals(["BKE", "Licensing Agent"]), "software-remove protected roots drifted");
+Require(softwareRemove.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-remove install-path exposure drifted");
+
 var notificationInbox = capabilities.GetProperty("notification_inbox");
 Require(notificationInbox.GetProperty("capability_id").GetString() == LocalAgentContract.NotificationInboxCapabilityId, "notification inbox capability id mismatch");
 Require(notificationInbox.GetProperty("contract_version").GetInt32() == LocalAgentContract.NotificationInboxContractVersion, "notification inbox contract version mismatch");
@@ -125,6 +143,8 @@ Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.Correlati
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.ProductId)) == "product_id", "software-install product_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.CorrelationId)) == "correlation_id", "software-open correlation_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.ProductId)) == "product_id", "software-open product_id wire name mismatch");
+Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.CorrelationId)) == "correlation_id", "software-remove correlation_id wire name mismatch");
+Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.ProductId)) == "product_id", "software-remove product_id wire name mismatch");
 
 Require(MethodNames<IAuthorizationService>().SetEquals(["AuthorizeAsync"]), "authorization port drifted");
 Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activation port drifted");
@@ -135,6 +155,7 @@ Require(MethodNames<IAccountSessionService>().SetEquals(["StartAsync", "StatusAs
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
+Require(MethodNames<ISoftwareRemoveService>().SetEquals(["RemoveAsync"]), "software-remove port drifted");
 
 CertifyRuntimeEnvironmentBoundary();
 CertifyFreshStorageBootstrap(storage);
@@ -144,6 +165,7 @@ await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareOpenBoundary();
+await CertifySoftwareRemoveBoundary();
 
 var notificationColumns = storage.GetProperty("tables").GetProperty("notifications")
     .EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal);
@@ -158,6 +180,7 @@ Console.WriteLine("Account-session device authorization state machine certified"
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software open entitlement, execution-type, and path-hiding boundary certified");
+Console.WriteLine("Software remove authentication, target, and path-hiding boundary certified");
 return;
 
 static void CertifyRuntimeEnvironmentBoundary()
@@ -337,6 +360,23 @@ static void CertifyFreshStorageBootstrap(JsonElement storage)
         Require(
             actualNotificationColumns.SequenceEqual(expectedNotificationColumns),
             "fresh notification storage columns drifted");
+
+        var expectedProductColumns = storage.GetProperty("tables")
+            .GetProperty("discovered_products")
+            .EnumerateArray()
+            .Select(value => value.GetString()!)
+            .ToArray();
+        using var productColumns = connection.CreateCommand();
+        productColumns.CommandText = "PRAGMA table_info(discovered_products)";
+        using var productReader = productColumns.ExecuteReader();
+        var actualProductColumns = new List<string>();
+        while (productReader.Read())
+        {
+            actualProductColumns.Add(productReader.GetString(1));
+        }
+        Require(
+            actualProductColumns.SequenceEqual(expectedProductColumns),
+            "fresh discovered-product storage columns drifted");
     }
     finally
     {
@@ -365,6 +405,28 @@ static void CertifyNotificationSchemaUpgrade()
             command.CommandText = """
                 CREATE TABLE schema_version (version INTEGER NOT NULL);
                 INSERT INTO schema_version(version) VALUES (8);
+                CREATE TABLE discovered_products (
+                    product_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    manifest_path TEXT NOT NULL,
+                    product_root TEXT NOT NULL,
+                    entry_point_path TEXT NOT NULL,
+                    discovered_at TEXT NOT NULL,
+                    PRIMARY KEY (manifest_path)
+                );
+                INSERT INTO discovered_products (
+                    product_id, display_name, version, manifest_path,
+                    product_root, entry_point_path, discovered_at
+                ) VALUES (
+                    'legacy-product',
+                    'Legacy Product',
+                    '1.0.0',
+                    'C:\\legacy\\bke.manifest.json',
+                    'C:\\legacy',
+                    'C:\\legacy\\legacy.exe',
+                    '2026-09-19T00:00:00.0000000+00:00'
+                );
                 CREATE TABLE notifications (
                     id TEXT PRIMARY KEY,
                     product_id TEXT NOT NULL,
@@ -425,6 +487,22 @@ static void CertifyNotificationSchemaUpgrade()
             Require(reader.IsDBNull(1) && reader.IsDBNull(2) &&
                     reader.IsDBNull(3) && reader.IsDBNull(4),
                 "legacy notification unexpectedly gained fabricated presentation");
+        }
+
+        using (var legacyProduct = upgraded.CreateCommand())
+        {
+            legacyProduct.CommandText = """
+                SELECT install_provenance, uninstall_strategy,
+                       uninstall_executable, uninstall_arguments_json
+                FROM discovered_products
+                WHERE product_id='legacy-product'
+                """;
+            using var reader = legacyProduct.ExecuteReader();
+            Require(reader.Read(), "legacy discovered product was not preserved");
+            Require(reader.GetString(0) == "LEGACY_UNKNOWN", "legacy product gained unsafe install provenance");
+            Require(reader.GetString(1) == "NONE", "legacy product gained unsafe uninstall strategy");
+            Require(reader.IsDBNull(2) && reader.IsDBNull(3),
+                "legacy product gained fabricated uninstall command metadata");
         }
 
         using (var multiple = upgraded.CreateCommand())
@@ -1008,6 +1086,100 @@ static async Task CertifySoftwareOpenBoundary()
     Require(pluginLauncher.ProductId is null, "software open launched a Launcher plugin as standalone");
 }
 
+static async Task CertifySoftwareRemoveBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-remove",
+        "remover@example.com",
+        "account-remove",
+        "INDIVIDUAL",
+        "Remove Buyer");
+    var inventory = new FakeLocalProductInventory(
+        new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+        {
+            ["bke-render-dock"] = new(
+                "bke-render-dock",
+                "1.0.2",
+                "BKE_MANAGED_PACKAGE",
+                "MANAGED_DIRECTORY"),
+        });
+    var remover = new FakeStandaloneSoftwareRemover(
+        new StandaloneRemovalResult(
+            "REMOVED",
+            "removed",
+            false));
+    var service = new SoftwareRemoveService(
+        new FakeAuthenticatedAccountSessionService(account),
+        inventory,
+        remover);
+
+    var response = await service.RemoveAsync(
+        new SoftwareRemoveRequest(
+            "cert-remove",
+            "bke-render-dock"),
+        CancellationToken.None);
+
+    Require(response.Status == "REMOVED", "software remove did not enter REMOVED");
+    Require(response.State == "removed", "software remove state drifted");
+    Require(remover.ProductId == "bke-render-dock", "software remove product drifted");
+    Require(remover.Version == "1.0.2", "software remove version drifted");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("Program Files", StringComparison.OrdinalIgnoreCase), "software remove leaked an install path");
+    Require(!wire.Contains("RENDER DOCK.exe", StringComparison.OrdinalIgnoreCase), "software remove leaked an entry point");
+
+    var missingRemover = new FakeStandaloneSoftwareRemover(
+        new StandaloneRemovalResult(
+            "REMOVED",
+            "removed",
+            false));
+    var missing = new SoftwareRemoveService(
+        new FakeAuthenticatedAccountSessionService(account),
+        new FakeLocalProductInventory(
+            new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)),
+        missingRemover);
+    var missingResponse = await missing.RemoveAsync(
+        new SoftwareRemoveRequest(
+            "cert-remove-missing",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(missingResponse.Status == "NOT_INSTALLED", "software remove missing-product state drifted");
+    Require(missingRemover.ProductId is null, "software remove invoked privileged remover for absent product");
+
+    var unauthenticatedRemover = new FakeStandaloneSoftwareRemover(
+        new StandaloneRemovalResult(
+            "REMOVED",
+            "removed",
+            false));
+    var unauthenticated = new SoftwareRemoveService(
+        new FakeUnauthenticatedAccountSessionService(),
+        inventory,
+        unauthenticatedRemover);
+    var unauthenticatedResponse = await unauthenticated.RemoveAsync(
+        new SoftwareRemoveRequest(
+            "cert-remove-auth",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(unauthenticatedResponse.Status == "AUTH_REQUIRED", "software remove did not require an account session");
+    Require(unauthenticatedRemover.ProductId is null, "software remove invoked privileged remover without authentication");
+
+    var protectedRemover = new FakeStandaloneSoftwareRemover(
+        new StandaloneRemovalResult(
+            "PROTECTED_TARGET",
+            "protected_target",
+            false));
+    var protectedService = new SoftwareRemoveService(
+        new FakeAuthenticatedAccountSessionService(account),
+        inventory,
+        protectedRemover);
+    var protectedResponse = await protectedService.RemoveAsync(
+        new SoftwareRemoveRequest(
+            "cert-remove-protected",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(protectedResponse.Error?.Code == "PROTECTED_TARGET", "software remove protected-target denial was flattened");
+}
+
 static HashSet<string> MethodNames<T>() =>
     typeof(T).GetMethods().Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
 
@@ -1243,6 +1415,32 @@ sealed class FakeAuthenticatedAccountSessionService : IAccountSessionService
         throw new NotSupportedException();
 }
 
+sealed class FakeUnauthenticatedAccountSessionService : IAccountSessionService
+{
+    public Task<AccountSessionStartResponse> StartAsync(
+        AccountSessionStartRequest request,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    public Task<AccountSessionStatusResponse> StatusAsync(
+        AccountSessionStatusRequest request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new AccountSessionStatusResponse(
+            LocalAgentContract.AccountSessionCapabilityId,
+            LocalAgentContract.AccountSessionContractVersion,
+            "AUTH_REQUIRED",
+            null,
+            new AccountSessionError(
+                "AUTH_REQUIRED",
+                "Sign in with a BKE account.",
+                false)));
+
+    public Task<AccountSessionLogoutResponse> LogoutAsync(
+        AccountSessionLogoutRequest request,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+}
+
 sealed class FakeSoftwareCatalogRemote(
     IReadOnlyList<RemoteSoftwareCatalogItem> items) : ISoftwareCatalogRemote
 {
@@ -1294,6 +1492,23 @@ sealed class FakeStandaloneSoftwareProvisioner(
         CancellationToken cancellationToken)
     {
         Authorization = authorization;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStandaloneSoftwareRemover(
+    StandaloneRemovalResult result)
+    : IStandaloneSoftwareRemover
+{
+    public string? ProductId { get; private set; }
+    public string? Version { get; private set; }
+
+    public Task<StandaloneRemovalResult> RemoveAsync(
+        LocalInstalledProduct product,
+        CancellationToken cancellationToken)
+    {
+        ProductId = product.ProductId;
+        Version = product.Version;
         return Task.FromResult(result);
     }
 }
