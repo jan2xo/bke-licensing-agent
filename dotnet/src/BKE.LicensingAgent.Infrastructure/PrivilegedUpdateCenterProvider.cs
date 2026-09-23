@@ -44,11 +44,14 @@ public sealed class PrivilegedUpdateCenterProvider :
         "artifact_size", "content_type", "published_at", "issued_at", "revision", "signing_key_id",
         "algorithm", "signature",
     };
-    private static readonly HashSet<string> TargetPolicyKeys = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> TargetPolicyV1Keys = new(StringComparer.Ordinal)
     {
         "schema", "policy_id", "revision", "product_id", "platform", "architecture",
         "install_root", "entry_point", "signing_key_id", "algorithm", "signature",
     };
+    private static readonly HashSet<string> TargetPolicyV2Keys = new(
+        TargetPolicyV1Keys.Append("uninstall"),
+        StringComparer.Ordinal);
     private static readonly HashSet<string> PrivilegedConfigKeys = new(StringComparer.Ordinal)
     {
         "runtime_root", "helper_executable", "signing_key_id", "signing_private_key",
@@ -1655,10 +1658,24 @@ public sealed class PrivilegedUpdateCenterProvider :
 
     private TargetPolicy VerifyTargetPolicy(JsonElement policy, PrivilegedConfig config)
     {
-        if (policy.ValueKind != JsonValueKind.Object ||
-            !policy.EnumerateObject().Select(item => item.Name).ToHashSet(StringComparer.Ordinal).SetEquals(TargetPolicyKeys) ||
-            RequiredString(policy, "schema") != "bke.install-target-policy.v1" ||
-            RequiredString(policy, "algorithm") != "Ed25519" ||
+        if (policy.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("unsupported target policy contract");
+        }
+
+        var schema = RequiredString(policy, "schema");
+        var fields = policy.EnumerateObject()
+            .Select(item => item.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var uninstall = schema switch
+        {
+            "bke.install-target-policy.v1" when fields.SetEquals(TargetPolicyV1Keys) => null,
+            "bke.install-target-policy.v2" when fields.SetEquals(TargetPolicyV2Keys) =>
+                VerifyUninstallPolicy(policy.GetProperty("uninstall")),
+            _ => throw new InvalidDataException("unsupported target policy contract"),
+        };
+
+        if (RequiredString(policy, "algorithm") != "Ed25519" ||
             RequiredString(policy, "platform") != "windows")
         {
             throw new InvalidDataException("unsupported target policy contract");
@@ -1682,7 +1699,60 @@ public sealed class PrivilegedUpdateCenterProvider :
         if (!verifier.VerifySignature(signature)) throw new CryptographicException("invalid target policy signature");
         return new TargetPolicy(
             policy.Clone(), revision, RequiredString(policy, "product_id"), "windows",
-            RequiredString(policy, "architecture"), installRoot, entryPoint);
+            RequiredString(policy, "architecture"), installRoot, entryPoint, uninstall);
+    }
+
+    private static UninstallPolicy VerifyUninstallPolicy(JsonElement uninstall)
+    {
+        if (uninstall.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("invalid uninstall policy");
+        }
+
+        var strategy = RequiredString(uninstall, "strategy");
+        var fields = uninstall.EnumerateObject()
+            .Select(item => item.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (strategy == "MANAGED_DIRECTORY")
+        {
+            if (!fields.SetEquals(["strategy"]))
+            {
+                throw new InvalidDataException("invalid managed-directory uninstall policy");
+            }
+            return new UninstallPolicy(strategy, null, Array.Empty<string>());
+        }
+
+        if (strategy == "INSTALLER_EXECUTABLE")
+        {
+            if (!fields.SetEquals(["strategy", "executable", "arguments"]))
+            {
+                throw new InvalidDataException("invalid installer-executable uninstall policy");
+            }
+
+            var executable = NormalizeWindowsRelative(RequiredString(uninstall, "executable"));
+            var argumentsNode = uninstall.GetProperty("arguments");
+            if (argumentsNode.ValueKind != JsonValueKind.Array ||
+                argumentsNode.GetArrayLength() > 32)
+            {
+                throw new InvalidDataException("invalid uninstall arguments");
+            }
+
+            var arguments = new List<string>();
+            foreach (var argument in argumentsNode.EnumerateArray())
+            {
+                if (argument.ValueKind != JsonValueKind.String ||
+                    argument.GetString() is not { Length: <= 1024 } value)
+                {
+                    throw new InvalidDataException("invalid uninstall argument");
+                }
+                arguments.Add(value);
+            }
+
+            return new UninstallPolicy(strategy, executable, arguments);
+        }
+
+        throw new InvalidDataException("unsupported uninstall strategy");
     }
 
     private VerifiedPolicy VerifyPolicy(JsonElement policy, ProductContext product, int? lastRevision)
@@ -2095,7 +2165,12 @@ public sealed class PrivilegedUpdateCenterProvider :
         string LatestVersion, string MinimumSupportedVersion, string ReleaseId, string ArtifactId,
         string ArtifactSha256, long ArtifactSize, string ContentType, int Revision);
     private sealed record TargetPolicy(
-        JsonElement Raw, int Revision, string ProductId, string Platform, string Architecture, string InstallRoot, string EntryPoint);
+        JsonElement Raw, int Revision, string ProductId, string Platform, string Architecture,
+        string InstallRoot, string EntryPoint, UninstallPolicy? Uninstall);
+    private sealed record UninstallPolicy(
+        string Strategy,
+        string? Executable,
+        IReadOnlyList<string> Arguments);
     private sealed record PrivilegedConfig(
         string RuntimeRoot, string HelperExecutable, string SigningKeyId, Ed25519PrivateKeyParameters SigningPrivateKey,
         IReadOnlyDictionary<string, Ed25519PublicKeyParameters> TargetKeys, string TargetPoliciesDir,
