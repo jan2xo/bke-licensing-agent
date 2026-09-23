@@ -82,9 +82,11 @@ builder.Services.AddSingleton<IStandaloneSoftwareRemover>(services =>
 builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
 builder.Services.AddSingleton<IAccountSessionRemote>(_ => new AccountSessionRemote());
 builder.Services.AddSingleton<IAccountSessionSecretStore>(_ => new WindowsDpapiAccountSessionSecretStore());
+builder.Services.AddSingleton<IAccountSessionDeviceContextProvider, AccountSessionDeviceContextProvider>();
 builder.Services.AddSingleton<IAccountSessionService>(services => new AccountSessionService(
     services.GetRequiredService<IAccountSessionRemote>(),
-    services.GetRequiredService<IAccountSessionSecretStore>()));
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountSessionDeviceContextProvider>()));
 builder.Services.AddSingleton<SoftwareCatalogRemote>();
 builder.Services.AddSingleton<ISoftwareCatalogRemote>(services =>
     services.GetRequiredService<SoftwareCatalogRemote>());
@@ -358,6 +360,35 @@ app.MapPost(LocalAgentContract.AccountSessionStartPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountSessionNativeContextPath, async (
+    AccountSessionNativeContextRequest request,
+    IAccountSessionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountSessionNativeContextInvalidRequest();
+    }
+
+    var response = await service.NativeContextAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountSessionNativeCompletePath, async (
+    AccountSessionNativeCompleteRequest request,
+    IAccountSessionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidNativeHandoffCode(request.HandoffCode))
+    {
+        return AccountSessionNativeCompleteInvalidRequest();
+    }
+
+    var response = await service.CompleteNativeAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountSessionStatusPath, async (
     AccountSessionStatusRequest request,
     IAccountSessionService service,
@@ -457,6 +488,15 @@ static bool ValidCorrelationId(string? correlationId) =>
 static bool ValidAccountSessionCorrelationId(string? correlationId) =>
     ValidCorrelationId(correlationId) && correlationId!.Length <= 128;
 
+static bool ValidNativeHandoffCode(string? handoffCode) =>
+    !string.IsNullOrWhiteSpace(handoffCode) &&
+    handoffCode.Length is >= 32 and <= 256 &&
+    handoffCode.All(character =>
+        character is >= 'A' and <= 'Z' ||
+        character is >= 'a' and <= 'z' ||
+        character is >= '0' and <= '9' ||
+        character is '-' or '_');
+
 static bool ValidSoftwareProductId(string? productId) =>
     !string.IsNullOrWhiteSpace(productId) &&
     productId.Length <= 128 &&
@@ -501,6 +541,33 @@ static IResult AccountSessionStartInvalidRequest() =>
         null,
         null,
         new AccountSessionError("INVALID_REQUEST", "The account-session request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountSessionNativeContextInvalidRequest() =>
+    Results.Json(new AccountSessionNativeContextResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "FAILED",
+        null,
+        null,
+        null,
+        null,
+        new AccountSessionError(
+            "INVALID_REQUEST",
+            "The native account-session context request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountSessionNativeCompleteInvalidRequest() =>
+    Results.Json(new AccountSessionNativeCompleteResponse(
+        LocalAgentContract.AccountSessionCapabilityId,
+        LocalAgentContract.AccountSessionContractVersion,
+        "FAILED",
+        null,
+        new AccountSessionError(
+            "INVALID_REQUEST",
+            "The native account-session handoff request is invalid.",
+            false)),
         statusCode: StatusCodes.Status400BadRequest);
 
 static IResult AccountSessionStatusInvalidRequest() =>

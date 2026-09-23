@@ -8,6 +8,11 @@ public interface IAccountSessionRemote
 
     Task<RemoteAccountSessionPoll> PollAsync(string deviceCode, CancellationToken cancellationToken);
 
+    Task<RemoteAccountSessionPoll> ExchangeNativeHandoffAsync(
+        string handoffCode,
+        string deviceId,
+        CancellationToken cancellationToken);
+
     Task<RemoteAccountSessionRefresh> RefreshAsync(
         string refreshToken,
         CancellationToken cancellationToken);
@@ -24,6 +29,17 @@ public interface IAccountSessionSecretStore
     Task WriteAsync(AccountSessionStoredState state, CancellationToken cancellationToken);
 
     Task ClearAsync(CancellationToken cancellationToken);
+}
+
+public sealed record AccountSessionDeviceContext(
+    string DeviceId,
+    string DeviceName,
+    string Platform,
+    string Architecture);
+
+public interface IAccountSessionDeviceContextProvider
+{
+    AccountSessionDeviceContext Get();
 }
 
 public abstract record AccountSessionStoredState;
@@ -77,16 +93,19 @@ public sealed class AccountSessionService : IAccountSessionService
 
     private readonly IAccountSessionRemote _remote;
     private readonly IAccountSessionSecretStore _store;
+    private readonly IAccountSessionDeviceContextProvider _deviceContextProvider;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public AccountSessionService(
         IAccountSessionRemote remote,
         IAccountSessionSecretStore store,
+        IAccountSessionDeviceContextProvider deviceContextProvider,
         TimeProvider? timeProvider = null)
     {
         _remote = remote;
         _store = store;
+        _deviceContextProvider = deviceContextProvider;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -156,6 +175,169 @@ public sealed class AccountSessionService : IAccountSessionService
 
             await _store.WriteAsync(state, cancellationToken);
             return StartResponse("PENDING", started.VerificationUri, started.UserCode, expiresAt, null);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public Task<AccountSessionNativeContextResponse> NativeContextAsync(
+        AccountSessionNativeContextRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            var context = _deviceContextProvider.Get();
+            if (!ValidDeviceContext(context))
+            {
+                return Task.FromResult(NativeContextResponse(
+                    "FAILED",
+                    null,
+                    Error(
+                        "INVALID_DEVICE_CONTEXT",
+                        "BKE Licensing Agent could not resolve a valid native sign-in context.",
+                        false)));
+            }
+
+            return Task.FromResult(NativeContextResponse("READY", context, null));
+        }
+        catch
+        {
+            return Task.FromResult(NativeContextResponse(
+                "FAILED",
+                null,
+                Error(
+                    "DEVICE_CONTEXT_UNAVAILABLE",
+                    "BKE Licensing Agent could not resolve native sign-in context.",
+                    true)));
+        }
+    }
+
+    public async Task<AccountSessionNativeCompleteResponse> CompleteNativeAsync(
+        AccountSessionNativeCompleteRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var now = _timeProvider.GetUtcNow();
+            var existing = await _store.ReadAsync(cancellationToken);
+
+            if (existing is ActiveAccountSessionState active)
+            {
+                return NativeCompleteResponse("AUTHENTICATED", active.Account, null);
+            }
+
+            if (existing is PendingAccountSessionState pending)
+            {
+                try
+                {
+                    await _remote.RevokeAsync(
+                        null,
+                        null,
+                        pending.DeviceCode,
+                        cancellationToken);
+                }
+                catch
+                {
+                    // Native completion replaces any legacy pending browser/device
+                    // authorization locally. Its server TTL still bounds the stale flow.
+                }
+
+                await _store.ClearAsync(cancellationToken);
+            }
+
+            AccountSessionDeviceContext context;
+            try
+            {
+                context = _deviceContextProvider.Get();
+            }
+            catch
+            {
+                return NativeCompleteResponse(
+                    "FAILED",
+                    null,
+                    Error(
+                        "DEVICE_CONTEXT_UNAVAILABLE",
+                        "BKE Licensing Agent could not resolve native sign-in context.",
+                        true));
+            }
+
+            if (!ValidDeviceContext(context))
+            {
+                return NativeCompleteResponse(
+                    "FAILED",
+                    null,
+                    Error(
+                        "INVALID_DEVICE_CONTEXT",
+                        "BKE Licensing Agent could not resolve a valid native sign-in context.",
+                        false));
+            }
+
+            RemoteAccountSessionPoll exchange;
+            try
+            {
+                exchange = await _remote.ExchangeNativeHandoffAsync(
+                    request.HandoffCode,
+                    context.DeviceId,
+                    cancellationToken);
+            }
+            catch
+            {
+                return NativeCompleteResponse(
+                    "FAILED",
+                    null,
+                    Error(
+                        "REMOTE_UNAVAILABLE",
+                        "BKE account sign-in handoff is unavailable.",
+                        true));
+            }
+
+            switch (exchange.Status)
+            {
+                case "approved":
+                {
+                    var finalized = await FinalizeApprovedAsync(
+                        exchange,
+                        now,
+                        cancellationToken);
+                    return finalized.Status == "AUTHENTICATED"
+                        ? NativeCompleteResponse(
+                            "AUTHENTICATED",
+                            finalized.Account,
+                            null)
+                        : NativeCompleteResponse(
+                            finalized.Status,
+                            null,
+                            finalized.Error);
+                }
+                case "expired_token":
+                    return NativeCompleteResponse(
+                        "EXPIRED",
+                        null,
+                        Error(
+                            "HANDOFF_EXPIRED",
+                            "The BKE sign-in handoff expired. Sign in again.",
+                            false));
+                case "access_denied":
+                    return NativeCompleteResponse(
+                        "DENIED",
+                        null,
+                        Error(
+                            "HANDOFF_DENIED",
+                            "The BKE sign-in handoff was denied.",
+                            false));
+                default:
+                    return NativeCompleteResponse(
+                        "FAILED",
+                        null,
+                        Error(
+                            "INVALID_REMOTE_RESPONSE",
+                            "BKE account sign-in returned an invalid handoff state.",
+                            false));
+            }
         }
         finally
         {
@@ -315,32 +497,10 @@ public sealed class AccountSessionService : IAccountSessionService
                     null,
                     Error("AUTHORIZATION_EXPIRED", "BKE account authorization expired.", false));
             case "approved":
-                if (!ValidApprovedPoll(poll, now))
-                {
-                    await _store.ClearAsync(cancellationToken);
-                    return StatusResponse(
-                        "FAILED",
-                        null,
-                        Error("INVALID_REMOTE_RESPONSE", "BKE account authorization returned an invalid approval.", false));
-                }
-                var active = new ActiveAccountSessionState(
-                    poll.AccessToken!,
-                    poll.RefreshToken!,
-                    poll.SessionId,
-                    now.Add(poll.ExpiresIn!.Value),
-                    now.Add(poll.RefreshExpiresIn!.Value),
-                    poll.Account!);
-                await _store.WriteAsync(active, cancellationToken);
-                try
-                {
-                    await _remote.AcknowledgeAsync(active.AccessToken, cancellationToken);
-                }
-                catch
-                {
-                    // The tokens are already durably protected locally. The server-side
-                    // handoff bundle has a short TTL and refresh also erases it.
-                }
-                return StatusResponse("AUTHENTICATED", active.Account, null);
+                return await FinalizeApprovedAsync(
+                    poll,
+                    now,
+                    cancellationToken);
             default:
                 await _store.ClearAsync(cancellationToken);
                 return StatusResponse(
@@ -348,6 +508,44 @@ public sealed class AccountSessionService : IAccountSessionService
                     null,
                     Error("INVALID_REMOTE_RESPONSE", "BKE account authorization returned an unknown state.", false));
         }
+    }
+
+    private async Task<AccountSessionStatusResponse> FinalizeApprovedAsync(
+        RemoteAccountSessionPoll poll,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (!ValidApprovedPoll(poll, now))
+        {
+            await _store.ClearAsync(cancellationToken);
+            return StatusResponse(
+                "FAILED",
+                null,
+                Error(
+                    "INVALID_REMOTE_RESPONSE",
+                    "BKE account authorization returned an invalid approval.",
+                    false));
+        }
+
+        var active = new ActiveAccountSessionState(
+            poll.AccessToken!,
+            poll.RefreshToken!,
+            poll.SessionId,
+            now.Add(poll.ExpiresIn!.Value),
+            now.Add(poll.RefreshExpiresIn!.Value),
+            poll.Account!);
+        await _store.WriteAsync(active, cancellationToken);
+        try
+        {
+            await _remote.AcknowledgeAsync(active.AccessToken, cancellationToken);
+        }
+        catch
+        {
+            // The tokens are already durably protected locally. The server-side
+            // handoff bundle has a short TTL and refresh also erases it.
+        }
+
+        return StatusResponse("AUTHENTICATED", active.Account, null);
     }
 
     private async Task<AccountSessionStatusResponse> EnsureActiveSessionAsync(
@@ -421,6 +619,14 @@ public sealed class AccountSessionService : IAccountSessionService
         return StatusResponse("AUTHENTICATED", next.Account, null);
     }
 
+    private static bool ValidDeviceContext(AccountSessionDeviceContext context) =>
+        !string.IsNullOrWhiteSpace(context.DeviceId) &&
+        context.DeviceId.Length is >= 16 and <= 256 &&
+        !string.IsNullOrWhiteSpace(context.DeviceName) &&
+        context.DeviceName.Length <= 128 &&
+        context.Platform is "windows" or "macos" or "linux" &&
+        context.Architecture is "x64" or "arm64" or "x86";
+
     private static bool ValidRefresh(RemoteAccountSessionRefresh refreshed)
     {
         var account = refreshed.Account;
@@ -482,6 +688,31 @@ public sealed class AccountSessionService : IAccountSessionService
                !string.IsNullOrWhiteSpace(account.DisplayName) &&
                account.AccountType is "INDIVIDUAL" or "ORGANIZATION";
     }
+
+    private static AccountSessionNativeContextResponse NativeContextResponse(
+        string status,
+        AccountSessionDeviceContext? context,
+        AccountSessionError? error) =>
+        new(
+            LocalAgentContract.AccountSessionCapabilityId,
+            LocalAgentContract.AccountSessionContractVersion,
+            status,
+            context?.DeviceId,
+            context?.DeviceName,
+            context?.Platform,
+            context?.Architecture,
+            error);
+
+    private static AccountSessionNativeCompleteResponse NativeCompleteResponse(
+        string status,
+        AccountSessionAccount? account,
+        AccountSessionError? error) =>
+        new(
+            LocalAgentContract.AccountSessionCapabilityId,
+            LocalAgentContract.AccountSessionContractVersion,
+            status,
+            account,
+            error);
 
     private static AccountSessionStartResponse StartResponse(
         string status,

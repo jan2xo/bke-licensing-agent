@@ -24,6 +24,8 @@ public static class LocalAgentContract
     public const string CheckUpdatesPath = "/v1/updates/check";
     public const string OpenUpdateCenterPath = "/v1/update-center/open";
     public const string AccountSessionStartPath = "/v1/account-session/start";
+    public const string AccountSessionNativeContextPath = "/v1/account-session/native/context";
+    public const string AccountSessionNativeCompletePath = "/v1/account-session/native/complete";
     public const string AccountSessionStatusPath = "/v1/account-session/status";
     public const string AccountSessionLogoutPath = "/v1/account-session/logout";
     public const string SoftwareCatalogPath = "/v1/software/catalog";

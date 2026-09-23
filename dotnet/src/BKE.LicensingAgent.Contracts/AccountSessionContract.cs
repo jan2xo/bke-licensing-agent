@@ -14,6 +14,30 @@ public sealed record AccountSessionStartResponse(
     [property: JsonPropertyName("expires_at"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExpiresAt,
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountSessionError? Error);
 
+public sealed record AccountSessionNativeContextRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId);
+
+public sealed record AccountSessionNativeContextResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("device_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DeviceId,
+    [property: JsonPropertyName("device_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DeviceName,
+    [property: JsonPropertyName("platform"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Platform,
+    [property: JsonPropertyName("architecture"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Architecture,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountSessionError? Error);
+
+public sealed record AccountSessionNativeCompleteRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("handoff_code")] string HandoffCode);
+
+public sealed record AccountSessionNativeCompleteResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("account"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountSessionAccount? Account,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountSessionError? Error);
+
 public sealed record AccountSessionStatusRequest(
     [property: JsonPropertyName("correlation_id")] string CorrelationId);
 

@@ -81,11 +81,29 @@ public sealed class AccountSessionRemote : IAccountSessionRemote, IDisposable
             TimeSpan.FromSeconds(RequiredPositiveInt(root, "interval", 60)));
     }
 
-    public async Task<RemoteAccountSessionPoll> PollAsync(
+    public Task<RemoteAccountSessionPoll> PollAsync(
         string deviceCode,
+        CancellationToken cancellationToken) =>
+        ExchangeAsync(deviceCode, null, cancellationToken);
+
+    public Task<RemoteAccountSessionPoll> ExchangeNativeHandoffAsync(
+        string handoffCode,
+        string deviceId,
+        CancellationToken cancellationToken) =>
+        ExchangeAsync(handoffCode, deviceId, cancellationToken);
+
+    private async Task<RemoteAccountSessionPoll> ExchangeAsync(
+        string code,
+        string? deviceId,
         CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.Serialize(new { device_code = deviceCode });
+        var payload = deviceId is null
+            ? JsonSerializer.Serialize(new { device_code = code })
+            : JsonSerializer.Serialize(new
+            {
+                device_code = code,
+                device_id = deviceId,
+            });
         using var response = await SendAsync(
             HttpMethod.Post,
             "/api/agent-sessions/device/token",
