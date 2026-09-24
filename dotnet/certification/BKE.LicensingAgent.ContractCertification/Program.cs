@@ -196,6 +196,10 @@ Require(JsonName<StoreCheckoutStartRequest>(nameof(StoreCheckoutStartRequest.Pur
 Require(JsonName<StoreCheckoutStartRequest>(nameof(StoreCheckoutStartRequest.PurchaseMode)) == "purchase_mode", "Store checkout-start purchase_mode wire name mismatch");
 Require(JsonName<StoreCheckoutStartRequest>(nameof(StoreCheckoutStartRequest.LegalVersionIds)) == "legal_version_ids", "Store checkout-start legal_version_ids wire name mismatch");
 Require(JsonName<StoreCheckoutStartResponse>(nameof(StoreCheckoutStartResponse.CheckoutUrl)) == "checkout_url", "Store checkout-start checkout_url wire name mismatch");
+Require(JsonName<StoreCheckoutStatusRequest>(nameof(StoreCheckoutStatusRequest.CorrelationId)) == "correlation_id", "Store checkout-status correlation_id wire name mismatch");
+Require(JsonName<StoreCheckoutStatusResponse>(nameof(StoreCheckoutStatusResponse.PaymentStatus)) == "payment_status", "Store checkout-status payment_status wire name mismatch");
+Require(JsonName<StoreCheckoutStatusResponse>(nameof(StoreCheckoutStatusResponse.CheckoutUrl)) == "checkout_url", "Store checkout-status checkout_url wire name mismatch");
+Require(JsonName<StoreCheckoutStatusResponse>(nameof(StoreCheckoutStatusResponse.PaidAt)) == "paid_at", "Store checkout-status paid_at wire name mismatch");
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
@@ -220,6 +224,7 @@ Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
 Require(MethodNames<IStoreCheckoutStartService>().SetEquals(["StartAsync"]), "Store checkout-start port drifted");
+Require(MethodNames<IStoreCheckoutStatusService>().SetEquals(["CheckAsync"]), "Store checkout-status port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareRepairService>().SetEquals(["RepairAsync"]), "software-repair port drifted");
@@ -236,6 +241,7 @@ await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
 await CertifyStoreCheckoutStartBoundary();
+await CertifyStoreCheckoutStatusBoundary();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
@@ -257,6 +263,7 @@ Console.WriteLine("Claim Code redemption session, secret, and single-attempt bou
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-start intent, no-retry mutation, strict-parser, and secret boundary certified");
+Console.WriteLine("Store checkout-status read-only recovery, strict-parser, and secret boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
@@ -1620,6 +1627,176 @@ static async Task CertifyStoreCheckoutStartBoundary()
     }
 }
 
+static async Task CertifyStoreCheckoutStatusBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-checkout-status",
+        "buyer-status@example.com",
+        "account-checkout-status",
+        "INDIVIDUAL",
+        "Checkout Status Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "checkout-status-access-secret",
+            "checkout-status-refresh-secret",
+            "checkout-status-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var request = new StoreCheckoutStatusRequest(
+        "cert-checkout-status-correlation");
+    var remote = new FakeStoreCheckoutStatusRemote(
+        new RemoteStoreCheckoutStatusResult(
+            "found",
+            request.CorrelationId,
+            "order-status-cert",
+            "BKE-2026-STATUS",
+            "PENDING",
+            "CLAIM_CODE",
+            "PENDING",
+            "https://checkout.example.test/pay/order-status-cert",
+            null,
+            null));
+    var service = new StoreCheckoutStatusService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        remote);
+
+    var response = await service.CheckAsync(
+        request,
+        CancellationToken.None);
+
+    Require(response.Status == "FOUND", "Store checkout-status did not become FOUND");
+    Require(response.CorrelationId == request.CorrelationId, "Store checkout-status correlation drifted");
+    Require(response.OrderId == "order-status-cert", "Store checkout-status order id drifted");
+    Require(response.OrderNumber == "BKE-2026-STATUS", "Store checkout-status order number drifted");
+    Require(response.OrderStatus == "PENDING", "Store checkout-status order state drifted");
+    Require(response.FulfillmentMode == "CLAIM_CODE", "Store checkout-status fulfillment mode drifted");
+    Require(response.PaymentStatus == "PENDING", "Store checkout-status payment state drifted");
+    Require(response.CheckoutUrl == "https://checkout.example.test/pay/order-status-cert", "Store checkout-status checkout URL drifted");
+    Require(remote.AccessToken == "checkout-status-access-secret", "Store checkout-status remote did not receive Agent-owned access token");
+    Require(remote.CorrelationId == request.CorrelationId, "Store checkout-status remote correlation drifted");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("checkout-status-access-secret", StringComparison.Ordinal), "Store checkout-status leaked access token");
+    Require(!wire.Contains("checkout-status-refresh-secret", StringComparison.Ordinal), "Store checkout-status leaked refresh token");
+    Require(!wire.Contains("account-checkout-status", StringComparison.Ordinal), "Store checkout-status leaked cloud account identifier");
+    Require(!wire.Contains("paymongo", StringComparison.OrdinalIgnoreCase), "Store checkout-status leaked provider authority");
+
+    var deniedRemote = new FakeStoreCheckoutStatusRemote(
+        new RemoteStoreCheckoutStatusResult(
+            "not_found",
+            request.CorrelationId,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null));
+    var denied = new StoreCheckoutStatusService(
+        new FakeUnauthenticatedAccountSessionService(),
+        store,
+        deniedRemote);
+    var deniedResponse = await denied.CheckAsync(
+        request with { CorrelationId = "cert-checkout-status-auth" },
+        CancellationToken.None);
+    Require(deniedResponse.Status == "AUTH_REQUIRED", "Store checkout-status did not require authentication");
+    Require(deniedRemote.AccessToken is null, "Store checkout-status called cloud authority without authentication");
+
+    const string foundJson = """
+        {
+          "status":"found",
+          "correlation_id":"cert-checkout-status-correlation",
+          "order_id":"order-status-cert",
+          "order_number":"BKE-2026-STATUS",
+          "order_status":"PENDING",
+          "fulfillment_mode":"CLAIM_CODE",
+          "payment_status":"PENDING",
+          "checkout_url":"https://checkout.example.test/pay/order-status-cert",
+          "paid_at":null
+        }
+        """;
+
+    using var handler = new FakeStoreCheckoutStatusAuthorityHandler(
+        HttpStatusCode.OK,
+        foundJson);
+    using var http = new HttpClient(handler);
+    using var transport = new StoreCheckoutStatusRemote(
+        http,
+        "https://jl-bke.com");
+    var snapshot = await transport.CheckAsync(
+        "transport-checkout-status-secret",
+        request.CorrelationId,
+        CancellationToken.None);
+
+    Require(snapshot.Status == "found", "Store checkout-status transport state drifted");
+    Require(snapshot.OrderId == "order-status-cert", "Store checkout-status transport order drifted");
+    Require(snapshot.PaymentStatus == "PENDING", "Store checkout-status transport payment state drifted");
+    Require(handler.RequestCount == 1, "Store checkout-status read was retried unexpectedly");
+    Require(handler.SawBearer, "Store checkout-status transport omitted Agent-owned bearer token");
+    Require(handler.SawProtocol, "Store checkout-status transport omitted account-session protocol");
+    Require(handler.SawExpectedRequest, "Store checkout-status transport endpoint or correlation query drifted");
+    Require(handler.SawNoBody, "Store checkout-status transport widened read authority with a body");
+
+    using var notFoundHandler = new FakeStoreCheckoutStatusAuthorityHandler(
+        HttpStatusCode.OK,
+        """
+        {
+          "status":"not_found",
+          "correlation_id":"cert-checkout-status-correlation"
+        }
+        """);
+    using var notFoundHttp = new HttpClient(notFoundHandler);
+    using var notFoundTransport = new StoreCheckoutStatusRemote(
+        notFoundHttp,
+        "https://jl-bke.com");
+    var notFound = await notFoundTransport.CheckAsync(
+        "transport-checkout-status-secret",
+        request.CorrelationId,
+        CancellationToken.None);
+    Require(notFound.Status == "not_found", "Store checkout-status not_found drifted");
+    Require(notFound.OrderId is null && notFound.CheckoutUrl is null, "Store checkout-status not_found invented checkout state");
+
+    using var widenedHandler = new FakeStoreCheckoutStatusAuthorityHandler(
+        HttpStatusCode.OK,
+        """
+        {
+          "status":"found",
+          "correlation_id":"cert-checkout-status-correlation",
+          "order_id":"order-status-cert",
+          "order_number":"BKE-2026-STATUS",
+          "order_status":"PENDING",
+          "fulfillment_mode":"CLAIM_CODE",
+          "payment_status":"PENDING",
+          "checkout_url":"https://checkout.example.test/pay/order-status-cert",
+          "paid_at":null,
+          "provider":"paymongo"
+        }
+        """);
+    using var widenedHttp = new HttpClient(widenedHandler);
+    using var widenedTransport = new StoreCheckoutStatusRemote(
+        widenedHttp,
+        "https://jl-bke.com");
+    try
+    {
+        _ = await widenedTransport.CheckAsync(
+            "transport-checkout-status-secret",
+            request.CorrelationId,
+            CancellationToken.None);
+        throw new InvalidOperationException(
+            "Store checkout-status accepted widened provider authority");
+    }
+    catch (InvalidDataException)
+    {
+        // Strict root keys intentionally reject provider authority.
+    }
+}
+
 static async Task CertifySoftwareCatalogBoundary()
 {
     var account = new AccountSessionAccount(
@@ -2805,6 +2982,70 @@ sealed class FakeStoreCheckoutStartAuthorityHandler(
             "x-bke-account-session-version",
             AccountSessionRemote.ProtocolVersion);
         return response;
+    }
+}
+
+sealed class FakeStoreCheckoutStatusRemote(
+    RemoteStoreCheckoutStatusResult result) : IStoreCheckoutStatusRemote
+{
+    public string? AccessToken { get; private set; }
+    public string? CorrelationId { get; private set; }
+
+    public Task<RemoteStoreCheckoutStatusResult> CheckAsync(
+        string accessToken,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        CorrelationId = correlationId;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStoreCheckoutStatusAuthorityHandler(
+    HttpStatusCode statusCode,
+    string json) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawExpectedRequest { get; private set; }
+    public bool SawNoBody { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount += 1;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "transport-checkout-status-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var versions) &&
+            versions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+        SawExpectedRequest =
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/store/checkout-status" &&
+            request.RequestUri?.Query ==
+                "?correlation_id=cert-checkout-status-correlation";
+        SawNoBody = request.Content is null;
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return Task.FromResult(response);
     }
 }
 

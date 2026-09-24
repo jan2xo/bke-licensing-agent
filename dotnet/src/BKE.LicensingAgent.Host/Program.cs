@@ -128,6 +128,13 @@ builder.Services.AddSingleton<IStoreCheckoutStartService>(services => new StoreC
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IStoreCheckoutStartRemote>()));
+builder.Services.AddSingleton<StoreCheckoutStatusRemote>();
+builder.Services.AddSingleton<IStoreCheckoutStatusRemote>(services =>
+    services.GetRequiredService<StoreCheckoutStatusRemote>());
+builder.Services.AddSingleton<IStoreCheckoutStatusService>(services => new StoreCheckoutStatusService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IStoreCheckoutStatusRemote>()));
 builder.Services.AddSingleton<StandaloneProvisionAuthorizationRemote>();
 builder.Services.AddSingleton<IStandaloneProvisionAuthorizationRemote>(services =>
     services.GetRequiredService<StandaloneProvisionAuthorizationRemote>());
@@ -534,6 +541,21 @@ app.MapPost(LocalAgentContract.StoreCheckoutStartPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.StoreCheckoutStatusPath, async (
+    StoreCheckoutStatusRequest request,
+    IStoreCheckoutStatusService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return StoreCheckoutStatusInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.CheckAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     SoftwareCatalogRequest request,
     ISoftwareCatalogService service,
@@ -813,6 +835,25 @@ static IResult StoreCheckoutStartInvalidRequest(string correlationId) =>
         new StoreCheckoutStartError(
             "INVALID_REQUEST",
             "The Store checkout-start request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult StoreCheckoutStatusInvalidRequest(string correlationId) =>
+    Results.Json(new StoreCheckoutStatusResponse(
+        LocalAgentContract.StoreCheckoutStatusCapabilityId,
+        LocalAgentContract.StoreCheckoutStatusContractVersion,
+        "FAILED",
+        correlationId,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        new StoreCheckoutStatusError(
+            "INVALID_REQUEST",
+            "The Store checkout-status request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
