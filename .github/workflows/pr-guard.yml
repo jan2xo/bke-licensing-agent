@@ -1,0 +1,59 @@
+name: PR Guard
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: agent-pr-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Lightweight merge guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify certification plan declaration
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request?.body ?? "";
+            const required = [/certification plan/i, /production/i];
+            const missing = required.filter(pattern => !pattern.test(body));
+            if (missing.length > 0) {
+              core.setFailed(
+                "PR body must declare a certification plan and production/preproduction state.",
+              );
+            }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact PR head checkout
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+
+      - name: Repository diff hygiene
+        run: git diff --check origin/${{ github.event.pull_request.base.ref }}...HEAD
+
+      - name: Verify intent-driven CI ownership
+        run: bash scripts/check-ci-intent-ownership.sh
+
+      - name: Validate workflow YAML syntax
+        shell: bash
+        run: |
+          ruby <<'RUBY'
+          require "yaml"
+          Dir[".github/workflows/*.yml"].sort.each do |file|
+            YAML.safe_load(File.read(file), aliases: true)
+            puts "YAML GREEN: #{file}"
+          end
+          RUBY

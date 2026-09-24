@@ -1,11 +1,6 @@
 name: UTM disposable Render Dock target trust
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/utm-disposable-target-trust.yml"
-      - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
-      - "certification/utm/**"
   workflow_dispatch:
 
 permissions:

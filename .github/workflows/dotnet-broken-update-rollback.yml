@@ -2,19 +2,16 @@ name: Phase 10 broken production update rollback certification
 
 on:
   workflow_dispatch:
-  push:
-    branches: [feat/broken-production-update-rollback]
-  pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: phase10-rollback-${{ github.event.pull_request.number || github.ref }}
+  group: phase10-rollback-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  SOURCE_SHA: ${{ github.sha }}
   SERVICE_NAME: BKE-Licensing-Agent
   BASELINE_VERSION: "2.0.0"
   BROKEN_VERSION: "2.0.1"

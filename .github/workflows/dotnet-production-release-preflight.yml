@@ -2,31 +2,16 @@ name: Phase 11 Gen2 production release preflight
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/dotnet-production-release-preflight.yml"
-      - ".github/workflows/_dotnet-contracts.yml"
-      - ".github/actions/verify-installer-package/**"
-      - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
-      - "dotnet/src/BKE.LicensingAgent.Host/**"
-      - "dotnet/src/BKE.LicensingAgent.Desktop/**"
-      - "dotnet/src/BKE.LicensingAgent.Updater/**"
-      - "dotnet/src/BKE.LicensingAgent.Provisioner/**"
-      - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
-      - "packaging/windows/bke-licensing-agent.iss"
-      - "packaging/windows/bke-licensing-agent-arm64.iss"
-      - "scripts/publish_dotnet_windows_payloads.ps1"
-      - "docs/production-release-cutover.md"
 
 permissions:
   contents: read
 
 concurrency:
-  group: phase11-preflight-${{ github.event.pull_request.number || github.ref }}
+  group: phase11-preflight-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  SOURCE_SHA: ${{ github.sha }}
   AGENT_VERSION: "2.0.0"
 
 jobs:

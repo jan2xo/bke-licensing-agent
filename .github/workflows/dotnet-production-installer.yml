@@ -2,38 +2,16 @@ name: .NET-only Gen2 production installer
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - refactor/dotnet-only-agent
-    paths:
-      - ".github/workflows/dotnet-production-installer.yml"
-      - ".github/workflows/_dotnet-contracts.yml"
-      - ".github/actions/verify-installer-package/**"
-      - "dotnet/**"
-      - "packaging/windows/bke-licensing-agent.iss"
-      - "packaging/windows/bke-licensing-agent-arm64.iss"
-      - "certification/windows_dotnet_only_arm64.ps1"
-      - "scripts/publish_dotnet_windows_payloads.ps1"
-  pull_request:
-    paths:
-      - ".github/workflows/dotnet-production-installer.yml"
-      - ".github/workflows/_dotnet-contracts.yml"
-      - ".github/actions/verify-installer-package/**"
-      - "dotnet/**"
-      - "packaging/windows/bke-licensing-agent.iss"
-      - "packaging/windows/bke-licensing-agent-arm64.iss"
-      - "certification/windows_dotnet_only_arm64.ps1"
-      - "scripts/publish_dotnet_windows_payloads.ps1"
 
 permissions:
   contents: read
 
 concurrency:
-  group: agent-production-installer-${{ github.event.pull_request.number || github.ref }}
+  group: agent-production-installer-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  SOURCE_SHA: ${{ github.sha }}
   AGENT_VERSION: "2.0.0"
   SERVICE_NAME: BKE-Licensing-Agent
 

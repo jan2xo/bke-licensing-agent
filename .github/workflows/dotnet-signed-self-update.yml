@@ -2,22 +2,6 @@ name: Phase 9 signed Agent self-update certification
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feat/production-signed-self-update
-    paths:
-      - ".github/workflows/dotnet-signed-self-update.yml"
-      - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
-      - "dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/**"
-      - "packaging/windows/bke-licensing-agent.iss"
-      - "packaging/windows/bke-licensing-agent-arm64.iss"
-  pull_request:
-    paths:
-      - ".github/workflows/dotnet-signed-self-update.yml"
-      - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
-      - "dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/**"
-      - "packaging/windows/bke-licensing-agent.iss"
-      - "packaging/windows/bke-licensing-agent-arm64.iss"
 
 permissions:
   contents: read
