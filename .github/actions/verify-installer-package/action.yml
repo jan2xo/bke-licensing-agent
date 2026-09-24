@@ -2,10 +2,10 @@ name: Verify Agent installer package
 description: Verify the immutable PREPRODUCTION Agent installer artifact boundary.
 
 inputs:
-  source-sha:
+  source_sha:
     description: Exact source SHA expected in the package manifest.
     required: true
-  agent-version:
+  agent_version:
     description: Expected Agent package version.
     required: true
 
@@ -15,8 +15,8 @@ runs:
     - name: Verify immutable installer package
       shell: pwsh
       env:
-        EXPECTED_SOURCE_SHA: ${{ inputs.source-sha }}
-        EXPECTED_AGENT_VERSION: ${{ inputs.agent-version }}
+        EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        EXPECTED_AGENT_VERSION: ${{ inputs.agent_version }}
       run: |
         $manifestPath = "dist/package/PACKAGE-MANIFEST.json"
         if (!(Test-Path $manifestPath -PathType Leaf)) { throw "Agent package manifest is missing." }
