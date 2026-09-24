@@ -188,6 +188,9 @@ Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.Code)) ==
 Require(JsonName<StoreCatalogRequest>(nameof(StoreCatalogRequest.CorrelationId)) == "correlation_id", "Store catalog correlation_id wire name mismatch");
 Require(JsonName<StoreCatalogPlan>(nameof(StoreCatalogPlan.PurchasePlanId)) == "purchase_plan_id", "Store catalog purchase_plan_id wire name mismatch");
 Require(JsonName<StoreCatalogPlan>(nameof(StoreCatalogPlan.AmountMinor)) == "amount_minor", "Store catalog amount_minor wire name mismatch");
+Require(JsonName<StoreCheckoutReviewRequest>(nameof(StoreCheckoutReviewRequest.CorrelationId)) == "correlation_id", "Store checkout-review correlation_id wire name mismatch");
+Require(JsonName<StoreCheckoutReviewRequest>(nameof(StoreCheckoutReviewRequest.PurchasePlanId)) == "purchase_plan_id", "Store checkout-review purchase_plan_id wire name mismatch");
+Require(JsonName<StoreCheckoutReviewLegalDocument>(nameof(StoreCheckoutReviewLegalDocument.DocumentVersionId)) == "document_version_id", "Store checkout-review legal document_version_id wire name mismatch");
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
@@ -210,6 +213,7 @@ Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
+Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareRepairService>().SetEquals(["RepairAsync"]), "software-repair port drifted");
@@ -224,6 +228,7 @@ await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
+await CertifyStoreCheckoutReviewBoundary();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
@@ -243,6 +248,7 @@ Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVe
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
+Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
@@ -1188,6 +1194,245 @@ static async Task CertifyStoreCatalogBoundary()
             CancellationToken.None);
         throw new InvalidOperationException(
             "Store transport accepted a widened payment-authority response");
+    }
+    catch (InvalidDataException)
+    {
+        // Strict root keys intentionally reject checkout/payment authority.
+    }
+}
+
+static async Task CertifyStoreCheckoutReviewBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-review",
+        "buyer@example.com",
+        "account-review",
+        "INDIVIDUAL",
+        "Review Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "review-access-secret",
+            "review-refresh-secret",
+            "review-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var product = new StoreCheckoutReviewProduct(
+        "bke-render-dock",
+        "render-dock",
+        "Render Dock",
+        "Rendering software");
+    var edition = new StoreCheckoutReviewEdition(
+        "edition-pro",
+        "pro",
+        "Pro",
+        1,
+        2,
+        "LIFETIME");
+    var plan = new StoreCatalogPlan(
+        "plan-perpetual",
+        "PERPETUAL",
+        "PHP",
+        30000000,
+        "ONE_TIME",
+        null,
+        null,
+        "NONE",
+        0,
+        null);
+    var legal = new StoreCheckoutReviewLegalDocument(
+        "TERMS",
+        "Terms of Service",
+        "terms",
+        "terms-v3",
+        "3",
+        null,
+        false);
+
+    var remote = new FakeStoreCheckoutReviewRemote(
+        new RemoteStoreCheckoutReviewResult(
+            "ready",
+            ["SELF", "GIFT"],
+            product,
+            edition,
+            plan,
+            [legal],
+            []));
+    var service = new StoreCheckoutReviewService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        remote);
+
+    var response = await service.ReviewAsync(
+        new StoreCheckoutReviewRequest(
+            "cert-review",
+            "plan-perpetual"),
+        CancellationToken.None);
+
+    Require(response.Status == "READY", "Store checkout-review did not become READY");
+    Require(response.PurchaseModes.ToHashSet(StringComparer.Ordinal).SetEquals(["SELF", "GIFT"]), "Store checkout-review purchase modes drifted");
+    Require(response.Plan?.AmountMinor == 30000000, "Store checkout-review amount drifted");
+    Require(response.LegalDocuments.Count == 1, "Store checkout-review Legal requirements drifted");
+    Require(remote.AccessToken == "review-access-secret", "Store checkout-review remote did not receive Agent-owned access token");
+    Require(remote.PurchasePlanId == "plan-perpetual", "Store checkout-review remote did not receive selected plan");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("review-access-secret", StringComparison.Ordinal), "Store checkout-review leaked access token");
+    Require(!wire.Contains("review-refresh-secret", StringComparison.Ordinal), "Store checkout-review leaked refresh token");
+    Require(!wire.Contains("account-review", StringComparison.Ordinal), "Store checkout-review leaked cloud account identifier");
+    Require(!wire.Contains("checkout_url", StringComparison.OrdinalIgnoreCase), "Store checkout-review leaked checkout URL authority");
+    Require(!wire.Contains("paymongo", StringComparison.OrdinalIgnoreCase), "Store checkout-review leaked provider authority");
+
+    var deniedRemote = new FakeStoreCheckoutReviewRemote(
+        new RemoteStoreCheckoutReviewResult(
+            "ready",
+            ["SELF"],
+            product,
+            edition,
+            plan,
+            [legal],
+            []));
+    var denied = new StoreCheckoutReviewService(
+        new FakeUnauthenticatedAccountSessionService(),
+        store,
+        deniedRemote);
+    var deniedResponse = await denied.ReviewAsync(
+        new StoreCheckoutReviewRequest(
+            "cert-review-auth",
+            "plan-perpetual"),
+        CancellationToken.None);
+    Require(deniedResponse.Status == "AUTH_REQUIRED", "Store checkout-review did not require authentication");
+    Require(deniedRemote.AccessToken is null, "Store checkout-review called cloud authority without authentication");
+
+    const string readyJson = """
+        {
+          "status":"ready",
+          "purchase_modes":["SELF","GIFT"],
+          "product":{
+            "product_id":"bke-render-dock",
+            "slug":"render-dock",
+            "display_name":"Render Dock",
+            "summary":"Rendering software"
+          },
+          "edition":{
+            "edition_id":"edition-pro",
+            "slug":"pro",
+            "name":"Pro",
+            "max_users":1,
+            "max_devices_per_user":2,
+            "update_policy":"LIFETIME"
+          },
+          "plan":{
+            "purchase_plan_id":"plan-perpetual",
+            "type":"PERPETUAL",
+            "currency":"PHP",
+            "amount_minor":30000000,
+            "billing_type":"ONE_TIME",
+            "interval_unit":null,
+            "interval_count":null,
+            "renewal_behavior":"NONE",
+            "savings_minor":0,
+            "effective_monthly_minor":null
+          },
+          "legal_documents":[
+            {
+              "document_type":"TERMS",
+              "title":"Terms of Service",
+              "slug":"terms",
+              "document_version_id":"terms-v3",
+              "version":"3",
+              "sla_version":null,
+              "requires_reacceptance":false
+            }
+          ]
+        }
+        """;
+
+    using var handler = new FakeStoreCheckoutReviewAuthorityHandler(
+        HttpStatusCode.OK,
+        readyJson);
+    using var http = new HttpClient(handler);
+    using var transport = new StoreCheckoutReviewRemote(
+        http,
+        "https://jl-bke.com");
+    var snapshot = await transport.ReviewAsync(
+        "transport-review-secret",
+        "plan-perpetual",
+        CancellationToken.None);
+
+    Require(snapshot.Status == "ready", "Store checkout-review transport status drifted");
+    Require(snapshot.Plan?.AmountMinor == 30000000, "Store checkout-review transport amount drifted");
+    Require(handler.SawBearer, "Store checkout-review transport omitted Agent-owned bearer token");
+    Require(handler.SawProtocol, "Store checkout-review transport omitted account-session protocol");
+    Require(handler.SawExpectedPath, "Store checkout-review transport endpoint drifted");
+    Require(handler.SawPlanQuery, "Store checkout-review transport omitted selected purchase plan");
+
+    using var retryHandler = new FakeStoreCheckoutReviewAuthorityHandler(
+        HttpStatusCode.OK,
+        readyJson,
+        transientFailures: 1);
+    using var retryHttp = new HttpClient(retryHandler);
+    using var retryTransport = new StoreCheckoutReviewRemote(
+        retryHttp,
+        "https://jl-bke.com");
+    var retrySnapshot = await retryTransport.ReviewAsync(
+        "transport-review-secret",
+        "plan-perpetual",
+        CancellationToken.None);
+    Require(retrySnapshot.Status == "ready", "Store checkout-review did not recover from a transient read failure");
+    Require(retryHandler.RequestCount == 2, "Store checkout-review read retry policy drifted");
+
+    using var widenedHandler = new FakeStoreCheckoutReviewAuthorityHandler(
+        HttpStatusCode.OK,
+        """
+        {
+          "status":"ready",
+          "purchase_modes":["SELF"],
+          "product":{
+            "product_id":"bke-render-dock",
+            "slug":"render-dock",
+            "display_name":"Render Dock",
+            "summary":"Rendering software"
+          },
+          "edition":{
+            "edition_id":"edition-pro",
+            "slug":"pro",
+            "name":"Pro",
+            "max_users":1,
+            "max_devices_per_user":2,
+            "update_policy":"LIFETIME"
+          },
+          "plan":{
+            "purchase_plan_id":"plan-perpetual",
+            "type":"PERPETUAL",
+            "currency":"PHP",
+            "amount_minor":30000000,
+            "billing_type":"ONE_TIME",
+            "interval_unit":null,
+            "interval_count":null,
+            "renewal_behavior":"NONE",
+            "savings_minor":0,
+            "effective_monthly_minor":null
+          },
+          "legal_documents":[],
+          "checkout_url":"https://example.invalid/pay"
+        }
+        """);
+    using var widenedHttp = new HttpClient(widenedHandler);
+    using var widenedTransport = new StoreCheckoutReviewRemote(
+        widenedHttp,
+        "https://jl-bke.com");
+    try
+    {
+        _ = await widenedTransport.ReviewAsync(
+            "transport-review-secret",
+            "plan-perpetual",
+            CancellationToken.None);
+        throw new InvalidOperationException(
+            "Store checkout-review accepted widened payment authority");
     }
     catch (InvalidDataException)
     {
@@ -2208,6 +2453,77 @@ sealed class FakeStoreCatalogAuthorityHandler(
         {
             Content = new StringContent(
                 json,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return Task.FromResult(response);
+    }
+}
+
+sealed class FakeStoreCheckoutReviewRemote(
+    RemoteStoreCheckoutReviewResult result) : IStoreCheckoutReviewRemote
+{
+    public string? AccessToken { get; private set; }
+    public string? PurchasePlanId { get; private set; }
+
+    public Task<RemoteStoreCheckoutReviewResult> ReviewAsync(
+        string accessToken,
+        string purchasePlanId,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        PurchasePlanId = purchasePlanId;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStoreCheckoutReviewAuthorityHandler(
+    HttpStatusCode statusCode,
+    string json,
+    int transientFailures = 0) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawExpectedPath { get; private set; }
+    public bool SawPlanQuery { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount += 1;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter == "transport-review-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var versions) &&
+            versions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+        SawExpectedPath =
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/store/checkout-review";
+        SawPlanQuery =
+            request.RequestUri?.Query.Contains(
+                "purchase_plan_id=plan-perpetual",
+                StringComparison.Ordinal) == true;
+
+        var transient = RequestCount <= transientFailures;
+        var response = new HttpResponseMessage(
+            transient
+                ? HttpStatusCode.ServiceUnavailable
+                : statusCode)
+        {
+            Content = new StringContent(
+                transient
+                    ? """{"status":"catalog_unavailable"}"""
+                    : json,
                 Encoding.UTF8,
                 "application/json"),
         };
