@@ -52,6 +52,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.SoftwareCatalogPath}",
     $"POST {LocalAgentContract.SoftwareInstallPath}",
     $"POST {LocalAgentContract.SoftwareUpdatePath}",
+    $"POST {LocalAgentContract.SoftwareRepairPath}",
     $"POST {LocalAgentContract.SoftwareOpenPath}",
     $"POST {LocalAgentContract.SoftwareRemovePath}",
 };
@@ -115,6 +116,25 @@ Require(softwareUpdate.GetProperty("local_responses_expose_download_urls").GetBo
 Require(softwareUpdate.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-update install path exposure drifted");
 Require(softwareUpdate.GetProperty("rollback_required").GetBoolean(), "software-update rollback requirement drifted");
 
+var softwareRepair = capabilities.GetProperty("software_repair");
+Require(softwareRepair.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareRepairCapabilityId, "software-repair capability id mismatch");
+Require(softwareRepair.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareRepairContractVersion, "software-repair contract version mismatch");
+Require(softwareRepair.GetProperty("account_session_required").GetBoolean(), "software-repair account-session requirement drifted");
+Require(softwareRepair.GetProperty("cloud_authorization_owner").GetString() == "bke-digital-solutions", "software-repair cloud authority drifted");
+Require(softwareRepair.GetProperty("release_authority").GetString() == "github-releases", "software-repair release authority drifted");
+Require(softwareRepair.GetProperty("privileged_repair_owner").GetString() == "bke-licensing-agent", "software-repair privileged owner drifted");
+Require(softwareRepair.GetProperty("repair_policy_schema").GetString() == "bke.repair-policy.v1", "software-repair policy schema drifted");
+Require(softwareRepair.GetProperty("repair_semantics").GetString() == "restore-current-installed-version", "software-repair semantics drifted");
+Require(softwareRepair.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "product_id"]), "software-repair local request widened");
+Require(softwareRepair.GetProperty("supported_install_provenance").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["BKE_MANAGED_PACKAGE"]), "software-repair provenance boundary drifted");
+Require(softwareRepair.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "software-repair cloud token exposure drifted");
+Require(softwareRepair.GetProperty("local_responses_expose_download_urls").GetBoolean() == false, "software-repair download URL exposure drifted");
+Require(softwareRepair.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "software-repair install path exposure drifted");
+Require(softwareRepair.GetProperty("update_policy_reuse_allowed").GetBoolean() == false, "software-repair silently reused Update authority");
+Require(softwareRepair.GetProperty("rollback_required").GetBoolean(), "software-repair rollback requirement drifted");
+
 var softwareOpen = capabilities.GetProperty("software_open");
 Require(softwareOpen.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareOpenCapabilityId, "software-open capability id mismatch");
 Require(softwareOpen.GetProperty("contract_version").GetInt32() == LocalAgentContract.SoftwareOpenContractVersion, "software-open contract version mismatch");
@@ -170,6 +190,8 @@ Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.Correlati
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.ProductId)) == "product_id", "software-install product_id wire name mismatch");
 Require(JsonName<SoftwareUpdateRequest>(nameof(SoftwareUpdateRequest.CorrelationId)) == "correlation_id", "software-update correlation_id wire name mismatch");
 Require(JsonName<SoftwareUpdateRequest>(nameof(SoftwareUpdateRequest.ProductId)) == "product_id", "software-update product_id wire name mismatch");
+Require(JsonName<SoftwareRepairRequest>(nameof(SoftwareRepairRequest.CorrelationId)) == "correlation_id", "software-repair correlation_id wire name mismatch");
+Require(JsonName<SoftwareRepairRequest>(nameof(SoftwareRepairRequest.ProductId)) == "product_id", "software-repair product_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.CorrelationId)) == "correlation_id", "software-open correlation_id wire name mismatch");
 Require(JsonName<SoftwareOpenRequest>(nameof(SoftwareOpenRequest.ProductId)) == "product_id", "software-open product_id wire name mismatch");
 Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.CorrelationId)) == "correlation_id", "software-remove correlation_id wire name mismatch");
@@ -183,6 +205,7 @@ Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
+Require(MethodNames<ISoftwareRepairService>().SetEquals(["RepairAsync"]), "software-repair port drifted");
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
 Require(MethodNames<ISoftwareOpenService>().SetEquals(["OpenAsync"]), "software-open port drifted");
 Require(MethodNames<ISoftwareRemoveService>().SetEquals(["RemoveAsync"]), "software-remove port drifted");
@@ -195,6 +218,7 @@ await CertifyAccountSessionStateMachine();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
+await CertifySoftwareRepairBoundary();
 await CertifySoftwareOpenBoundary();
 await CertifySoftwareRemoveBoundary();
 
@@ -210,6 +234,8 @@ Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVe
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
+Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
+Console.WriteLine("Software Repair same-version authority and rollback boundary certified");
 Console.WriteLine("Software open entitlement, execution-type, and path-hiding boundary certified");
 Console.WriteLine("Software remove authentication, target, and path-hiding boundary certified");
 return;
@@ -1132,6 +1158,120 @@ static async Task CertifySoftwareUpdateBoundary()
     Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful update denial was flattened");
 }
 
+static async Task CertifySoftwareRepairBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-repair",
+        "repairer@example.com",
+        "account-repair",
+        "INDIVIDUAL",
+        "Repair Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "repair-access-secret",
+            "repair-refresh-secret",
+            "repair-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var inventory = new FakeLocalProductInventory(
+        new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+        {
+            ["bke-render-dock"] = new(
+                "bke-render-dock",
+                "1.0.2",
+                "BKE_MANAGED_PACKAGE",
+                "MANAGED_DIRECTORY"),
+        });
+    var authorization = new StandaloneRepairAuthorization(
+        "bke-render-dock",
+        "1.0.2",
+        "jan2xo/BKE_RENDER_DOCK",
+        "v1.0.2",
+        """{"schema":"bke.repair-policy.v1","signature":"hidden"}""");
+    var remote = new FakeStandaloneRepairAuthorizationRemote(
+        new StandaloneRepairAuthorizationResult(
+            "REPAIR_AUTHORIZED",
+            authorization));
+    var repairer = new FakeStandaloneSoftwareRepairer(
+        new StandaloneRepairResult(
+            "STARTED",
+            "repair_started",
+            false));
+    var service = new SoftwareRepairService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        inventory,
+        remote,
+        repairer);
+
+    var response = await service.RepairAsync(
+        new SoftwareRepairRequest(
+            "cert-repair",
+            "bke-render-dock"),
+        CancellationToken.None);
+
+    Require(response.Status == "STARTED", "software Repair did not enter STARTED");
+    Require(response.State == "repair_started", "software Repair state drifted");
+    Require(remote.AccessToken == "repair-access-secret", "software Repair remote did not receive Agent-owned access token");
+    Require(remote.ProductId == "bke-render-dock", "software Repair remote product drifted");
+    Require(remote.CurrentVersion == "1.0.2", "software Repair did not authorize installed version");
+    Require(repairer.ProductId == "bke-render-dock", "software Repair privileged product drifted");
+    Require(repairer.CurrentVersion == "1.0.2", "software Repair privileged current version drifted");
+    Require(repairer.Authorization?.RepairVersion == "1.0.2", "software Repair version authority drifted");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("repair-access-secret", StringComparison.Ordinal), "software Repair access token leaked to local response");
+    Require(!wire.Contains("repair-refresh-secret", StringComparison.Ordinal), "software Repair refresh token leaked to local response");
+    Require(!wire.Contains("github.com", StringComparison.OrdinalIgnoreCase), "software Repair release URL leaked to local response");
+    Require(!wire.Contains("BKE_RENDER_DOCK", StringComparison.Ordinal), "software Repair repository identity leaked to local response");
+    Require(!wire.Contains("Program Files", StringComparison.OrdinalIgnoreCase), "software Repair install path leaked to local response");
+
+    var unsupportedRemote = new FakeStandaloneRepairAuthorizationRemote(
+        new StandaloneRepairAuthorizationResult("REPAIR_AUTHORIZED", authorization));
+    var unsupportedRepairer = new FakeStandaloneSoftwareRepairer(
+        new StandaloneRepairResult("STARTED", "repair_started", false));
+    var unsupported = new SoftwareRepairService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        new FakeLocalProductInventory(
+            new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+            {
+                ["bke-render-dock"] = new(
+                    "bke-render-dock",
+                    "1.0.2",
+                    "PRODUCT_INSTALLER",
+                    "INSTALLER_EXECUTABLE"),
+            }),
+        unsupportedRemote,
+        unsupportedRepairer);
+    var unsupportedResponse = await unsupported.RepairAsync(
+        new SoftwareRepairRequest(
+            "cert-repair-provenance",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(unsupportedResponse.Error?.Code == "UNSUPPORTED_PROVENANCE", "software Repair accepted installer-owned provenance");
+    Require(unsupportedRemote.ProductId is null, "software Repair called cloud authority for unsupported provenance");
+    Require(unsupportedRepairer.ProductId is null, "software Repair invoked privileged replacement for unsupported provenance");
+
+    var denied = new SoftwareRepairService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        inventory,
+        new FakeStandaloneRepairAuthorizationRemote(
+            new StandaloneRepairAuthorizationResult("NOT_ENTITLED")),
+        repairer);
+    var deniedResponse = await denied.RepairAsync(
+        new SoftwareRepairRequest(
+            "cert-repair-denied",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful Repair denial was flattened");
+}
+
 static async Task CertifySoftwareOpenBoundary()
 {
     var account = new AccountSessionAccount(
@@ -1694,6 +1834,47 @@ sealed class FakeStandaloneSoftwareProvisioner(
         StandaloneProvisionAuthorization authorization,
         CancellationToken cancellationToken)
     {
+        Authorization = authorization;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStandaloneRepairAuthorizationRemote(
+    StandaloneRepairAuthorizationResult result)
+    : IStandaloneRepairAuthorizationRemote
+{
+    public string? AccessToken { get; private set; }
+    public string? ProductId { get; private set; }
+    public string? CurrentVersion { get; private set; }
+
+    public Task<StandaloneRepairAuthorizationResult> AuthorizeAsync(
+        string accessToken,
+        string productId,
+        string currentVersion,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        ProductId = productId;
+        CurrentVersion = currentVersion;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStandaloneSoftwareRepairer(
+    StandaloneRepairResult result)
+    : IStandaloneSoftwareRepairer
+{
+    public string? ProductId { get; private set; }
+    public string? CurrentVersion { get; private set; }
+    public StandaloneRepairAuthorization? Authorization { get; private set; }
+
+    public Task<StandaloneRepairResult> RepairAsync(
+        LocalInstalledProduct installed,
+        StandaloneRepairAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        ProductId = installed.ProductId;
+        CurrentVersion = installed.Version;
         Authorization = authorization;
         return Task.FromResult(result);
     }
