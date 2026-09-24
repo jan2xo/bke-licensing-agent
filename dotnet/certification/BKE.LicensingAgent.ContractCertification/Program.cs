@@ -191,6 +191,11 @@ Require(JsonName<StoreCatalogPlan>(nameof(StoreCatalogPlan.AmountMinor)) == "amo
 Require(JsonName<StoreCheckoutReviewRequest>(nameof(StoreCheckoutReviewRequest.CorrelationId)) == "correlation_id", "Store checkout-review correlation_id wire name mismatch");
 Require(JsonName<StoreCheckoutReviewRequest>(nameof(StoreCheckoutReviewRequest.PurchasePlanId)) == "purchase_plan_id", "Store checkout-review purchase_plan_id wire name mismatch");
 Require(JsonName<StoreCheckoutReviewLegalDocument>(nameof(StoreCheckoutReviewLegalDocument.DocumentVersionId)) == "document_version_id", "Store checkout-review legal document_version_id wire name mismatch");
+Require(JsonName<StoreCheckoutStartRequest>(nameof(StoreCheckoutStartRequest.CorrelationId)) == "correlation_id", "Store checkout-start correlation_id wire name mismatch");
+Require(JsonName<StoreCheckoutStartRequest>(nameof(StoreCheckoutStartRequest.PurchasePlanId)) == "purchase_plan_id", "Store checkout-start purchase_plan_id wire name mismatch");
+Require(JsonName<StoreCheckoutStartRequest>(nameof(StoreCheckoutStartRequest.PurchaseMode)) == "purchase_mode", "Store checkout-start purchase_mode wire name mismatch");
+Require(JsonName<StoreCheckoutStartRequest>(nameof(StoreCheckoutStartRequest.LegalVersionIds)) == "legal_version_ids", "Store checkout-start legal_version_ids wire name mismatch");
+Require(JsonName<StoreCheckoutStartResponse>(nameof(StoreCheckoutStartResponse.CheckoutUrl)) == "checkout_url", "Store checkout-start checkout_url wire name mismatch");
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
@@ -214,6 +219,7 @@ Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "Start
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
+Require(MethodNames<IStoreCheckoutStartService>().SetEquals(["StartAsync"]), "Store checkout-start port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareRepairService>().SetEquals(["RepairAsync"]), "software-repair port drifted");
@@ -229,6 +235,7 @@ await CertifyAccountSessionStateMachine();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
+await CertifyStoreCheckoutStartBoundary();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
@@ -249,6 +256,7 @@ Console.WriteLine("Account-session device authorization state machine certified"
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
+Console.WriteLine("Store checkout-start intent, no-retry mutation, strict-parser, and secret boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
@@ -1440,6 +1448,178 @@ static async Task CertifyStoreCheckoutReviewBoundary()
     }
 }
 
+static async Task CertifyStoreCheckoutStartBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-checkout",
+        "buyer@example.com",
+        "account-checkout",
+        "INDIVIDUAL",
+        "Checkout Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "checkout-access-secret",
+            "checkout-refresh-secret",
+            "checkout-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var request = new StoreCheckoutStartRequest(
+        "cert-checkout-correlation",
+        "plan-perpetual",
+        "GIFT",
+        ["terms-v3", "privacy-v2"]);
+
+    var remote = new FakeStoreCheckoutStartRemote(
+        new RemoteStoreCheckoutStartResult(
+            "ready",
+            request.CorrelationId,
+            "order-cert",
+            "https://checkout.example.test/pay/order-cert",
+            false,
+            null));
+    var service = new StoreCheckoutStartService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        remote);
+
+    var response = await service.StartAsync(
+        request,
+        CancellationToken.None);
+
+    Require(response.Status == "READY", "Store checkout-start did not become READY");
+    Require(response.CorrelationId == request.CorrelationId, "Store checkout-start correlation drifted");
+    Require(response.OrderId == "order-cert", "Store checkout-start order id drifted");
+    Require(response.CheckoutUrl == "https://checkout.example.test/pay/order-cert", "Store checkout-start checkout URL drifted");
+    Require(response.Complimentary == false, "Store checkout-start complimentary flag drifted");
+    Require(remote.AccessToken == "checkout-access-secret", "Store checkout-start remote did not receive Agent-owned access token");
+    Require(remote.Request?.PurchaseMode == "GIFT", "Store checkout-start purchase mode drifted");
+    Require(remote.Request?.LegalVersionIds.SequenceEqual(["terms-v3", "privacy-v2"]) == true, "Store checkout-start Legal versions drifted");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("checkout-access-secret", StringComparison.Ordinal), "Store checkout-start leaked access token");
+    Require(!wire.Contains("checkout-refresh-secret", StringComparison.Ordinal), "Store checkout-start leaked refresh token");
+    Require(!wire.Contains("account-checkout", StringComparison.Ordinal), "Store checkout-start leaked cloud account identifier");
+    Require(!wire.Contains("paymongo", StringComparison.OrdinalIgnoreCase), "Store checkout-start leaked provider authority");
+
+    var deniedRemote = new FakeStoreCheckoutStartRemote(
+        new RemoteStoreCheckoutStartResult(
+            "ready",
+            request.CorrelationId,
+            "order-denied",
+            "https://checkout.example.test/pay/order-denied",
+            false,
+            null));
+    var denied = new StoreCheckoutStartService(
+        new FakeUnauthenticatedAccountSessionService(),
+        store,
+        deniedRemote);
+    var deniedResponse = await denied.StartAsync(
+        request with { CorrelationId = "cert-checkout-auth" },
+        CancellationToken.None);
+    Require(deniedResponse.Status == "AUTH_REQUIRED", "Store checkout-start did not require authentication");
+    Require(deniedRemote.AccessToken is null, "Store checkout-start called cloud mutation without authentication");
+
+    const string readyJson = """
+        {
+          "status":"ready",
+          "correlation_id":"cert-checkout-correlation",
+          "order_id":"order-cert",
+          "checkout_url":"https://checkout.example.test/pay/order-cert",
+          "complimentary":false
+        }
+        """;
+
+    using var handler = new FakeStoreCheckoutStartAuthorityHandler(
+        HttpStatusCode.Created,
+        readyJson);
+    using var http = new HttpClient(handler);
+    using var transport = new StoreCheckoutStartRemote(
+        http,
+        "https://jl-bke.com");
+    var snapshot = await transport.StartAsync(
+        "transport-checkout-secret",
+        request,
+        CancellationToken.None);
+
+    Require(snapshot.Status == "ready", "Store checkout-start transport status drifted");
+    Require(snapshot.OrderId == "order-cert", "Store checkout-start transport order drifted");
+    Require(handler.RequestCount == 1, "Store checkout-start mutation was retried");
+    Require(handler.SawBearer, "Store checkout-start transport omitted Agent-owned bearer token");
+    Require(handler.SawProtocol, "Store checkout-start transport omitted account-session protocol");
+    Require(handler.SawExpectedPath, "Store checkout-start transport endpoint drifted");
+    Require(handler.SawIntent, "Store checkout-start transport widened or omitted purchase intent");
+
+    using var errorHandler = new FakeStoreCheckoutStartAuthorityHandler(
+        HttpStatusCode.Conflict,
+        """{"error":"LEGAL_ACCEPTANCE_REQUIRED"}""");
+    using var errorHttp = new HttpClient(errorHandler);
+    using var errorTransport = new StoreCheckoutStartRemote(
+        errorHttp,
+        "https://jl-bke.com");
+    var errorResult = await errorTransport.StartAsync(
+        "transport-checkout-secret",
+        request,
+        CancellationToken.None);
+    Require(errorResult.ErrorCode == "LEGAL_ACCEPTANCE_REQUIRED", "Store checkout-start error mapping drifted");
+    Require(errorHandler.RequestCount == 1, "Store checkout-start known failure was retried");
+
+    using var ambiguousHandler = new FakeStoreCheckoutStartAuthorityHandler(
+        HttpStatusCode.Created,
+        readyJson,
+        throwTransport: true);
+    using var ambiguousHttp = new HttpClient(ambiguousHandler);
+    using var ambiguousTransport = new StoreCheckoutStartRemote(
+        ambiguousHttp,
+        "https://jl-bke.com");
+    try
+    {
+        _ = await ambiguousTransport.StartAsync(
+            "transport-checkout-secret",
+            request,
+            CancellationToken.None);
+        throw new InvalidOperationException(
+            "Store checkout-start retried or hid an ambiguous mutation failure");
+    }
+    catch (HttpRequestException)
+    {
+        Require(ambiguousHandler.RequestCount == 1, "Store checkout-start mutation transport failure was retried");
+    }
+
+    using var widenedHandler = new FakeStoreCheckoutStartAuthorityHandler(
+        HttpStatusCode.Created,
+        """
+        {
+          "status":"ready",
+          "correlation_id":"cert-checkout-correlation",
+          "order_id":"order-cert",
+          "checkout_url":"https://checkout.example.test/pay/order-cert",
+          "complimentary":false,
+          "provider":"paymongo"
+        }
+        """);
+    using var widenedHttp = new HttpClient(widenedHandler);
+    using var widenedTransport = new StoreCheckoutStartRemote(
+        widenedHttp,
+        "https://jl-bke.com");
+    try
+    {
+        _ = await widenedTransport.StartAsync(
+            "transport-checkout-secret",
+            request,
+            CancellationToken.None);
+        throw new InvalidOperationException(
+            "Store checkout-start accepted widened provider authority");
+    }
+    catch (InvalidDataException)
+    {
+        // Strict root keys intentionally reject provider authority.
+    }
+}
+
 static async Task CertifySoftwareCatalogBoundary()
 {
     var account = new AccountSessionAccount(
@@ -2531,6 +2711,100 @@ sealed class FakeStoreCheckoutReviewAuthorityHandler(
             "x-bke-account-session-version",
             AccountSessionRemote.ProtocolVersion);
         return Task.FromResult(response);
+    }
+}
+
+sealed class FakeStoreCheckoutStartRemote(
+    RemoteStoreCheckoutStartResult result) : IStoreCheckoutStartRemote
+{
+    public string? AccessToken { get; private set; }
+    public StoreCheckoutStartRequest? Request { get; private set; }
+
+    public Task<RemoteStoreCheckoutStartResult> StartAsync(
+        string accessToken,
+        StoreCheckoutStartRequest request,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        Request = request;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeStoreCheckoutStartAuthorityHandler(
+    HttpStatusCode statusCode,
+    string json,
+    bool throwTransport = false) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawExpectedPath { get; private set; }
+    public bool SawIntent { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount += 1;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter == "transport-checkout-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var versions) &&
+            versions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+        SawExpectedPath =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/store/checkout-start";
+
+        if (request.Content is not null)
+        {
+            var body = await request.Content.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            var keys = root.EnumerateObject()
+                .Select(property => property.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            SawIntent =
+                keys.SetEquals([
+                    "correlation_id",
+                    "purchase_plan_id",
+                    "purchase_mode",
+                    "legal_version_ids",
+                ]) &&
+                root.GetProperty("correlation_id").GetString() ==
+                    "cert-checkout-correlation" &&
+                root.GetProperty("purchase_plan_id").GetString() ==
+                    "plan-perpetual" &&
+                root.GetProperty("purchase_mode").GetString() ==
+                    "GIFT" &&
+                root.GetProperty("legal_version_ids")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .SequenceEqual(["terms-v3", "privacy-v2"]);
+        }
+
+        if (throwTransport)
+        {
+            throw new HttpRequestException(
+                "certified ambiguous checkout-start transport failure");
+        }
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
     }
 }
 
