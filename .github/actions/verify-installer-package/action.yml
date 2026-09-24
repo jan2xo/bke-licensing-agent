@@ -1,0 +1,37 @@
+name: Verify Agent installer package
+description: Verify the immutable PREPRODUCTION Agent installer artifact boundary.
+
+inputs:
+  source-sha:
+    description: Exact source SHA expected in the package manifest.
+    required: true
+  agent-version:
+    description: Expected Agent package version.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify immutable installer package
+      shell: pwsh
+      env:
+        EXPECTED_SOURCE_SHA: ${{ inputs.source-sha }}
+        EXPECTED_AGENT_VERSION: ${{ inputs.agent-version }}
+      run: |
+        $manifestPath = "dist/package/PACKAGE-MANIFEST.json"
+        if (!(Test-Path $manifestPath -PathType Leaf)) { throw "Agent package manifest is missing." }
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        if ($manifest.schema -ne "bke.agent-installer-package.v1") { throw "Agent package manifest schema drifted." }
+        if ($manifest.status -ne "PREPRODUCTION" -or $manifest.production_ready -ne $false) { throw "Agent package crossed PREPRODUCTION boundary." }
+        if ([string]$manifest.source_sha -ne $env:EXPECTED_SOURCE_SHA) { throw "Agent package source SHA drifted." }
+        if ([string]$manifest.version -ne $env:EXPECTED_AGENT_VERSION) { throw "Agent package version drifted." }
+        foreach ($arch in @("x64","arm64")) {
+          $entry = $manifest.installers.$arch
+          $path = Join-Path "dist/installer" ([string]$entry.file)
+          if (!(Test-Path $path -PathType Leaf)) { throw "Agent $arch installer is missing." }
+          $item = Get-Item $path
+          $hash = (Get-FileHash $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne [string]$entry.sha256) { throw "Agent $arch installer SHA-256 drifted." }
+          if ($item.Length -ne [long]$entry.bytes) { throw "Agent $arch installer size drifted." }
+        }
+        Write-Host "Immutable Agent installer package boundary: PASS"
