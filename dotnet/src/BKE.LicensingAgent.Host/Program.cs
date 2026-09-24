@@ -100,6 +100,13 @@ builder.Services.AddSingleton<ISoftwareCatalogService>(services => new SoftwareC
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<ISoftwareCatalogRemote>(),
     services.GetRequiredService<ILocalProductInventory>()));
+builder.Services.AddSingleton<ClaimCodeRedemptionRemote>();
+builder.Services.AddSingleton<IClaimCodeRedemptionRemote>(services =>
+    services.GetRequiredService<ClaimCodeRedemptionRemote>());
+builder.Services.AddSingleton<IClaimCodeRedemptionService>(services => new ClaimCodeRedemptionService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IClaimCodeRedemptionRemote>()));
 builder.Services.AddSingleton<StandaloneProvisionAuthorizationRemote>();
 builder.Services.AddSingleton<IStandaloneProvisionAuthorizationRemote>(services =>
     services.GetRequiredService<StandaloneProvisionAuthorizationRemote>());
@@ -444,6 +451,21 @@ app.MapPost(LocalAgentContract.AccountSessionLogoutPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
+    ClaimCodeRedeemRequest request,
+    IClaimCodeRedemptionService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidClaimCode(request.Code))
+    {
+        return ClaimCodeRedeemInvalidRequest();
+    }
+
+    var response = await service.RedeemAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     SoftwareCatalogRequest request,
     ISoftwareCatalogService service,
@@ -545,6 +567,31 @@ static bool ValidCorrelationId(string? correlationId) =>
 static bool ValidAccountSessionCorrelationId(string? correlationId) =>
     ValidCorrelationId(correlationId) && correlationId!.Length <= 128;
 
+static bool ValidClaimCode(string? code)
+{
+    if (string.IsNullOrWhiteSpace(code))
+    {
+        return false;
+    }
+
+    var value = code.Trim();
+    if (!value.StartsWith("BKE-CLM-", StringComparison.OrdinalIgnoreCase) ||
+        value.Length != 43)
+    {
+        return false;
+    }
+
+    var body = value[8..];
+    var groups = body.Split('-');
+    return groups.Length == 6 &&
+        groups.All(group =>
+            group.Length == 5 &&
+            group.All(character =>
+                character is >= '0' and <= '9' ||
+                character is >= 'A' and <= 'F' ||
+                character is >= 'a' and <= 'f'));
+}
+
 static bool ValidSoftwareProductId(string? productId) =>
     !string.IsNullOrWhiteSpace(productId) &&
     productId.Length <= 128 &&
@@ -627,6 +674,19 @@ static IResult AccountSessionLogoutInvalidRequest() =>
         LocalAgentContract.AccountSessionContractVersion,
         "FAILED",
         new AccountSessionError("INVALID_REQUEST", "The account-session request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult ClaimCodeRedeemInvalidRequest() =>
+    Results.Json(new ClaimCodeRedeemResponse(
+        LocalAgentContract.ClaimCodeRedemptionCapabilityId,
+        LocalAgentContract.ClaimCodeRedemptionContractVersion,
+        "FAILED",
+        null,
+        null,
+        new ClaimCodeRedeemError(
+            "INVALID_REQUEST",
+            "The Claim Code redemption request is invalid.",
+            false)),
         statusCode: StatusCodes.Status400BadRequest);
 
 static IResult SoftwareCatalogInvalidRequest() =>
