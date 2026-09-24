@@ -107,6 +107,13 @@ builder.Services.AddSingleton<IClaimCodeRedemptionService>(services => new Claim
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IClaimCodeRedemptionRemote>()));
+builder.Services.AddSingleton<StoreCatalogRemote>();
+builder.Services.AddSingleton<IStoreCatalogRemote>(services =>
+    services.GetRequiredService<StoreCatalogRemote>());
+builder.Services.AddSingleton<IStoreCatalogService>(services => new StoreCatalogService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IStoreCatalogRemote>()));
 builder.Services.AddSingleton<StandaloneProvisionAuthorizationRemote>();
 builder.Services.AddSingleton<IStandaloneProvisionAuthorizationRemote>(services =>
     services.GetRequiredService<StandaloneProvisionAuthorizationRemote>());
@@ -466,6 +473,20 @@ app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.StoreCatalogPath, async (
+    StoreCatalogRequest request,
+    IStoreCatalogService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return StoreCatalogInvalidRequest();
+    }
+
+    var response = await service.GetAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     SoftwareCatalogRequest request,
     ISoftwareCatalogService service,
@@ -686,6 +707,19 @@ static IResult ClaimCodeRedeemInvalidRequest() =>
         new ClaimCodeRedeemError(
             "INVALID_REQUEST",
             "The Claim Code redemption request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult StoreCatalogInvalidRequest() =>
+    Results.Json(new StoreCatalogResponse(
+        LocalAgentContract.StoreCatalogCapabilityId,
+        LocalAgentContract.StoreCatalogContractVersion,
+        "FAILED",
+        false,
+        Array.Empty<StoreCatalogProduct>(),
+        new StoreCatalogError(
+            "INVALID_REQUEST",
+            "The Store catalog request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
