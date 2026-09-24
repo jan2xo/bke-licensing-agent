@@ -35,6 +35,7 @@ public static class LocalAgentContract
     public const string SoftwareOpenPath = "/v1/software/open";
     public const string SoftwareRemovePath = "/v1/software/remove";
     public const string ClaimCodeRedeemPath = "/v1/claims/redeem";
+    public const string StoreCatalogPath = "/v1/store/catalog";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
@@ -58,6 +59,8 @@ public static class LocalAgentContract
     public const int SoftwareRemoveContractVersion = 1;
     public const string ClaimCodeRedemptionCapabilityId = "bke.claim-code-redemption";
     public const int ClaimCodeRedemptionContractVersion = 1;
+    public const string StoreCatalogCapabilityId = "bke.store-catalog";
+    public const int StoreCatalogContractVersion = 1;
 }
 
 public sealed record AuthorizeRequest(
