@@ -1,0 +1,42 @@
+name: Verify Phase 10 installer candidate
+description: Verify a SHA-bound Phase 10 baseline or intentionally broken installer artifact.
+
+inputs:
+  artifact_root:
+    required: true
+  source_sha:
+    required: true
+  version:
+    required: true
+  architecture:
+    required: true
+  status:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify Phase 10 candidate boundary
+      shell: pwsh
+      env:
+        ARTIFACT_ROOT: ${{ inputs.artifact_root }}
+        EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        EXPECTED_VERSION: ${{ inputs.version }}
+        EXPECTED_ARCH: ${{ inputs.architecture }}
+        EXPECTED_STATUS: ${{ inputs.status }}
+      run: |
+        $manifestPath = Join-Path $env:ARTIFACT_ROOT "phase10/PACKAGE-MANIFEST.json"
+        if (!(Test-Path $manifestPath -PathType Leaf)) { throw "Phase 10 candidate manifest is missing: $manifestPath" }
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        if ($manifest.schema -ne "bke.phase10-installer-candidate.v1") { throw "Phase 10 candidate schema drifted." }
+        if ([string]$manifest.status -ne $env:EXPECTED_STATUS -or $manifest.production_ready -ne $false) { throw "Phase 10 candidate state drifted." }
+        if ([string]$manifest.source_sha -ne $env:EXPECTED_SOURCE_SHA) { throw "Phase 10 candidate source SHA drifted." }
+        if ([string]$manifest.version -ne $env:EXPECTED_VERSION) { throw "Phase 10 candidate version drifted." }
+        if ([string]$manifest.architecture -ne $env:EXPECTED_ARCH) { throw "Phase 10 candidate architecture drifted." }
+        $installer = Join-Path (Join-Path $env:ARTIFACT_ROOT "installer") ([string]$manifest.installer.file)
+        if (!(Test-Path $installer -PathType Leaf)) { throw "Phase 10 candidate installer is missing." }
+        $item = Get-Item $installer
+        $hash = (Get-FileHash $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($hash -ne [string]$manifest.installer.sha256) { throw "Phase 10 candidate SHA-256 drifted." }
+        if ($item.Length -ne [long]$manifest.installer.bytes) { throw "Phase 10 candidate size drifted." }
+        Write-Host "Phase 10 candidate boundary: PASS ($env:EXPECTED_STATUS / $env:EXPECTED_ARCH)"
