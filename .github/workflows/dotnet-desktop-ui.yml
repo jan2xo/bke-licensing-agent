@@ -1,19 +1,6 @@
 name: .NET 10 Agent Desktop UI
 
 on:
-  pull_request:
-    paths:
-      - "dotnet/src/BKE.LicensingAgent.Presentation/**"
-      - "dotnet/src/BKE.LicensingAgent.Desktop/**"
-      - "dotnet/certify-ui.sh"
-      - ".github/workflows/dotnet-desktop-ui.yml"
-  push:
-    branches: [main]
-    paths:
-      - "dotnet/src/BKE.LicensingAgent.Presentation/**"
-      - "dotnet/src/BKE.LicensingAgent.Desktop/**"
-      - "dotnet/certify-ui.sh"
-      - ".github/workflows/dotnet-desktop-ui.yml"
   workflow_dispatch:
 
 permissions:

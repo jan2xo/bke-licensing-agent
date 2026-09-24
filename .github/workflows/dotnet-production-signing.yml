@@ -1,10 +1,6 @@
 name: Production Windows signing gate
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/dotnet-production-signing.yml"
-      - "docs/production-signing-setup.md"
   workflow_dispatch:
     inputs:
       release_version:
