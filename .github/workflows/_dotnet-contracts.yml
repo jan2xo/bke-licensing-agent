@@ -1,0 +1,55 @@
+name: Agent .NET contract certification
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet-contracts:
+    name: .NET 10 solution contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build .NET runtime and support executables
+        run: |
+          dotnet build dotnet/src/BKE.LicensingAgent.Contracts/BKE.LicensingAgent.Contracts.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Application/BKE.LicensingAgent.Application.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Infrastructure/BKE.LicensingAgent.Infrastructure.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Presentation/BKE.LicensingAgent.Presentation.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Updater/BKE.LicensingAgent.Updater.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj --configuration Release
+          dotnet build dotnet/src/BKE.LicensingAgent.RootCleanup/BKE.LicensingAgent.RootCleanup.csproj --configuration Release
+          dotnet build dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release
+          dotnet build dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release
+          dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
+
+      - name: Run .NET contract certifications
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
+
+      - name: Repository hygiene
+        run: |
+          git diff --check
+          forbidden="$(find . -path './.git' -prune -o -type f \( -name '*.py' -o -name '*.spec' -o -name 'pyproject.toml' \) -print)"
+          if [ -n "$forbidden" ]; then
+            echo "Retired Python source/build files reappeared:"
+            echo "$forbidden"
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=.git --exclude='*.md' --exclude='ci.yml' --exclude='_dotnet-contracts.yml' -E 'pyinstaller|setup-python|python -m pip|python -m pytest' .github/workflows; then
+            echo "Python build/runtime dependency remains in active workflows."
+            exit 1
+          fi
