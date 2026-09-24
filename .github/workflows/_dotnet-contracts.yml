@@ -49,7 +49,7 @@ jobs:
             echo "$forbidden"
             exit 1
           fi
-          if grep -RIn --exclude-dir=.git --exclude='*.md' --exclude='ci.yml' -E 'pyinstaller|setup-python|python -m pip|python -m pytest' .github/workflows; then
+          if grep -RIn --exclude-dir=.git --exclude='*.md' --exclude='ci.yml' --exclude='_dotnet-contracts.yml' -E 'pyinstaller|setup-python|python -m pip|python -m pytest' .github/workflows; then
             echo "Python build/runtime dependency remains in active workflows."
             exit 1
           fi
