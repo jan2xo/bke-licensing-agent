@@ -5,27 +5,45 @@ on:
   pull_request:
     paths:
       - ".github/workflows/dotnet-production-release-preflight.yml"
+      - ".github/workflows/_dotnet-contracts.yml"
+      - ".github/actions/verify-installer-package/**"
       - "dotnet/src/BKE.LicensingAgent.Bootstrap/**"
       - "dotnet/src/BKE.LicensingAgent.Host/**"
+      - "dotnet/src/BKE.LicensingAgent.Desktop/**"
+      - "dotnet/src/BKE.LicensingAgent.Updater/**"
+      - "dotnet/src/BKE.LicensingAgent.Provisioner/**"
+      - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
       - "packaging/windows/bke-licensing-agent.iss"
       - "packaging/windows/bke-licensing-agent-arm64.iss"
+      - "scripts/publish_dotnet_windows_payloads.ps1"
       - "docs/production-release-cutover.md"
 
 permissions:
   contents: read
 
-jobs:
-  preflight:
-    name: Unsigned x64 + ARM64 release-set preflight
-    runs-on: windows-latest
-    timeout-minutes: 45
-    env:
-      GEN2_VERSION: "2.0.0"
+concurrency:
+  group: phase11-preflight-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
+env:
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  AGENT_VERSION: "2.0.0"
+
+jobs:
+  dotnet-contracts:
+    name: Fast contract gate
+    uses: ./.github/workflows/_dotnet-contracts.yml
+
+  installer-package:
+    name: Build unsigned x64 + ARM64 package
+    needs: dotnet-contracts
+    runs-on: windows-latest
+    timeout-minutes: 40
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
@@ -34,31 +52,13 @@ jobs:
 
       - name: Install packaging dependencies
         shell: pwsh
-        run: |
-          choco install innosetup -y --no-progress
-
-      - name: Re-run release-critical tests
-        shell: pwsh
-        run: |
-          dotnet build dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw "Gen2 bootstrap build failed" }
-          dotnet build dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw "Gen2 runtime build failed" }
-          dotnet build dotnet/src/BKE.LicensingAgent.Desktop/BKE.LicensingAgent.Desktop.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw ".NET License Center build failed" }
-          dotnet build dotnet/src/BKE.LicensingAgent.Updater/BKE.LicensingAgent.Updater.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw ".NET updater helper build failed" }
-          dotnet build dotnet/src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw ".NET provisioner build failed" }
-          dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw ".NET release tooling build failed" }
-          dotnet run --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw "signed self-update certification failed" }
+        run: choco install innosetup -y --no-progress
 
       - name: Publish native .NET support payloads
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:GEN2_VERSION -Architecture all
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture all
+          if ($LASTEXITCODE -ne 0) { throw ".NET support payload publish failed" }
 
       - name: Generate disposable preflight trust with .NET
         shell: pwsh
@@ -66,7 +66,7 @@ jobs:
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id phase11-preflight-target-v1 --policy-id phase11-preflight-only --update-key-id phase11-preflight-update-v1
           if ($LASTEXITCODE -ne 0) { throw ".NET disposable trust generation failed" }
 
-      - name: Publish native x64 + ARM64 Gen2 payloads
+      - name: Publish native x64 + ARM64 Gen2 service/runtime
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
@@ -74,26 +74,26 @@ jobs:
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service-arm64 | Out-Null
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime-arm64 | Out-Null
 
-          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-service
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-service
           if ($LASTEXITCODE -ne 0) { throw "x64 bootstrap publish failed" }
-          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-runtime
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-runtime
           if ($LASTEXITCODE -ne 0) { throw "x64 runtime publish failed" }
 
-          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-service-arm64
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-service-arm64
           if ($LASTEXITCODE -ne 0) { throw "ARM64 bootstrap publish failed" }
-          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:GEN2_VERSION --output dist/windows/bke-licensing-agent-runtime-arm64
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-runtime-arm64
           if ($LASTEXITCODE -ne 0) { throw "ARM64 runtime publish failed" }
 
       - name: Verify native PE machines
         shell: pwsh
         run: |
-          function Assert-PeMachine([string]$Path, [int]$Expected) {
-            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Path))
-            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
-            $signature = "PE" + [char]0 + [char]0
-            if ([Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4) -ne $signature) { throw "invalid PE signature: $Path" }
-            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-            if ($machine -ne $Expected) { throw ("unexpected PE machine for {0}: 0x{1:X4}" -f $Path, $machine) }
+          function Assert-PeMachine([string]$Path,[int]$Expected) {
+            $bytes=[IO.File]::ReadAllBytes((Resolve-Path $Path))
+            $offset=[BitConverter]::ToInt32($bytes,0x3c)
+            $signature="PE"+[char]0+[char]0
+            if ([Text.Encoding]::ASCII.GetString($bytes,$offset,4) -ne $signature) { throw "invalid PE: $Path" }
+            $machine=[BitConverter]::ToUInt16($bytes,$offset+4)
+            if ($machine -ne $Expected) { throw ("wrong PE machine {0}: 0x{1:X4}" -f $Path,$machine) }
           }
           Assert-PeMachine "dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe" 0x8664
           Assert-PeMachine "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe" 0x8664
@@ -103,73 +103,150 @@ jobs:
       - name: Build unsigned canonical x64 + ARM64 installers
         shell: pwsh
         run: |
-          $iscc = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
+          $iscc=Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
           & $iscc packaging/windows/bke-licensing-agent.iss
           if ($LASTEXITCODE -ne 0) { throw "x64 installer compile failed" }
           & $iscc packaging/windows/bke-licensing-agent-arm64.iss
           if ($LASTEXITCODE -ne 0) { throw "ARM64 installer compile failed" }
 
+      - name: Build immutable installer package manifest
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/package | Out-Null
+          $x64=Get-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe"
+          $arm64=Get-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-arm64.exe"
+          $manifest=[ordered]@{
+            schema="bke.agent-installer-package.v1"
+            status="PREPRODUCTION"
+            production_ready=$false
+            source_sha=$env:SOURCE_SHA
+            version=$env:AGENT_VERSION
+            trust="DISPOSABLE_PREPRODUCTION"
+            installers=[ordered]@{
+              x64=[ordered]@{ file=$x64.Name; sha256=(Get-FileHash $x64.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes=$x64.Length }
+              arm64=[ordered]@{ file=$arm64.Name; sha256=(Get-FileHash $arm64.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes=$arm64.Length }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content dist/package/PACKAGE-MANIFEST.json -Encoding utf8
+
+      - name: Upload immutable preflight installer package
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase11-installer-package
+          path: |
+            dist/installer/BKE-Licensing-Agent-${{ env.AGENT_VERSION }}-Windows-x64.exe
+            dist/installer/BKE-Licensing-Agent-${{ env.AGENT_VERSION }}-Windows-arm64.exe
+            dist/package/PACKAGE-MANIFEST.json
+          if-no-files-found: error
+          retention-days: 2
+
+  defender-scan:
+    name: Defender scan
+    needs: installer-package
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Download exact installer package
+        uses: actions/download-artifact@v4
+        with:
+          name: phase11-installer-package
+          path: dist
+
+      - name: Verify immutable installer package
+        uses: ./.github/actions/verify-installer-package
+        with:
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
+
       - name: Defender scan exact preflight installers
         shell: pwsh
         run: |
-          $platformRoot = Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform"
-          $mpCmd = Get-ChildItem -Path $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $platformRoot=Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform"
+          $mpCmd=Get-ChildItem -Path $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if ($null -eq $mpCmd) {
-            $fallback = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
-            if (Test-Path $fallback) { $mpCmd = Get-Item $fallback }
+            $fallback=Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
+            if (Test-Path $fallback) { $mpCmd=Get-Item $fallback }
           }
           if ($null -eq $mpCmd) { throw "Microsoft Defender scanner unavailable" }
-
           foreach ($installer in @(
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe",
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe"
+            "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe",
+            "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-arm64.exe"
           )) {
             & $mpCmd.FullName -Scan -ScanType 3 -File (Resolve-Path $installer).Path -DisableRemediation
             if ($LASTEXITCODE -ne 0) { throw "Defender scan failed for $installer" }
           }
 
+  release-policy:
+    name: Unsigned release policy + owner gate
+    needs: [installer-package, defender-scan]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download exact installer package
+        uses: actions/download-artifact@v4
+        with:
+          name: phase11-installer-package
+          path: dist
+
+      - name: Verify immutable installer package
+        uses: ./.github/actions/verify-installer-package
+        with:
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
+
       - name: Record unsigned publisher state and release manifest
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/phase11-preflight | Out-Null
-          $x64 = (Resolve-Path "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe").Path
-          $arm64 = (Resolve-Path "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe").Path
-
-          $x64Sig = Get-AuthenticodeSignature -FilePath $x64
-          $arm64Sig = Get-AuthenticodeSignature -FilePath $arm64
-
-          $manifest = [ordered]@{
-            schema = "bke.production-release-preflight.v1"
-            status = "PASS"
-            source_sha = $env:GITHUB_SHA
-            version = $env:GEN2_VERSION
-            architectures = @("x64","arm64")
-            installers = [ordered]@{
-              x64 = [ordered]@{
-                file = [IO.Path]::GetFileName($x64)
-                sha256 = (Get-FileHash -LiteralPath $x64 -Algorithm SHA256).Hash.ToLowerInvariant()
-                bytes = (Get-Item $x64).Length
-                authenticode_status = [string]$x64Sig.Status
+          $x64=(Resolve-Path "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe").Path
+          $arm64=(Resolve-Path "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-arm64.exe").Path
+          $x64Sig=Get-AuthenticodeSignature -FilePath $x64
+          $arm64Sig=Get-AuthenticodeSignature -FilePath $arm64
+          $manifest=[ordered]@{
+            schema="bke.production-release-preflight.v1"
+            status="PASS"
+            source_sha=$env:SOURCE_SHA
+            version=$env:AGENT_VERSION
+            architectures=@("x64","arm64")
+            installers=[ordered]@{
+              x64=[ordered]@{
+                file=[IO.Path]::GetFileName($x64)
+                sha256=(Get-FileHash -LiteralPath $x64 -Algorithm SHA256).Hash.ToLowerInvariant()
+                bytes=(Get-Item $x64).Length
+                authenticode_status=[string]$x64Sig.Status
               }
-              arm64 = [ordered]@{
-                file = [IO.Path]::GetFileName($arm64)
-                sha256 = (Get-FileHash -LiteralPath $arm64 -Algorithm SHA256).Hash.ToLowerInvariant()
-                bytes = (Get-Item $arm64).Length
-                authenticode_status = [string]$arm64Sig.Status
+              arm64=[ordered]@{
+                file=[IO.Path]::GetFileName($arm64)
+                sha256=(Get-FileHash -LiteralPath $arm64 -Algorithm SHA256).Hash.ToLowerInvariant()
+                bytes=(Get-Item $arm64).Length
+                authenticode_status=[string]$arm64Sig.Status
               }
             }
-            defender = "PASS"
-            phase8_canonical_installer = "CLOSED"
-            phase9_signed_self_update_prepublication = "CLOSED"
-            phase10_broken_update_rollback = "CLOSED"
-            signing_state = "NOT_SIGNED"
-            production_update_authority = "NOT_ACTIVATED"
-            production_catalog_publication = "NOT_AUTHORIZED"
-            production_deployment = "NOT_AUTHORIZED"
-            production_ready = $false
+            defender="PASS"
+            phase8_canonical_installer="CLOSED"
+            phase9_signed_self_update_prepublication="CLOSED"
+            phase10_broken_update_rollback="CLOSED"
+            signing_state="NOT_SIGNED"
+            production_update_authority="NOT_ACTIVATED"
+            production_catalog_publication="NOT_AUTHORIZED"
+            production_deployment="NOT_AUTHORIZED"
+            production_ready=$false
           }
           $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath dist/phase11-preflight/PREFLIGHT-MANIFEST.json -Encoding utf8
-
           @(
             "This is a PRE-PRODUCTION release-set artifact only.",
             "It uses disposable trust and unsigned installers.",
@@ -177,33 +254,108 @@ jobs:
             "Do not represent these installers as production-signed."
           ) | Set-Content -LiteralPath dist/phase11-preflight/NOT-PRODUCTION.txt -Encoding utf8
 
-          Copy-Item $x64 dist/phase11-preflight/
-          Copy-Item $arm64 dist/phase11-preflight/
-          Get-Content dist/phase11-preflight/PREFLIGHT-MANIFEST.json
-
       - name: Enforce no accidental production state
         shell: pwsh
         run: |
-          $manifest = Get-Content dist/phase11-preflight/PREFLIGHT-MANIFEST.json -Raw | ConvertFrom-Json
+          $manifest=Get-Content dist/phase11-preflight/PREFLIGHT-MANIFEST.json -Raw | ConvertFrom-Json
           if ($manifest.production_ready -ne $false) { throw "preflight incorrectly claims production readiness" }
-          if ($manifest.signing_state -ne "NOT_SIGNED") { throw "preflight unexpectedly contains signed installers" }
+          if ($manifest.signing_state -ne "NOT_SIGNED") { throw "preflight unexpectedly claims signed installers" }
+          if ($manifest.installers.x64.authenticode_status -ne "NotSigned") { throw "x64 preflight installer is unexpectedly signed" }
+          if ($manifest.installers.arm64.authenticode_status -ne "NotSigned") { throw "ARM64 preflight installer is unexpectedly signed" }
+          if ($manifest.production_update_authority -ne "NOT_ACTIVATED") { throw "preflight crossed update-authority boundary" }
           if ($manifest.production_catalog_publication -ne "NOT_AUTHORIZED") { throw "preflight crossed catalog boundary" }
+          if ($manifest.production_deployment -ne "NOT_AUTHORIZED") { throw "preflight crossed deployment boundary" }
 
       - name: Build owner-gated production signing request
         shell: pwsh
         run: |
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- build-signing-request --manifest dist/phase11-preflight/PREFLIGHT-MANIFEST.json --output dist/phase11-preflight/SIGNING-REQUEST.json
           if ($LASTEXITCODE -ne 0) { throw ".NET production signing request generation failed" }
-          $request = Get-Content dist/phase11-preflight/SIGNING-REQUEST.json -Raw | ConvertFrom-Json
+          $request=Get-Content dist/phase11-preflight/SIGNING-REQUEST.json -Raw | ConvertFrom-Json
           if ($request.signing_authorized -ne $false) { throw "signing request unexpectedly authorizes signing" }
           if ($request.publish_allowed -ne $false) { throw "signing request unexpectedly authorizes publication" }
           if ($request.windows_signing.authorization_state -ne "OWNER_AUTHORIZATION_REQUIRED") { throw "Windows signer authorization boundary drifted" }
           if ($request.update_authority.authorization_state -ne "OWNER_AUTHORIZATION_REQUIRED") { throw "update-authority authorization boundary drifted" }
 
+      - name: Upload release-policy metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase11-release-policy
+          path: dist/phase11-preflight/**
+          if-no-files-found: error
+          retention-days: 2
+
+  evidence:
+    name: PREPRODUCTION release-set evidence
+    needs: [installer-package, defender-scan, release-policy]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Download exact installer package
+        uses: actions/download-artifact@v4
+        with:
+          name: phase11-installer-package
+          path: dist
+
+      - name: Verify immutable installer package
+        uses: ./.github/actions/verify-installer-package
+        with:
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
+
+      - name: Download release-policy metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: phase11-release-policy
+          path: metadata
+
+      - name: Assemble exact release-set evidence
+        shell: pwsh
+        run: |
+          $output="dist/phase11-final"
+          New-Item -ItemType Directory -Force $output | Out-Null
+          Copy-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe" $output
+          Copy-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-arm64.exe" $output
+          Copy-Item "dist/package/PACKAGE-MANIFEST.json" $output
+          foreach ($name in @("PREFLIGHT-MANIFEST.json","NOT-PRODUCTION.txt","SIGNING-REQUEST.json")) {
+            $item=Get-ChildItem metadata -Recurse -File -Filter $name | Select-Object -First 1
+            if ($null -eq $item) { throw "release-policy metadata missing: $name" }
+            Copy-Item $item.FullName $output
+          }
+
       - name: Upload Phase 11 pre-production release set
         uses: actions/upload-artifact@v4
         with:
           name: BKE-Licensing-Agent-2.0.0-Windows-Phase11-PREPRODUCTION-RELEASE-SET
-          path: dist/phase11-preflight/**
+          path: dist/phase11-final/**
           if-no-files-found: error
           retention-days: 14
+
+  required-certification:
+    name: Required preflight certification
+    if: ${{ always() }}
+    needs:
+      - dotnet-contracts
+      - installer-package
+      - defender-scan
+      - release-policy
+      - evidence
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Phase 11 module
+        env:
+          CONTRACTS: ${{ needs.dotnet-contracts.result }}
+          PACKAGE: ${{ needs.installer-package.result }}
+          DEFENDER: ${{ needs.defender-scan.result }}
+          RELEASE_POLICY: ${{ needs.release-policy.result }}
+          EVIDENCE: ${{ needs.evidence.result }}
+        run: |
+          for value in "$CONTRACTS" "$PACKAGE" "$DEFENDER" "$RELEASE_POLICY" "$EVIDENCE"; do
+            test "$value" = "success" || { echo "Required Phase 11 module did not pass: $value"; exit 1; }
+          done
+          echo "Required Phase 11 preflight certification: PASS"
