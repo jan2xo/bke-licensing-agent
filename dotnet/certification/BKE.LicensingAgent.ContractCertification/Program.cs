@@ -185,6 +185,9 @@ Require(JsonName<AccountSessionStatusRequest>(nameof(AccountSessionStatusRequest
 Require(JsonName<AccountSessionLogoutRequest>(nameof(AccountSessionLogoutRequest.CorrelationId)) == "correlation_id", "account-session logout correlation_id wire name mismatch");
 Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.CorrelationId)) == "correlation_id", "claim-code redemption correlation_id wire name mismatch");
 Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.Code)) == "code", "claim-code redemption code wire name mismatch");
+Require(JsonName<StoreCatalogRequest>(nameof(StoreCatalogRequest.CorrelationId)) == "correlation_id", "Store catalog correlation_id wire name mismatch");
+Require(JsonName<StoreCatalogPlan>(nameof(StoreCatalogPlan.PurchasePlanId)) == "purchase_plan_id", "Store catalog purchase_plan_id wire name mismatch");
+Require(JsonName<StoreCatalogPlan>(nameof(StoreCatalogPlan.AmountMinor)) == "amount_minor", "Store catalog amount_minor wire name mismatch");
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
@@ -206,6 +209,7 @@ Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsyn
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
+Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareRepairService>().SetEquals(["RepairAsync"]), "software-repair port drifted");
@@ -219,6 +223,7 @@ CertifyNotificationSchemaUpgrade();
 await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
 await CertifyClaimCodeRedemptionBoundary();
+await CertifyStoreCatalogBoundary();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
@@ -237,6 +242,7 @@ Console.WriteLine($"Routes certified: {contractRoutes.Count}");
 Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVersion}");
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
+Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
@@ -1011,6 +1017,181 @@ static async Task CertifyClaimCodeRedemptionBoundary()
         Require(
             unavailableHandler.RequestCount == 1,
             "Claim Code redemption mutation was automatically retried after an ambiguous failure");
+    }
+}
+
+
+static async Task CertifyStoreCatalogBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-store",
+        "buyer@example.com",
+        "account-store",
+        "INDIVIDUAL",
+        "Store Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "store-access-secret",
+            "store-refresh-secret",
+            "store-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var product = new StoreCatalogProduct(
+        "bke-render-dock",
+        "render-dock",
+        "Render Dock",
+        "Rendering software",
+        "Standalone rendering software",
+        "SOFTWARE",
+        "STANDALONE",
+        [
+            new StoreCatalogEdition(
+                "edition-pro",
+                "pro",
+                "Pro",
+                "Professional edition",
+                ["Feature A"],
+                1,
+                2,
+                "LIFETIME",
+                [
+                    new StoreCatalogPlan(
+                        "plan-perpetual",
+                        "PERPETUAL",
+                        "PHP",
+                        30000000,
+                        "ONE_TIME",
+                        null,
+                        null,
+                        "NONE",
+                        0,
+                        null),
+                ]),
+        ]);
+
+    var remote = new FakeStoreCatalogRemote(
+        new RemoteStoreCatalogSnapshot(
+            true,
+            [product]));
+    var service = new StoreCatalogService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        remote);
+
+    var response = await service.GetAsync(
+        new StoreCatalogRequest("cert-store"),
+        CancellationToken.None);
+
+    Require(response.Status == "READY", "Store catalog did not become READY");
+    Require(response.GiftCheckoutEnabled, "Store catalog gift-checkout flag drifted");
+    Require(response.Products.Count == 1, "Store catalog product count drifted");
+    Require(remote.AccessToken == "store-access-secret", "Store catalog remote did not receive Agent-owned access token");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains("store-access-secret", StringComparison.Ordinal), "Store catalog leaked access token");
+    Require(!wire.Contains("store-refresh-secret", StringComparison.Ordinal), "Store catalog leaked refresh token");
+    Require(!wire.Contains("account-store", StringComparison.Ordinal), "Store catalog leaked cloud account identifier");
+
+    var deniedRemote = new FakeStoreCatalogRemote(
+        new RemoteStoreCatalogSnapshot(true, [product]));
+    var denied = new StoreCatalogService(
+        new FakeUnauthenticatedAccountSessionService(),
+        store,
+        deniedRemote);
+    var deniedResponse = await denied.GetAsync(
+        new StoreCatalogRequest("cert-store-auth"),
+        CancellationToken.None);
+    Require(deniedResponse.Status == "AUTH_REQUIRED", "Store catalog did not require authentication");
+    Require(deniedRemote.AccessToken is null, "Store catalog called cloud authority without authentication");
+
+    using var handler = new FakeStoreCatalogAuthorityHandler(
+        """
+        {
+          "status":"ok",
+          "account_id":"cloud-account",
+          "gift_checkout_enabled":true,
+          "products":[
+            {
+              "product_id":"bke-render-dock",
+              "slug":"render-dock",
+              "display_name":"Render Dock",
+              "summary":"Rendering software",
+              "description":"Standalone rendering software",
+              "product_type":"SOFTWARE",
+              "execution_type":"STANDALONE",
+              "editions":[
+                {
+                  "edition_id":"edition-pro",
+                  "slug":"pro",
+                  "name":"Pro",
+                  "description":"Professional edition",
+                  "features":["Feature A"],
+                  "max_users":1,
+                  "max_devices_per_user":2,
+                  "update_policy":"LIFETIME",
+                  "plans":[
+                    {
+                      "purchase_plan_id":"plan-perpetual",
+                      "type":"PERPETUAL",
+                      "currency":"PHP",
+                      "amount_minor":30000000,
+                      "billing_type":"ONE_TIME",
+                      "interval_unit":null,
+                      "interval_count":null,
+                      "renewal_behavior":"NONE",
+                      "savings_minor":0,
+                      "effective_monthly_minor":null
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """);
+    using var http = new HttpClient(handler);
+    using var transport = new StoreCatalogRemote(
+        http,
+        "https://jl-bke.com");
+    var snapshot = await transport.GetAsync(
+        "transport-store-secret",
+        CancellationToken.None);
+
+    Require(snapshot.GiftCheckoutEnabled, "Store transport gift-checkout flag drifted");
+    Require(snapshot.Products.Single().Editions.Single().Plans.Single().AmountMinor == 30000000, "Store transport amount drifted");
+    Require(handler.SawBearer, "Store transport omitted Agent-owned bearer token");
+    Require(handler.SawProtocol, "Store transport omitted account-session protocol");
+    Require(handler.SawExpectedPath, "Store transport endpoint drifted");
+
+    using var widenedHandler = new FakeStoreCatalogAuthorityHandler(
+        """
+        {
+          "status":"ok",
+          "account_id":"cloud-account",
+          "gift_checkout_enabled":false,
+          "checkout_url":"https://example.invalid/pay",
+          "products":[]
+        }
+        """);
+    using var widenedHttp = new HttpClient(widenedHandler);
+    using var widenedTransport = new StoreCatalogRemote(
+        widenedHttp,
+        "https://jl-bke.com");
+    try
+    {
+        _ = await widenedTransport.GetAsync(
+            "transport-store-secret",
+            CancellationToken.None);
+        throw new InvalidOperationException(
+            "Store transport accepted a widened payment-authority response");
+    }
+    catch (InvalidDataException)
+    {
+        // Strict root keys intentionally reject checkout/payment authority.
     }
 }
 
@@ -1981,6 +2162,59 @@ sealed class FakeClaimCodeRedemptionAuthorityHandler : HttpMessageHandler, IDisp
                 AccountSessionRemote.ProtocolVersion);
         }
         return response;
+    }
+}
+
+
+sealed class FakeStoreCatalogRemote(
+    RemoteStoreCatalogSnapshot snapshot) : IStoreCatalogRemote
+{
+    public string? AccessToken { get; private set; }
+
+    public Task<RemoteStoreCatalogSnapshot> GetAsync(
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        return Task.FromResult(snapshot);
+    }
+}
+
+sealed class FakeStoreCatalogAuthorityHandler(
+    string json) : HttpMessageHandler
+{
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawExpectedPath { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter == "transport-store-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var versions) &&
+            versions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+        SawExpectedPath =
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath == "/api/agent-sessions/store";
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return Task.FromResult(response);
     }
 }
 
