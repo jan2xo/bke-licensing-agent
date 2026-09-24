@@ -19,6 +19,7 @@ namespace BKE.LicensingAgent.Infrastructure;
 public sealed class PrivilegedUpdateCenterProvider :
     IStandaloneSoftwareProvisioner,
     IStandaloneSoftwareUpdater,
+    IStandaloneSoftwareRepairer,
     IStandaloneSoftwareRemover
 {
     private const string ProtocolVersion = "bke.licensing.v3";
@@ -49,6 +50,12 @@ public sealed class PrivilegedUpdateCenterProvider :
     {
         "schema", "product_id", "current_version", "target_version", "channel", "platform",
         "architecture", "source_authority", "repository", "tag", "issued_at", "expires_at",
+        "signing_key_id", "algorithm", "signature",
+    };
+    private static readonly HashSet<string> AccountRepairPolicyKeys = new(StringComparer.Ordinal)
+    {
+        "schema", "product_id", "repair_version", "channel", "platform", "architecture",
+        "source_authority", "repository", "tag", "issued_at", "expires_at",
         "signing_key_id", "algorithm", "signature",
     };
     private static readonly HashSet<string> TargetPolicyV1Keys = new(StringComparer.Ordinal)
@@ -424,6 +431,199 @@ public sealed class PrivilegedUpdateCenterProvider :
             catch
             {
                 return new StandaloneUpdateResult(
+                    "PRIVILEGED_HANDOFF_FAILED",
+                    "privileged_handoff_failed",
+                    true);
+            }
+        }
+    }
+
+    public async Task<StandaloneRepairResult> RepairAsync(
+        LocalInstalledProduct installed,
+        StandaloneRepairAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return new StandaloneRepairResult(
+                "UNSUPPORTED_PLATFORM",
+                "unsupported_platform",
+                false);
+        }
+
+        if (installed.InstallProvenance != "BKE_MANAGED_PACKAGE" ||
+            installed.UninstallStrategy != "MANAGED_DIRECTORY")
+        {
+            return new StandaloneRepairResult(
+                "TARGET_MISMATCH",
+                "unsupported_provenance",
+                false);
+        }
+
+        var product = LoadProduct(installed.ProductId, installed.Version);
+        if (product is null)
+        {
+            return new StandaloneRepairResult(
+                "TARGET_MISMATCH",
+                "installed_product_unavailable",
+                false);
+        }
+
+        PrivilegedConfig config;
+        TargetPolicy target;
+        VerifiedAccountRepairPolicy verified;
+        JsonDocument policyDocument;
+        try
+        {
+            policyDocument = JsonDocument.Parse(authorization.PolicyJson);
+            verified = VerifyAccountRepairPolicy(policyDocument.RootElement, product);
+            if (authorization.ProductId != product.ProductId ||
+                authorization.RepairVersion != product.Version ||
+                authorization.RepairVersion != verified.RepairVersion ||
+                authorization.Repository != verified.Repository ||
+                authorization.Tag != verified.Tag)
+            {
+                policyDocument.Dispose();
+                return new StandaloneRepairResult(
+                    "REPAIR_POLICY_INVALID",
+                    "repair_policy_context_mismatch",
+                    false);
+            }
+
+            config = LoadPrivilegedConfig();
+            if (!string.Equals(config.ExpectedChannel, product.UpdateChannel, StringComparison.Ordinal))
+            {
+                policyDocument.Dispose();
+                return new StandaloneRepairResult(
+                    "TARGET_POLICY_UNAVAILABLE",
+                    "privileged_runtime_channel_mismatch",
+                    false);
+            }
+
+            target = ResolveTargetPolicy(product, config);
+        }
+        catch
+        {
+            return new StandaloneRepairResult(
+                "REPAIR_POLICY_INVALID",
+                "repair_policy_invalid",
+                false);
+        }
+
+        using (policyDocument)
+        {
+            var identity = MachineIdentityProvider.Calculate();
+            var protocolArchitecture =
+                MachineIdentityProvider.ProtocolArchitecture(identity.Architecture);
+
+            GitHubReleasePackage package;
+            try
+            {
+                package = await ResolveGitHubReleasePackageAsync(
+                    new StandaloneProvisionAuthorization(
+                        product.ProductId,
+                        verified.RepairVersion,
+                        verified.Repository,
+                        verified.Tag),
+                    protocolArchitecture,
+                    target,
+                    cancellationToken);
+            }
+            catch (GitHubReleasePackageException exception)
+            {
+                return new StandaloneRepairResult(
+                    exception.Code,
+                    exception.Reason,
+                    exception.Retryable);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return new StandaloneRepairResult(
+                    "RELEASE_METADATA_INVALID",
+                    "release_metadata_invalid",
+                    false);
+            }
+
+            string artifact;
+            try
+            {
+                var downloadRoot =
+                    Path.Combine(config.RuntimeRoot, "downloads", "repair");
+                var destination = Path.Combine(
+                    downloadRoot,
+                    Safe(
+                        $"{product.ProductId}-{verified.RepairVersion}-{package.FileName}",
+                        220));
+                artifact = await AcquireGitHubAssetAsync(
+                    package.DownloadUrl,
+                    destination,
+                    package.Size,
+                    package.Sha256,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return new StandaloneRepairResult(
+                    "RELEASE_DOWNLOAD_FAILED",
+                    "release_download_failed",
+                    true);
+            }
+
+            try
+            {
+                var synthetic = new VerifiedPolicy(
+                    verified.RepairVersion,
+                    product.Version,
+                    verified.Tag,
+                    package.FileName,
+                    package.Sha256,
+                    package.Size,
+                    UpdatePackageContentType,
+                    0);
+                var transactionId = Safe(
+                    $"repair-{product.ProductId}-{verified.RepairVersion}-{Guid.NewGuid():N}",
+                    180);
+                var prepared = PreparePrivilegedInvocation(
+                    product,
+                    policyDocument.RootElement,
+                    synthetic,
+                    target,
+                    config,
+                    artifact,
+                    transactionId,
+                    repair: true);
+                Launch(prepared.Command);
+                WriteTransaction(
+                    config.RuntimeRoot,
+                    transactionId,
+                    "REPAIR_STAGED",
+                    config.HelperExecutable);
+
+                return new StandaloneRepairResult(
+                    "STARTED",
+                    "repair_started",
+                    false);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return new StandaloneRepairResult(
                     "PRIVILEGED_HANDOFF_FAILED",
                     "privileged_handoff_failed",
                     true);
@@ -1519,7 +1719,8 @@ public sealed class PrivilegedUpdateCenterProvider :
         TargetPolicy target,
         PrivilegedConfig config,
         string artifact,
-        string transactionId)
+        string transactionId,
+        bool repair = false)
     {
         var runtimeRoot = Path.GetFullPath(config.RuntimeRoot);
         Directory.CreateDirectory(runtimeRoot);
@@ -1736,8 +1937,13 @@ public sealed class PrivilegedUpdateCenterProvider :
         };
         WriteJson(Path.Combine(runtimeRoot, "trust.json"), trust);
 
-        var updatePath = Path.Combine(runtimeRoot, "update-policy.json");
-        File.WriteAllText(updatePath, updatePolicy.GetRawText(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        var authorityPath = Path.Combine(
+            runtimeRoot,
+            repair ? "repair-policy.json" : "update-policy.json");
+        File.WriteAllText(
+            authorityPath,
+            updatePolicy.GetRawText(),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         var targetPath = Path.Combine(runtimeRoot, "target-policy.json");
         File.WriteAllText(targetPath, target.Raw.GetRawText(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         var runtimeArtifact = Path.Combine(runtimeRoot, "artifact.bin");
@@ -1746,7 +1952,9 @@ public sealed class PrivilegedUpdateCenterProvider :
         var now = DateTimeOffset.UtcNow;
         var unsigned = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["schema"] = "bke.privileged-update-request.v1",
+            ["schema"] = repair
+                ? "bke.privileged-repair-request.v1"
+                : "bke.privileged-update-request.v1",
             ["request_id"] = "agent-" + Guid.NewGuid().ToString("N"),
             ["product_id"] = product.ProductId,
             ["current_version"] = product.Version,
@@ -1757,7 +1965,8 @@ public sealed class PrivilegedUpdateCenterProvider :
             ["entry_point"] = target.EntryPoint,
             ["artifact_sha256"] = verified.ArtifactSha256,
             ["artifact_size"] = verified.ArtifactSize,
-            ["update_policy_sha256"] = DocumentSha256(updatePolicy),
+            [repair ? "repair_policy_sha256" : "update_policy_sha256"] =
+                DocumentSha256(updatePolicy),
             ["target_policy_sha256"] = DocumentSha256(target.Raw),
             ["issued_at"] = Iso(now),
             ["expires_at"] = Iso(now.AddSeconds(120)),
@@ -1778,10 +1987,10 @@ public sealed class PrivilegedUpdateCenterProvider :
         var command = new List<string>
         {
             Path.GetFullPath(config.HelperExecutable),
-            "--privileged-update",
+            repair ? "--privileged-repair" : "--privileged-update",
             "--runtime-root", runtimeRoot,
             "--request", requestPath,
-            "--update-policy", updatePath,
+            repair ? "--repair-policy" : "--update-policy", authorityPath,
             "--target-policy", targetPath,
             "--artifact", runtimeArtifact,
             "--staged-root", stageRoot,
@@ -2186,6 +2395,98 @@ public sealed class PrivilegedUpdateCenterProvider :
 
         return new VerifiedAccountUpdatePolicy(
             targetVersion,
+            repository,
+            tag);
+    }
+
+    private VerifiedAccountRepairPolicy VerifyAccountRepairPolicy(
+        JsonElement policy,
+        ProductContext product)
+    {
+        if (policy.ValueKind != JsonValueKind.Object ||
+            !policy.EnumerateObject()
+                .Select(item => item.Name)
+                .ToHashSet(StringComparer.Ordinal)
+                .SetEquals(AccountRepairPolicyKeys) ||
+            RequiredString(policy, "schema") != "bke.repair-policy.v1" ||
+            RequiredString(policy, "algorithm") != "Ed25519" ||
+            RequiredString(policy, "product_id") != product.ProductId ||
+            RequiredString(policy, "repair_version") != product.Version ||
+            RequiredString(policy, "channel") != product.UpdateChannel ||
+            RequiredString(policy, "platform") != product.Platform ||
+            !ArchitecturesEquivalent(
+                RequiredString(policy, "architecture"),
+                product.Architecture) ||
+            RequiredString(policy, "source_authority") != "GITHUB_RELEASES")
+        {
+            throw new InvalidDataException(
+                "unsupported account Repair policy");
+        }
+
+        var repairVersion = RequiredString(policy, "repair_version");
+        if (!TryVersion(repairVersion, out _))
+        {
+            throw new InvalidDataException(
+                "invalid account Repair version");
+        }
+
+        var repository = RequiredString(policy, "repository");
+        if (!Regex.IsMatch(
+                repository,
+                "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+                RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException(
+                "invalid account Repair repository");
+        }
+
+        var tag = RequiredString(policy, "tag");
+        if (tag != "v" + repairVersion)
+        {
+            throw new InvalidDataException(
+                "account Repair tag mismatch");
+        }
+
+        if (!DateTimeOffset.TryParse(
+                RequiredString(policy, "issued_at"),
+                out var issuedAt) ||
+            !DateTimeOffset.TryParse(
+                RequiredString(policy, "expires_at"),
+                out var expiresAt))
+        {
+            throw new InvalidDataException(
+                "invalid account Repair lifetime");
+        }
+
+        issuedAt = issuedAt.ToUniversalTime();
+        expiresAt = expiresAt.ToUniversalTime();
+        var now = DateTimeOffset.UtcNow;
+        if (issuedAt > now.AddSeconds(30) ||
+            expiresAt <= now ||
+            expiresAt <= issuedAt ||
+            expiresAt - issuedAt > TimeSpan.FromMinutes(5))
+        {
+            throw new InvalidDataException(
+                "expired or excessive account Repair lifetime");
+        }
+
+        var keyId = RequiredString(policy, "signing_key_id");
+        var key = LoadTrustedUpdateKey(keyId)
+            ?? throw new InvalidDataException("unknown signing key");
+        var signature = Convert.FromBase64String(
+            RequiredString(policy, "signature"));
+        var canonical = CanonicalWithoutSignature(policy);
+        var verifier = new Ed25519Signer();
+        verifier.Init(false, key);
+        verifier.BlockUpdate(canonical, 0, canonical.Length);
+        if (!verifier.VerifySignature(signature))
+        {
+            throw new CryptographicException(
+                "invalid account Repair policy signature");
+        }
+
+        return new VerifiedAccountRepairPolicy(
+            repairVersion,
             repository,
             tag);
     }
@@ -2601,6 +2902,10 @@ public sealed class PrivilegedUpdateCenterProvider :
         string ArtifactSha256, long ArtifactSize, string ContentType, int Revision);
     private sealed record VerifiedAccountUpdatePolicy(
         string TargetVersion,
+        string Repository,
+        string Tag);
+    private sealed record VerifiedAccountRepairPolicy(
+        string RepairVersion,
         string Repository,
         string Tag);
     private sealed record TargetPolicy(
