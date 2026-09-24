@@ -183,6 +183,8 @@ Require(JsonName<AccountSessionCompleteRequest>(nameof(AccountSessionCompleteReq
 Require(JsonName<AccountSessionStartRequest>(nameof(AccountSessionStartRequest.CorrelationId)) == "correlation_id", "account-session start correlation_id wire name mismatch");
 Require(JsonName<AccountSessionStatusRequest>(nameof(AccountSessionStatusRequest.CorrelationId)) == "correlation_id", "account-session status correlation_id wire name mismatch");
 Require(JsonName<AccountSessionLogoutRequest>(nameof(AccountSessionLogoutRequest.CorrelationId)) == "correlation_id", "account-session logout correlation_id wire name mismatch");
+Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.CorrelationId)) == "correlation_id", "claim-code redemption correlation_id wire name mismatch");
+Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.Code)) == "code", "claim-code redemption code wire name mismatch");
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
@@ -203,6 +205,7 @@ Require(MethodNames<ILicenseCenterService>().SetEquals(["OpenAsync"]), "License 
 Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
+Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareRepairService>().SetEquals(["RepairAsync"]), "software-repair port drifted");
@@ -215,6 +218,7 @@ CertifyFreshStorageBootstrap(storage);
 CertifyNotificationSchemaUpgrade();
 await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
+await CertifyClaimCodeRedemptionBoundary();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
@@ -232,6 +236,7 @@ Console.WriteLine("BKE Licensing Agent .NET 10 Gen2 contract certification: PASS
 Console.WriteLine($"Routes certified: {contractRoutes.Count}");
 Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVersion}");
 Console.WriteLine("Account-session device authorization state machine certified");
+Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
@@ -894,6 +899,119 @@ static async Task CertifyAccountSessionStateMachine()
             nativeActive.RefreshToken == "native-refresh-secret",
         "native session material did not enter secret-store custody");
     Require(nativeRemote.AcknowledgeCount == 1, "native handoff was not acknowledged after secure-store write");
+}
+
+
+static async Task CertifyClaimCodeRedemptionBoundary()
+{
+    const string claimCode =
+        "BKE-CLM-AAAAA-BBBBB-CCCCC-DDDDD-EEEEE-FFFFF";
+    var account = new AccountSessionAccount(
+        "user-claim",
+        "claimer@example.com",
+        "account-claim",
+        "INDIVIDUAL",
+        "Claim Recipient");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "claim-access-secret",
+            "claim-refresh-secret",
+            "claim-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var remote = new FakeClaimCodeRedemptionRemote(
+        new RemoteClaimCodeRedemptionResult(
+            "claimed",
+            "account-claim",
+            "entitlement-claim"));
+    var service = new ClaimCodeRedemptionService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        remote);
+
+    var response = await service.RedeemAsync(
+        new ClaimCodeRedeemRequest(
+            "cert-claim",
+            claimCode),
+        CancellationToken.None);
+
+    Require(response.Status == "CLAIMED", "Claim Code redemption did not become CLAIMED");
+    Require(response.AccountId == "account-claim", "Claim Code redemption account drifted");
+    Require(response.EntitlementId == "entitlement-claim", "Claim Code redemption entitlement drifted");
+    Require(remote.AccessToken == "claim-access-secret", "Claim Code redemption remote did not receive Agent-owned access token");
+    Require(remote.Code == claimCode, "Claim Code redemption remote did not receive the transient Claim Code");
+
+    var wire = JsonSerializer.Serialize(response);
+    Require(!wire.Contains(claimCode, StringComparison.Ordinal), "Claim Code leaked into local redemption response");
+    Require(!wire.Contains("claim-access-secret", StringComparison.Ordinal), "Claim Code redemption leaked access token");
+    Require(!wire.Contains("claim-refresh-secret", StringComparison.Ordinal), "Claim Code redemption leaked refresh token");
+
+    var deniedRemote = new FakeClaimCodeRedemptionRemote(
+        new RemoteClaimCodeRedemptionResult("claimed", "account-claim", "unexpected"));
+    var denied = new ClaimCodeRedemptionService(
+        new FakeUnauthenticatedAccountSessionService(),
+        store,
+        deniedRemote);
+    var deniedResponse = await denied.RedeemAsync(
+        new ClaimCodeRedeemRequest("cert-claim-auth", claimCode),
+        CancellationToken.None);
+    Require(deniedResponse.Status == "AUTH_REQUIRED", "Claim Code redemption did not require authentication");
+    Require(deniedRemote.Code is null, "Claim Code redemption called cloud authority without authentication");
+
+    using var transportHandler = new FakeClaimCodeRedemptionAuthorityHandler(
+        HttpStatusCode.Created,
+        """
+        {
+          "status":"claimed",
+          "entitlement_id":"transport-entitlement",
+          "account_id":"transport-account"
+        }
+        """);
+    using var transportHttp = new HttpClient(transportHandler);
+    using var transport = new ClaimCodeRedemptionRemote(
+        transportHttp,
+        "https://jl-bke.com");
+
+    var transportResult = await transport.RedeemAsync(
+        "transport-access-secret",
+        claimCode,
+        CancellationToken.None);
+    Require(transportResult.Status == "claimed", "Claim Code transport status drifted");
+    Require(transportResult.AccountId == "transport-account", "Claim Code transport account drifted");
+    Require(transportResult.EntitlementId == "transport-entitlement", "Claim Code transport entitlement drifted");
+    Require(transportHandler.RequestCount == 1, "Claim Code transport retried a successful mutation");
+    Require(transportHandler.SawBearer, "Claim Code transport omitted Agent-owned bearer token");
+    Require(transportHandler.SawProtocol, "Claim Code transport omitted account-session protocol");
+    Require(transportHandler.SawExpectedPath, "Claim Code transport endpoint drifted");
+    Require(transportHandler.SawClaimCode, "Claim Code transport body drifted");
+
+    using var unavailableHandler = new FakeClaimCodeRedemptionAuthorityHandler(
+        HttpStatusCode.ServiceUnavailable,
+        """{"error":"TEMPORARILY_UNAVAILABLE"}""",
+        includeProtocol: false);
+    using var unavailableHttp = new HttpClient(unavailableHandler);
+    using var unavailable = new ClaimCodeRedemptionRemote(
+        unavailableHttp,
+        "https://jl-bke.com");
+    try
+    {
+        _ = await unavailable.RedeemAsync(
+            "transport-access-secret",
+            claimCode,
+            CancellationToken.None);
+        throw new InvalidOperationException(
+            "Claim Code redemption accepted a service-unavailable response");
+    }
+    catch (HttpRequestException)
+    {
+        Require(
+            unavailableHandler.RequestCount == 1,
+            "Claim Code redemption mutation was automatically retried after an ambiguous failure");
+    }
 }
 
 static async Task CertifySoftwareCatalogBoundary()
@@ -1782,6 +1900,88 @@ sealed class FakeUnauthenticatedAccountSessionService : IAccountSessionService
         AccountSessionLogoutRequest request,
         CancellationToken cancellationToken) =>
         throw new NotSupportedException();
+}
+
+
+sealed class FakeClaimCodeRedemptionRemote(
+    RemoteClaimCodeRedemptionResult result) : IClaimCodeRedemptionRemote
+{
+    public string? AccessToken { get; private set; }
+    public string? Code { get; private set; }
+
+    public Task<RemoteClaimCodeRedemptionResult> RedeemAsync(
+        string accessToken,
+        string code,
+        CancellationToken cancellationToken)
+    {
+        AccessToken = accessToken;
+        Code = code;
+        return Task.FromResult(result);
+    }
+}
+
+sealed class FakeClaimCodeRedemptionAuthorityHandler : HttpMessageHandler, IDisposable
+{
+    private readonly HttpStatusCode _statusCode;
+    private readonly string _json;
+    private readonly bool _includeProtocol;
+
+    public FakeClaimCodeRedemptionAuthorityHandler(
+        HttpStatusCode statusCode,
+        string json,
+        bool includeProtocol = true)
+    {
+        _statusCode = statusCode;
+        _json = json;
+        _includeProtocol = includeProtocol;
+    }
+
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawExpectedPath { get; private set; }
+    public bool SawClaimCode { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        RequestCount += 1;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter == "transport-access-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var versions) &&
+            versions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+        SawExpectedPath =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/claims/redeem";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(cancellationToken);
+        SawClaimCode = body.Contains(
+            "BKE-CLM-AAAAA-BBBBB-CCCCC-DDDDD-EEEEE-FFFFF",
+            StringComparison.Ordinal);
+
+        var response = new HttpResponseMessage(_statusCode)
+        {
+            Content = new StringContent(
+                _json,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        if (_includeProtocol)
+        {
+            response.Headers.TryAddWithoutValidation(
+                "x-bke-account-session-version",
+                AccountSessionRemote.ProtocolVersion);
+        }
+        return response;
+    }
 }
 
 sealed class FakeSoftwareCatalogRemote(
