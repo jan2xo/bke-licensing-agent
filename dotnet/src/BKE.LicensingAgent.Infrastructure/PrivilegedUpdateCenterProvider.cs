@@ -1719,8 +1719,7 @@ public sealed class PrivilegedUpdateCenterProvider :
         TargetPolicy target,
         PrivilegedConfig config,
         string artifact,
-        string transactionId,
-        bool repair = false)
+        string transactionId)
     {
         var runtimeRoot = Path.GetFullPath(config.RuntimeRoot);
         Directory.CreateDirectory(runtimeRoot);
@@ -1897,7 +1896,8 @@ public sealed class PrivilegedUpdateCenterProvider :
         TargetPolicy target,
         PrivilegedConfig config,
         string artifact,
-        string transactionId)
+        string transactionId,
+        bool repair = false)
     {
         var runtimeRoot = Path.GetFullPath(config.RuntimeRoot);
         Directory.CreateDirectory(runtimeRoot);
