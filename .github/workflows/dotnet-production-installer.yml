@@ -195,8 +195,8 @@ jobs:
       - name: Verify immutable installer package
         uses: ./.github/actions/verify-installer-package
         with:
-          source-sha: ${{ env.SOURCE_SHA }}
-          agent-version: ${{ env.AGENT_VERSION }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
 
       - name: Defender scan installers
         shell: pwsh
@@ -233,8 +233,8 @@ jobs:
       - name: Verify immutable installer package
         uses: ./.github/actions/verify-installer-package
         with:
-          source-sha: ${{ env.SOURCE_SHA }}
-          agent-version: ${{ env.AGENT_VERSION }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
 
       - name: Fresh-install canonical x64 .NET-only Agent
         shell: pwsh
@@ -333,8 +333,8 @@ jobs:
       - name: Verify immutable installer package
         uses: ./.github/actions/verify-installer-package
         with:
-          source-sha: ${{ env.SOURCE_SHA }}
-          agent-version: ${{ env.AGENT_VERSION }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
 
       - name: Install x64 Agent prerequisite for cleanup certification
         shell: pwsh
@@ -414,8 +414,8 @@ jobs:
       - name: Verify immutable installer package
         uses: ./.github/actions/verify-installer-package
         with:
-          source-sha: ${{ env.SOURCE_SHA }}
-          agent-version: ${{ env.AGENT_VERSION }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
 
       - name: Assemble ARM64 .NET-only UTM acceptance kit
         shell: pwsh
@@ -468,8 +468,8 @@ jobs:
       - name: Verify immutable installer package
         uses: ./.github/actions/verify-installer-package
         with:
-          source-sha: ${{ env.SOURCE_SHA }}
-          agent-version: ${{ env.AGENT_VERSION }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
 
       - name: Download ARM64 acceptance kit
         uses: actions/download-artifact@v4
