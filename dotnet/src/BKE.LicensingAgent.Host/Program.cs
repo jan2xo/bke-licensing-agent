@@ -121,6 +121,13 @@ builder.Services.AddSingleton<IStoreCheckoutReviewService>(services => new Store
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IStoreCheckoutReviewRemote>()));
+builder.Services.AddSingleton<StoreCheckoutStartRemote>();
+builder.Services.AddSingleton<IStoreCheckoutStartRemote>(services =>
+    services.GetRequiredService<StoreCheckoutStartRemote>());
+builder.Services.AddSingleton<IStoreCheckoutStartService>(services => new StoreCheckoutStartService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IStoreCheckoutStartRemote>()));
 builder.Services.AddSingleton<StandaloneProvisionAuthorizationRemote>();
 builder.Services.AddSingleton<IStandaloneProvisionAuthorizationRemote>(services =>
     services.GetRequiredService<StandaloneProvisionAuthorizationRemote>());
@@ -509,6 +516,24 @@ app.MapPost(LocalAgentContract.StoreCheckoutReviewPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.StoreCheckoutStartPath, async (
+    StoreCheckoutStartRequest request,
+    IStoreCheckoutStartService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPurchasePlanId(request.PurchasePlanId) ||
+        request.PurchaseMode is not ("SELF" or "GIFT") ||
+        !ValidLegalVersionIds(request.LegalVersionIds))
+    {
+        return StoreCheckoutStartInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.StartAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     SoftwareCatalogRequest request,
     ISoftwareCatalogService service,
@@ -640,6 +665,15 @@ static bool ValidPurchasePlanId(string? purchasePlanId) =>
     purchasePlanId.Length <= 256 &&
     purchasePlanId.All(character => character >= 32);
 
+static bool ValidLegalVersionIds(IReadOnlyList<string>? legalVersionIds) =>
+    legalVersionIds is { Count: >= 2 and <= 3 } &&
+    legalVersionIds.All(value =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 256 &&
+        value.All(character => character >= 32)) &&
+    legalVersionIds.Distinct(StringComparer.Ordinal).Count() ==
+        legalVersionIds.Count;
+
 static bool ValidSoftwareProductId(string? productId) =>
     !string.IsNullOrWhiteSpace(productId) &&
     productId.Length <= 128 &&
@@ -764,6 +798,21 @@ static IResult StoreCheckoutReviewInvalidRequest() =>
         new StoreCheckoutReviewError(
             "INVALID_REQUEST",
             "The Store checkout-review request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult StoreCheckoutStartInvalidRequest(string correlationId) =>
+    Results.Json(new StoreCheckoutStartResponse(
+        LocalAgentContract.StoreCheckoutStartCapabilityId,
+        LocalAgentContract.StoreCheckoutStartContractVersion,
+        "FAILED",
+        correlationId,
+        null,
+        null,
+        null,
+        new StoreCheckoutStartError(
+            "INVALID_REQUEST",
+            "The Store checkout-start request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 

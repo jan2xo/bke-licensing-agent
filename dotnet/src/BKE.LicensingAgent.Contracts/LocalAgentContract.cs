@@ -37,6 +37,7 @@ public static class LocalAgentContract
     public const string ClaimCodeRedeemPath = "/v1/claims/redeem";
     public const string StoreCatalogPath = "/v1/store/catalog";
     public const string StoreCheckoutReviewPath = "/v1/store/checkout-review";
+    public const string StoreCheckoutStartPath = "/v1/store/checkout-start";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
@@ -64,6 +65,8 @@ public static class LocalAgentContract
     public const int StoreCatalogContractVersion = 1;
     public const string StoreCheckoutReviewCapabilityId = "bke.store-checkout-review";
     public const int StoreCheckoutReviewContractVersion = 1;
+    public const string StoreCheckoutStartCapabilityId = "bke.store-checkout-start";
+    public const int StoreCheckoutStartContractVersion = 1;
 }
 
 public sealed record AuthorizeRequest(
