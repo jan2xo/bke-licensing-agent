@@ -38,6 +38,7 @@ public static class LocalAgentContract
     public const string StoreCatalogPath = "/v1/store/catalog";
     public const string StoreCheckoutReviewPath = "/v1/store/checkout-review";
     public const string StoreCheckoutStartPath = "/v1/store/checkout-start";
+    public const string StoreCheckoutStatusPath = "/v1/store/checkout-status";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
@@ -67,6 +68,8 @@ public static class LocalAgentContract
     public const int StoreCheckoutReviewContractVersion = 1;
     public const string StoreCheckoutStartCapabilityId = "bke.store-checkout-start";
     public const int StoreCheckoutStartContractVersion = 1;
+    public const string StoreCheckoutStatusCapabilityId = "bke.store-checkout-status";
+    public const int StoreCheckoutStatusContractVersion = 1;
 }
 
 public sealed record AuthorizeRequest(
