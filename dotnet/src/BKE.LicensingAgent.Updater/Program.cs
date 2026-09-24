@@ -18,6 +18,12 @@ internal static class Program
         "install_root","entry_point","artifact_sha256","artifact_size","update_policy_sha256",
         "target_policy_sha256","issued_at","expires_at","signing_key_id","algorithm","signature",
     };
+    private static readonly HashSet<string> RepairRequestFields = new(StringComparer.Ordinal)
+    {
+        "schema","request_id","product_id","current_version","target_version","platform","architecture",
+        "install_root","entry_point","artifact_sha256","artifact_size","repair_policy_sha256",
+        "target_policy_sha256","issued_at","expires_at","signing_key_id","algorithm","signature",
+    };
 
     private static readonly HashSet<string> ProvisionRequestFields = new(StringComparer.Ordinal)
     {
@@ -35,6 +41,11 @@ internal static class Program
     private static readonly HashSet<string> UpdateV2Fields = new(StringComparer.Ordinal)
     {
         "schema","product_id","current_version","target_version","channel","platform","architecture",
+        "source_authority","repository","tag","issued_at","expires_at","signing_key_id","algorithm","signature",
+    };
+    private static readonly HashSet<string> RepairPolicyFields = new(StringComparer.Ordinal)
+    {
+        "schema","product_id","repair_version","channel","platform","architecture",
         "source_authority","repository","tag","issued_at","expires_at","signing_key_id","algorithm","signature",
     };
 
@@ -97,7 +108,9 @@ internal static class Program
             ? null
             : ResolveUnder(runtimeRoot, options.TransactionRoot, "transaction_root", mustExist: false);
 
-        var trust = LoadTrust(runtimeRoot, requireDigitalKeys: options.Mode == OperationMode.Update);
+        var trust = LoadTrust(
+            runtimeRoot,
+            requireDigitalKeys: options.Mode is OperationMode.Update or OperationMode.Repair);
         using var requestDocument = JsonDocument.Parse(File.ReadAllText(requestPath));
         using var targetDocument = JsonDocument.Parse(File.ReadAllText(targetPath));
         var target = VerifyTarget(targetDocument.RootElement, trust);
@@ -119,6 +132,51 @@ internal static class Program
                 target,
                 artifactPath,
                 updateDocument.RootElement,
+                targetDocument.RootElement);
+            var plan = ComposePlan(
+                target,
+                stagedRoot,
+                backupRoot,
+                transactionRoot,
+                options.TransactionId,
+                options.LaunchArgs,
+                options.ReadyMarker,
+                options.StartupTimeout);
+            ReplaceAndLaunch(plan, options.WaitPid);
+            return;
+        }
+
+        if (options.Mode == OperationMode.Repair)
+        {
+            if (options.RepairPolicy is null || options.BackupRoot is null)
+                throw new InvalidDataException("Repair authority inputs are incomplete");
+
+            var repairPath = ResolveUnder(
+                runtimeRoot,
+                options.RepairPolicy,
+                "repair_policy");
+            var backupRoot = ResolveUnder(
+                runtimeRoot,
+                options.BackupRoot,
+                "backup_root",
+                mustExist: false);
+            using var repairDocument =
+                JsonDocument.Parse(File.ReadAllText(repairPath));
+
+            var request = VerifyRepairRequest(
+                requestDocument.RootElement,
+                trust,
+                runtimeRoot);
+            var repair = VerifyRepair(
+                repairDocument.RootElement,
+                trust,
+                request);
+            ComposeRepairAuthority(
+                request,
+                repair,
+                target,
+                artifactPath,
+                repairDocument.RootElement,
                 targetDocument.RootElement);
             var plan = ComposePlan(
                 target,
@@ -160,11 +218,14 @@ internal static class Program
         for (var index = 0; index < args.Length; index++)
         {
             var current = args[index];
-            if (current is "--privileged-update" or "--privileged-provision")
+            if (current is "--privileged-update" or "--privileged-repair" or "--privileged-provision")
             {
-                var requested = current == "--privileged-update"
-                    ? OperationMode.Update
-                    : OperationMode.Provision;
+                var requested = current switch
+                {
+                    "--privileged-update" => OperationMode.Update,
+                    "--privileged-repair" => OperationMode.Repair,
+                    _ => OperationMode.Provision,
+                };
                 if (mode is not null)
                     throw new InvalidDataException("exactly one privileged operation mode is required");
                 mode = requested;
@@ -183,7 +244,7 @@ internal static class Program
         }
 
         if (mode is null)
-            throw new InvalidDataException("--privileged-update or --privileged-provision is required");
+            throw new InvalidDataException("--privileged-update, --privileged-repair, or --privileged-provision is required");
 
         string Required(string name) =>
             values.TryGetValue(name, out var list) && list.Count == 1 && !string.IsNullOrWhiteSpace(list[0])
@@ -217,14 +278,25 @@ internal static class Program
             : [];
         var readyMarker = Optional("--ready-marker");
         var updatePolicy = Optional("--update-policy");
+        var repairPolicy = Optional("--repair-policy");
         var backupRoot = Optional("--backup-root");
 
         if (mode == OperationMode.Update)
         {
             updatePolicy ??= Required("--update-policy");
             backupRoot ??= Required("--backup-root");
+            if (repairPolicy is not null)
+                throw new InvalidDataException("update mode does not accept Repair policy");
+        }
+        else if (mode == OperationMode.Repair)
+        {
+            repairPolicy ??= Required("--repair-policy");
+            backupRoot ??= Required("--backup-root");
+            if (updatePolicy is not null)
+                throw new InvalidDataException("Repair mode does not accept update policy");
         }
         else if (updatePolicy is not null ||
+                 repairPolicy is not null ||
                  backupRoot is not null ||
                  waitPid is not null ||
                  launchArgs.Length != 0 ||
@@ -240,6 +312,7 @@ internal static class Program
             Required("--runtime-root"),
             Required("--request"),
             updatePolicy,
+            repairPolicy,
             Required("--target-policy"),
             Required("--artifact"),
             Required("--staged-root"),
@@ -326,6 +399,67 @@ internal static class Program
             artifactHash,
             artifactSize,
             updateHash,
+            targetHash);
+    }
+
+    private static VerifiedRequest VerifyRepairRequest(
+        JsonElement root,
+        TrustedRuntime trust,
+        string runtimeRoot)
+    {
+        RequireExact(root, RepairRequestFields, "privileged Repair request");
+        if (RequiredString(root, "schema") != "bke.privileged-repair-request.v1" ||
+            RequiredString(root, "algorithm") != "Ed25519")
+        {
+            throw new InvalidDataException(
+                "unsupported privileged Repair request contract");
+        }
+
+        var requestId = RequiredString(root, "request_id");
+        if (!RequestIdPattern.IsMatch(requestId))
+            throw new InvalidDataException("invalid request_id");
+
+        var artifactHash = RequiredHash(root, "artifact_sha256");
+        var repairHash = RequiredHash(root, "repair_policy_sha256");
+        var targetHash = RequiredHash(root, "target_policy_sha256");
+        var artifactSize = RequiredLong(root, "artifact_size");
+        if (artifactSize < 0)
+            throw new InvalidDataException("invalid artifact_size");
+
+        var issued = RequiredTime(root, "issued_at");
+        var expires = RequiredTime(root, "expires_at");
+        var lifetime = expires - issued;
+        if (lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromMinutes(5))
+            throw new InvalidDataException("invalid request lifetime");
+
+        var now = DateTimeOffset.UtcNow;
+        if (issued - now > TimeSpan.FromSeconds(30))
+            throw new InvalidDataException("request issued in the future");
+        if (now >= expires)
+            throw new InvalidDataException("privileged Repair request expired");
+
+        var keyId = RequiredString(root, "signing_key_id");
+        if (!trust.AgentKeys.TryGetValue(keyId, out var key))
+            throw new InvalidDataException("unknown Agent signing key");
+        VerifySignature(
+            root,
+            key,
+            "invalid privileged Repair request signature");
+
+        ConsumeReplay(runtimeRoot, requestId);
+
+        return new VerifiedRequest(
+            requestId,
+            RequiredString(root, "product_id"),
+            RequiredString(root, "current_version"),
+            RequiredString(root, "target_version"),
+            RequiredString(root, "platform"),
+            RequiredString(root, "architecture"),
+            Path.GetFullPath(RequiredString(root, "install_root")),
+            RequiredRelativePath(root, "entry_point"),
+            artifactHash,
+            artifactSize,
+            repairHash,
             targetHash);
     }
 
@@ -496,6 +630,85 @@ internal static class Program
             request.ArtifactSize);
     }
 
+    private static VerifiedRepair VerifyRepair(
+        JsonElement root,
+        TrustedRuntime trust,
+        VerifiedRequest request)
+    {
+        RequireExact(root, RepairPolicyFields, "Repair policy");
+        if (RequiredString(root, "schema") != "bke.repair-policy.v1" ||
+            RequiredString(root, "algorithm") != "Ed25519" ||
+            RequiredString(root, "source_authority") != "GITHUB_RELEASES")
+        {
+            throw new InvalidDataException(
+                "unsupported Repair policy contract");
+        }
+
+        if (RequiredString(root, "product_id") != request.ProductId)
+            throw new InvalidDataException("product_id mismatch");
+        if (RequiredString(root, "repair_version") != request.CurrentVersion ||
+            request.TargetVersion != request.CurrentVersion)
+        {
+            throw new InvalidDataException(
+                "Repair must restore the installed version");
+        }
+        if (RequiredString(root, "platform") != request.Platform)
+            throw new InvalidDataException("platform mismatch");
+        if (RequiredString(root, "architecture") != request.Architecture)
+            throw new InvalidDataException("architecture mismatch");
+        if (RequiredString(root, "channel") != trust.ExpectedChannel)
+            throw new InvalidDataException("channel mismatch");
+
+        _ = SemanticVersion.Parse(request.CurrentVersion);
+
+        var repository = RequiredString(root, "repository");
+        if (!Regex.IsMatch(
+                repository,
+                "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+                RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException("invalid GitHub repository");
+        }
+        if (RequiredString(root, "tag") != "v" + request.CurrentVersion)
+            throw new InvalidDataException("GitHub tag mismatch");
+
+        if (!DateTimeOffset.TryParse(
+                RequiredString(root, "issued_at"),
+                out var issuedAt) ||
+            !DateTimeOffset.TryParse(
+                RequiredString(root, "expires_at"),
+                out var expiresAt))
+        {
+            throw new InvalidDataException(
+                "invalid Repair policy lifetime");
+        }
+
+        issuedAt = issuedAt.ToUniversalTime();
+        expiresAt = expiresAt.ToUniversalTime();
+        var now = DateTimeOffset.UtcNow;
+        if (issuedAt > now.AddSeconds(30) ||
+            expiresAt <= now ||
+            expiresAt <= issuedAt ||
+            expiresAt - issuedAt > TimeSpan.FromMinutes(5))
+        {
+            throw new InvalidDataException(
+                "expired or excessive Repair policy lifetime");
+        }
+
+        var keyId = RequiredString(root, "signing_key_id");
+        if (!trust.DigitalKeys.TryGetValue(keyId, out var key))
+            throw new InvalidDataException("unknown signing key");
+        VerifySignature(root, key, "invalid Repair policy signature");
+
+        return new VerifiedRepair(
+            request.ProductId,
+            request.CurrentVersion,
+            request.Platform,
+            request.Architecture,
+            request.ArtifactSha256,
+            request.ArtifactSize);
+    }
+
     private static VerifiedTarget VerifyTarget(JsonElement root, TrustedRuntime trust)
     {
         if (root.ValueKind != JsonValueKind.Object)
@@ -620,6 +833,82 @@ internal static class Program
         var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
         if (!string.Equals(digest, request.ArtifactSha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("artifact hash mismatch");
+    }
+
+    private static void ComposeRepairAuthority(
+        VerifiedRequest request,
+        VerifiedRepair repair,
+        VerifiedTarget target,
+        string artifactPath,
+        JsonElement repairDocument,
+        JsonElement targetDocument)
+    {
+        if (request.ProductId != repair.ProductId ||
+            request.ProductId != target.ProductId)
+        {
+            throw new InvalidDataException(
+                "product identity mismatch");
+        }
+        if (request.CurrentVersion != repair.RepairVersion ||
+            request.TargetVersion != repair.RepairVersion)
+        {
+            throw new InvalidDataException(
+                "Repair version mismatch");
+        }
+        if (request.Platform != repair.Platform ||
+            request.Platform != target.Platform)
+        {
+            throw new InvalidDataException("platform mismatch");
+        }
+        if (request.Architecture != repair.Architecture ||
+            request.Architecture != target.Architecture)
+        {
+            throw new InvalidDataException("architecture mismatch");
+        }
+        if (!PathEquals(request.InstallRoot, target.InstallRoot))
+            throw new InvalidDataException("install root mismatch");
+        if (!string.Equals(
+                request.EntryPoint,
+                target.EntryPoint,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("entry point mismatch");
+        }
+        if (!string.Equals(
+                request.ArtifactSha256,
+                repair.ArtifactSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("artifact hash mismatch");
+        }
+        if (request.ArtifactSize != repair.ArtifactSize)
+            throw new InvalidDataException("artifact size mismatch");
+        if (request.UpdatePolicySha256 !=
+            Sha256(Canonical(repairDocument)))
+        {
+            throw new InvalidDataException(
+                "Repair policy hash mismatch");
+        }
+        if (request.TargetPolicySha256 !=
+            Sha256(Canonical(targetDocument)))
+        {
+            throw new InvalidDataException(
+                "target policy hash mismatch");
+        }
+
+        var info = new FileInfo(artifactPath);
+        if (!info.Exists || info.Length != request.ArtifactSize)
+            throw new InvalidDataException("artifact size mismatch");
+        using var stream = File.OpenRead(artifactPath);
+        var digest = Convert.ToHexString(
+            SHA256.HashData(stream)).ToLowerInvariant();
+        if (!string.Equals(
+                digest,
+                request.ArtifactSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("artifact hash mismatch");
+        }
     }
 
     private static void ComposeProvisionAuthority(
@@ -1260,6 +1549,7 @@ internal static class Program
     private enum OperationMode
     {
         Update,
+        Repair,
         Provision,
     }
 
@@ -1268,6 +1558,7 @@ internal static class Program
         string RuntimeRoot,
         string Request,
         string? UpdatePolicy,
+        string? RepairPolicy,
         string TargetPolicy,
         string Artifact,
         string StagedRoot,
@@ -1308,6 +1599,14 @@ internal static class Program
     private sealed record VerifiedUpdate(
         string ProductId, string CurrentVersion, string LatestVersion, string Platform,
         string Architecture, string ArtifactSha256, long ArtifactSize);
+
+    private sealed record VerifiedRepair(
+        string ProductId,
+        string RepairVersion,
+        string Platform,
+        string Architecture,
+        string ArtifactSha256,
+        long ArtifactSize);
 
     private sealed record VerifiedTarget(
         string ProductId, string Platform, string Architecture, string InstallRoot,

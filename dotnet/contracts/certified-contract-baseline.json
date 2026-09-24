@@ -1,6 +1,6 @@
 {
   "inventory_id": "bke.licensing-agent.certified-contract-baseline",
-  "inventory_version": 5,
+  "inventory_version": 6,
   "local_api": {
     "contract_id": "bke.licensing-agent.local-api",
     "contract_version": 1,
@@ -85,6 +85,10 @@
       {
         "method": "POST",
         "path": "/v1/software/update"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/software/repair"
       },
       {
         "method": "POST",
@@ -231,6 +235,28 @@
       "local_responses_expose_cloud_tokens": false,
       "local_responses_expose_download_urls": false,
       "local_responses_expose_install_paths": false,
+      "rollback_required": true
+    },
+    "software_repair": {
+      "capability_id": "bke.software-repair",
+      "contract_version": 1,
+      "account_session_required": true,
+      "cloud_authorization_owner": "bke-digital-solutions",
+      "release_authority": "github-releases",
+      "privileged_repair_owner": "bke-licensing-agent",
+      "repair_policy_schema": "bke.repair-policy.v1",
+      "repair_semantics": "restore-current-installed-version",
+      "local_request_fields": [
+        "correlation_id",
+        "product_id"
+      ],
+      "supported_install_provenance": [
+        "BKE_MANAGED_PACKAGE"
+      ],
+      "local_responses_expose_cloud_tokens": false,
+      "local_responses_expose_download_urls": false,
+      "local_responses_expose_install_paths": false,
+      "update_policy_reuse_allowed": false,
       "rollback_required": true
     }
   },
