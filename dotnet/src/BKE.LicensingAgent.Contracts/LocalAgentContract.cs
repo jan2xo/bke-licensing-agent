@@ -19,6 +19,7 @@ public static class LocalAgentContract
     public const string RequestNotificationPath = "/v1/notifications/request";
     public const string NotificationFeedPath = "/v1/notifications/feed";
     public const string AccountNotificationFeedPath = "/v1/notifications/account-feed";
+    public const string AccountNotificationReceiptPath = "/v1/notifications/account-receipt";
     public const string NotificationMarkReadPath = "/v1/notifications/mark-read";
     public const string NotificationDismissPath = "/v1/notifications/dismiss";
     public const string NotificationUnreadCountPath = "/v1/notifications/unread-count";
@@ -185,6 +186,18 @@ public sealed record AccountNotificationFeedResponse(
     [property: JsonPropertyName("contract_version")] int ContractVersion,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("items")] IReadOnlyList<AccountNotificationItem> Items,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] NotificationCapabilityError? Error);
+
+public sealed record AccountNotificationReceiptRequest(
+    [property: JsonPropertyName("notification_id")] string NotificationId,
+    [property: JsonPropertyName("action")] string Action);
+
+public sealed record AccountNotificationReceiptResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("mutation_status"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MutationStatus,
+    [property: JsonPropertyName("state"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? State,
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] NotificationCapabilityError? Error);
 
 public sealed record NotificationMutationResponse(
