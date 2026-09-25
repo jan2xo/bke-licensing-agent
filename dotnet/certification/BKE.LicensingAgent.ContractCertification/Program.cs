@@ -14,6 +14,8 @@ using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
 var root = inventory.RootElement;
 var localApi = root.GetProperty("local_api");
 var capabilities = root.GetProperty("capabilities");
+var notificationsPolicy = root.GetProperty("notifications");
+var outboundDefaults = root.GetProperty("outbound_defaults");
 var storage = root.GetProperty("storage");
 Require(localApi.GetProperty("contract_id").GetString() == LocalAgentContract.ContractId, "contract id mismatch");
 Require(localApi.GetProperty("contract_version").GetInt32() == LocalAgentContract.ContractVersion, "contract version mismatch");
@@ -184,6 +186,10 @@ Require(accountNotificationInbox.GetProperty("local_responses_expose_cloud_token
 Require(accountNotificationInbox.GetProperty("local_responses_expose_account_id").GetBoolean() == false, "account notification inbox account id exposure drifted");
 Require(accountNotificationInbox.GetProperty("arbitrary_data_forwarded").GetBoolean() == false, "account notification inbox arbitrary data boundary drifted");
 Require(accountNotificationInbox.GetProperty("receipt_mutation_supported").GetBoolean() == false, "account notification inbox unexpectedly widened receipt mutation authority");
+Require(notificationsPolicy.GetProperty("account_inbox_authority").GetString() == "bke-digital-solutions", "account inbox authority metadata drifted");
+Require(notificationsPolicy.GetProperty("account_inbox_local_mediator").GetString() == "bke-licensing-agent", "account inbox mediator metadata drifted");
+Require(notificationsPolicy.GetProperty("account_notification_content_owner").GetString() == "bke-digital-solutions", "account notification content ownership drifted");
+Require(outboundDefaults.GetProperty("account_notification_inbox_endpoint").GetString() == "/api/agent-sessions/notification-inbox", "account notification endpoint metadata drifted");
 
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.ProductId)) == "product_id", "authorize product_id wire name mismatch");
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.InstallationId)) == "installation_id", "authorize installation_id wire name mismatch");
