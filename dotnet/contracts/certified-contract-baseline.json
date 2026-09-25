@@ -286,9 +286,10 @@
     "every_launch_semantics": "once per product process launch; provider/campaign policy; not persisted as a notifications.delivery_mode column",
     "every_launch_read_behavior": "persisted read state may remain read while an active EVERY_LAUNCH campaign is exposed as Unread and counted unread on a later product launch",
     "withdrawn_campaign_behavior": "deactivate locally",
-    "supported_remote_authority": "typed notification code only",
+    "supported_remote_authority": "typed product broadcasts + authenticated Digital Solutions account notification feeds",
     "account_inbox_authority": "bke-digital-solutions",
-    "account_inbox_local_mediator": "bke-licensing-agent"
+    "account_inbox_local_mediator": "bke-licensing-agent",
+    "account_notification_content_owner": "bke-digital-solutions"
   },
   "storage": {
     "engine": "sqlite",
@@ -402,7 +403,8 @@
     "retry_count": 2,
     "retry_backoff_seconds": 0.25,
     "product_broadcast_endpoint": "/api/licensing-agent/notifications",
-    "product_broadcast_redirects_allowed": false
+    "product_broadcast_redirects_allowed": false,
+    "account_notification_inbox_endpoint": "/api/agent-sessions/notification-inbox"
   },
   "certification_lineage": {
     "basis": "Certified local API, capability, wire, and schema contract frozen after Gen2 convergence",
