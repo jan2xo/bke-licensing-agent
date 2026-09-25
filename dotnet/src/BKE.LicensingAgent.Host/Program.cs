@@ -135,6 +135,13 @@ builder.Services.AddSingleton<IStoreCheckoutStatusService>(services => new Store
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IStoreCheckoutStatusRemote>()));
+builder.Services.AddSingleton<StoreGiftClaimRevealRemote>();
+builder.Services.AddSingleton<IStoreGiftClaimRevealRemote>(services =>
+    services.GetRequiredService<StoreGiftClaimRevealRemote>());
+builder.Services.AddSingleton<IStoreGiftClaimRevealService>(services => new StoreGiftClaimRevealService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IStoreGiftClaimRevealRemote>()));
 builder.Services.AddSingleton<StandaloneProvisionAuthorizationRemote>();
 builder.Services.AddSingleton<IStandaloneProvisionAuthorizationRemote>(services =>
     services.GetRequiredService<StandaloneProvisionAuthorizationRemote>());
@@ -556,6 +563,21 @@ app.MapPost(LocalAgentContract.StoreCheckoutStatusPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.StoreGiftClaimRevealPath, async (
+    StoreGiftClaimRevealRequest request,
+    IStoreGiftClaimRevealService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return StoreGiftClaimRevealInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.RevealAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     SoftwareCatalogRequest request,
     ISoftwareCatalogService service,
@@ -854,6 +876,21 @@ static IResult StoreCheckoutStatusInvalidRequest(string correlationId) =>
         new StoreCheckoutStatusError(
             "INVALID_REQUEST",
             "The Store checkout-status request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult StoreGiftClaimRevealInvalidRequest(string correlationId) =>
+    Results.Json(new StoreGiftClaimRevealResponse(
+        LocalAgentContract.StoreGiftClaimRevealCapabilityId,
+        LocalAgentContract.StoreGiftClaimRevealContractVersion,
+        "FAILED",
+        correlationId,
+        null,
+        null,
+        null,
+        new StoreGiftClaimRevealError(
+            "INVALID_REQUEST",
+            "The Store gift Claim Code reveal request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
