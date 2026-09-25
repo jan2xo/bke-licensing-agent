@@ -2567,10 +2567,10 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
             }
 
             var response = JsonResponse(
-                $"""
+                """
                 {
                   "status":"ok",
-                  "account_id":"{{AccountInboxAccountId}}",
+                  "account_id":"__ACCOUNT_ID__",
                   "notifications":[
                     {
                       "id":"bke-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -2581,7 +2581,7 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
                       "category":"TRANSACTIONAL",
                       "priority":"NORMAL",
                       "state":"UNREAD",
-                      "audience_kind":"{{AccountInboxAudienceKind}}",
+                      "audience_kind":"__AUDIENCE_KIND__",
                       "product_id":"bke-render-dock",
                       "created_at":"2026-09-25T08:00:00.000Z",
                       "expires_at":null,
@@ -2604,7 +2604,15 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
                     }
                   ]
                 }
-                """);
+                """
+                .Replace(
+                    "__ACCOUNT_ID__",
+                    AccountInboxAccountId,
+                    StringComparison.Ordinal)
+                .Replace(
+                    "__AUDIENCE_KIND__",
+                    AccountInboxAudienceKind,
+                    StringComparison.Ordinal));
             response.Headers.TryAddWithoutValidation(
                 "x-bke-account-session-version",
                 AccountSessionRemote.ProtocolVersion);
