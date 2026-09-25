@@ -211,6 +211,230 @@ public sealed class NotificationProvider : INotificationService
             null);
     }
 
+    public async Task<AccountNotificationFeedResponse> AccountFeedAsync(
+        AccountNotificationFeedRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.Limit is < 1 or > 200)
+        {
+            return AccountFeedFailed(
+                "InvalidRequest",
+                "Account notification limit must be between 1 and 200.",
+                false);
+        }
+
+        var session = await _accountSessionService.StatusAsync(
+            new AccountSessionStatusRequest(
+                $"account-notification-feed-{Guid.NewGuid():N}"),
+            cancellationToken);
+        if (!string.Equals(
+                session.Status,
+                "AUTHENTICATED",
+                StringComparison.Ordinal))
+        {
+            return AccountFeedFailed(
+                "AUTH_REQUIRED",
+                "Sign in with a BKE account to view notifications.",
+                false);
+        }
+
+        var stored = await _accountSessionStore.ReadAsync(cancellationToken);
+        if (stored is not ActiveAccountSessionState active)
+        {
+            return AccountFeedFailed(
+                "AUTH_REQUIRED",
+                "The Agent account session is unavailable.",
+                false);
+        }
+
+        var uri = new Uri(
+            _platformBaseUri,
+            $"/api/agent-sessions/notification-inbox?limit={request.Limit}");
+        using var remoteRequest = new HttpRequestMessage(HttpMethod.Get, uri);
+        remoteRequest.Headers.Accept.ParseAdd("application/json");
+        remoteRequest.Headers.UserAgent.ParseAdd("BKE-Licensing-Agent/1");
+        remoteRequest.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", active.AccessToken);
+        remoteRequest.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        remoteRequest.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString());
+
+        using var response = await _http.SendAsync(
+            remoteRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return AccountFeedFailed(
+                "AUTH_REQUIRED",
+                "The Agent account session is no longer authorized.",
+                false);
+        }
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return AccountFeedFailed(
+                "NOT_AVAILABLE",
+                "The account notification authority is not available.",
+                false);
+        }
+        if ((int)response.StatusCode == 429)
+        {
+            return AccountFeedFailed(
+                "RATE_LIMITED",
+                "The account notification authority is temporarily rate limited.",
+                true);
+        }
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            return AccountFeedFailed(
+                "REMOTE_UNAVAILABLE",
+                $"The account notification authority returned HTTP {(int)response.StatusCode}.",
+                true);
+        }
+
+        if (!response.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var protocolValues) ||
+            protocolValues.SingleOrDefault() !=
+                AccountSessionRemote.ProtocolVersion)
+        {
+            throw new InvalidDataException(
+                "Account notification protocol version drifted.");
+        }
+
+        await using var stream =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        var rootKeys = root.ValueKind == JsonValueKind.Object
+            ? root.EnumerateObject()
+                .Select(property => property.Name)
+                .ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        if (root.ValueKind != JsonValueKind.Object ||
+            !rootKeys.SetEquals(["status", "account_id", "notifications"]) ||
+            BoundedString(root, "status", 32) != "ok" ||
+            BoundedString(root, "account_id", 256) !=
+                active.Account.AccountId ||
+            !root.TryGetProperty("notifications", out var notifications) ||
+            notifications.ValueKind != JsonValueKind.Array ||
+            notifications.GetArrayLength() > request.Limit)
+        {
+            throw new InvalidDataException(
+                "Invalid account notification inbox response.");
+        }
+
+        var items = new List<AccountNotificationItem>();
+        foreach (var raw in notifications.EnumerateArray())
+        {
+            if (raw.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification inbox item.");
+            }
+
+            var id = BoundedString(raw, "id", 128);
+            var source = BoundedString(raw, "source", 128);
+            var eventName = BoundedString(raw, "event", 128);
+            var title = BoundedString(raw, "title", 256);
+            var body = BoundedString(raw, "body", 4096);
+            var category = AccountCategory(
+                BoundedString(raw, "category", 32));
+            var priority = BoundedString(raw, "priority", 32);
+            var severity = priority switch
+            {
+                "LOW" or "NORMAL" => "Information",
+                "HIGH" or "URGENT" => "Warning",
+                _ => throw new InvalidDataException(
+                    "Invalid account notification priority."),
+            };
+            var state = BoundedString(raw, "state", 32) switch
+            {
+                "UNREAD" => "Unread",
+                "READ" => "Read",
+                _ => throw new InvalidDataException(
+                    "Invalid account notification state."),
+            };
+            var audienceKind = BoundedString(
+                raw,
+                "audience_kind",
+                32);
+            if (audienceKind is not (
+                "ACCOUNT" or
+                "PRINCIPAL" or
+                "ALL_USERS" or
+                "ALL_ACTIVE_CLIENTS"))
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification audience.");
+            }
+
+            string? productId = null;
+            if (raw.TryGetProperty("product_id", out var productElement) &&
+                productElement.ValueKind != JsonValueKind.Null)
+            {
+                if (productElement.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(productElement.GetString()) ||
+                    productElement.GetString()!.Length > 128)
+                {
+                    throw new InvalidDataException(
+                        "Invalid account notification product_id.");
+                }
+                productId = productElement.GetString();
+            }
+
+            var createdAt = BoundedString(raw, "created_at", 64);
+            if (!DateTimeOffset.TryParse(createdAt, out var created))
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification created_at.");
+            }
+
+            string? expiresAt = null;
+            if (raw.TryGetProperty("expires_at", out var expiry) &&
+                expiry.ValueKind != JsonValueKind.Null)
+            {
+                if (expiry.ValueKind != JsonValueKind.String ||
+                    !DateTimeOffset.TryParse(
+                        expiry.GetString(),
+                        out var parsedExpiry))
+                {
+                    throw new InvalidDataException(
+                        "Invalid account notification expires_at.");
+                }
+                expiresAt =
+                    parsedExpiry.ToUniversalTime().ToString("O");
+            }
+
+            items.Add(new AccountNotificationItem(
+                id,
+                source,
+                eventName,
+                title,
+                body,
+                category,
+                severity,
+                state,
+                audienceKind,
+                productId,
+                created.ToUniversalTime().ToString("O"),
+                expiresAt));
+        }
+
+        return new AccountNotificationFeedResponse(
+            LocalAgentContract.AccountNotificationInboxCapabilityId,
+            LocalAgentContract.AccountNotificationInboxContractVersion,
+            "Succeeded",
+            items,
+            null);
+    }
+
     public async Task<NotificationMutationResponse> MarkReadAsync(
         NotificationMutationRequest request,
         CancellationToken cancellationToken)
@@ -895,6 +1119,16 @@ public sealed class NotificationProvider : INotificationService
         "Failed",
         Array.Empty<NotificationItem>(),
         new NotificationCapabilityError(code, message, false));
+
+    private static AccountNotificationFeedResponse AccountFeedFailed(
+        string code,
+        string message,
+        bool retryable) => new(
+            LocalAgentContract.AccountNotificationInboxCapabilityId,
+            LocalAgentContract.AccountNotificationInboxContractVersion,
+            "Failed",
+            Array.Empty<AccountNotificationItem>(),
+            new NotificationCapabilityError(code, message, retryable));
 
     private static NotificationMutationResponse Mutation(string status) => new(
         LocalAgentContract.NotificationInboxCapabilityId,
