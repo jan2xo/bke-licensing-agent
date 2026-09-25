@@ -39,6 +39,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.OpenLicenseCenterPath}",
     $"POST {LocalAgentContract.RequestNotificationPath}",
     $"POST {LocalAgentContract.NotificationFeedPath}",
+    $"POST {LocalAgentContract.AccountNotificationFeedPath}",
     $"POST {LocalAgentContract.NotificationMarkReadPath}",
     $"POST {LocalAgentContract.NotificationDismissPath}",
     $"POST {LocalAgentContract.NotificationUnreadCountPath}",
@@ -169,12 +170,30 @@ Require(notificationInbox.GetProperty("contract_version").GetInt32() == LocalAge
 Require(notificationInbox.GetProperty("feed_limit_min").GetInt32() == 1, "notification feed minimum changed");
 Require(notificationInbox.GetProperty("feed_limit_max").GetInt32() == 200, "notification feed maximum changed");
 
+var accountNotificationInbox = capabilities.GetProperty("account_notification_inbox");
+Require(accountNotificationInbox.GetProperty("capability_id").GetString() == LocalAgentContract.AccountNotificationInboxCapabilityId, "account notification inbox capability id mismatch");
+Require(accountNotificationInbox.GetProperty("contract_version").GetInt32() == LocalAgentContract.AccountNotificationInboxContractVersion, "account notification inbox contract version mismatch");
+Require(accountNotificationInbox.GetProperty("account_session_required").GetBoolean(), "account notification inbox session requirement drifted");
+Require(accountNotificationInbox.GetProperty("account_scope_owner").GetString() == "bke-licensing-agent-session", "account notification scope ownership drifted");
+Require(accountNotificationInbox.GetProperty("audience_authority").GetString() == "bke-digital-solutions", "account notification audience authority drifted");
+Require(accountNotificationInbox.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["limit"]), "account notification local request widened");
+Require(accountNotificationInbox.GetProperty("feed_limit_min").GetInt32() == 1, "account notification feed minimum changed");
+Require(accountNotificationInbox.GetProperty("feed_limit_max").GetInt32() == 200, "account notification feed maximum changed");
+Require(accountNotificationInbox.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "account notification inbox cloud token exposure drifted");
+Require(accountNotificationInbox.GetProperty("local_responses_expose_account_id").GetBoolean() == false, "account notification inbox account id exposure drifted");
+Require(accountNotificationInbox.GetProperty("arbitrary_data_forwarded").GetBoolean() == false, "account notification inbox arbitrary data boundary drifted");
+Require(accountNotificationInbox.GetProperty("receipt_mutation_supported").GetBoolean() == false, "account notification inbox unexpectedly widened receipt mutation authority");
+
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.ProductId)) == "product_id", "authorize product_id wire name mismatch");
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.InstallationId)) == "installation_id", "authorize installation_id wire name mismatch");
 Require(JsonName<ActivateRequest>(nameof(ActivateRequest.LicenseKey)) == "license_key", "activation license_key wire name mismatch");
 Require(JsonName<TypedNotificationRequest>(nameof(TypedNotificationRequest.Code)) == "code", "notification code wire name mismatch");
 Require(JsonName<NotificationFeedRequest>(nameof(NotificationFeedRequest.IncludeDismissed)) == "include_dismissed", "notification include_dismissed wire name mismatch");
 Require(JsonName<NotificationItem>(nameof(NotificationItem.DeliveryMode)) == "delivery_mode", "notification delivery_mode wire name mismatch");
+Require(JsonName<AccountNotificationFeedRequest>(nameof(AccountNotificationFeedRequest.Limit)) == "limit", "account notification limit wire name mismatch");
+Require(JsonName<AccountNotificationItem>(nameof(AccountNotificationItem.AudienceKind)) == "audience_kind", "account notification audience_kind wire name mismatch");
+Require(JsonName<AccountNotificationItem>(nameof(AccountNotificationItem.ProductId)) == "product_id", "account notification product_id wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.CurrentVersion)) == "current_version", "update current_version wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.RequestedVersion)) == "requested_version", "update requested_version wire name mismatch");
 Require(JsonName<AccountSessionDeviceContextRequest>(nameof(AccountSessionDeviceContextRequest.CorrelationId)) == "correlation_id", "account-session device context correlation_id wire name mismatch");
@@ -217,7 +236,7 @@ Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.ProductId))
 Require(MethodNames<IAuthorizationService>().SetEquals(["AuthorizeAsync"]), "authorization port drifted");
 Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activation port drifted");
 Require(MethodNames<ILicenseCenterService>().SetEquals(["OpenAsync"]), "License Center port drifted");
-Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
+Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "AccountFeedAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
