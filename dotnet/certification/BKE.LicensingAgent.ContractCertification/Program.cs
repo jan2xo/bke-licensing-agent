@@ -770,6 +770,61 @@ static async Task CertifyAuthenticatedAccountNotificationSync()
         Require(handler.SawBearer, "account notification sync omitted Agent-owned bearer token");
         Require(handler.SawProtocol, "account notification sync omitted account-session protocol version");
 
+        var accountInbox = await provider.AccountFeedAsync(
+            new AccountNotificationFeedRequest(50),
+            CancellationToken.None);
+        Require(accountInbox.Status == "Succeeded", "account notification inbox bridge failed");
+        Require(accountInbox.Items.Count == 2, "account notification inbox item count drifted");
+        var principalNotice = accountInbox.Items.Single(item =>
+            item.Id == "bke-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        Require(principalNotice.Source == "payments", "account inbox source drifted");
+        Require(principalNotice.Event == "PAYMENT_RECEIVED", "account inbox event drifted");
+        Require(principalNotice.Category == "General", "account inbox category mapping drifted");
+        Require(principalNotice.Severity == "Information", "account inbox severity mapping drifted");
+        Require(principalNotice.State == "Unread", "account inbox state mapping drifted");
+        Require(principalNotice.AudienceKind == "PRINCIPAL", "account inbox audience drifted");
+        var activeClientNotice = accountInbox.Items.Single(item =>
+            item.Id == "bke-ffffffff-1111-2222-3333-444444444444");
+        Require(activeClientNotice.AudienceKind == "ALL_ACTIVE_CLIENTS", "active-client account inbox audience drifted");
+        Require(activeClientNotice.ProductId is null, "global account notification invented a product id");
+        Require(handler.SawAccountInbox, "account inbox bridge did not call the Digital Solutions account endpoint");
+
+        var accountInboxWire = JsonSerializer.Serialize(accountInbox);
+        Require(!accountInboxWire.Contains("account-access-secret", StringComparison.Ordinal), "account inbox leaked access token");
+        Require(!accountInboxWire.Contains("refresh-secret", StringComparison.Ordinal), "account inbox leaked refresh token");
+        Require(!accountInboxWire.Contains("account-1", StringComparison.Ordinal), "account inbox leaked selected cloud account id");
+        Require(!accountInboxWire.Contains("orderNumber", StringComparison.Ordinal), "account inbox forwarded arbitrary notification data");
+
+        handler.AccountInboxAccountId = "other-account";
+        try
+        {
+            _ = await provider.AccountFeedAsync(
+                new AccountNotificationFeedRequest(50),
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "account inbox accepted a cloud response for a different account");
+        }
+        catch (InvalidDataException)
+        {
+            // Selected account scope must match the Agent-owned session exactly.
+        }
+        handler.AccountInboxAccountId = "account-1";
+
+        handler.AccountInboxAudienceKind = "ADMINISTRATORS";
+        try
+        {
+            _ = await provider.AccountFeedAsync(
+                new AccountNotificationFeedRequest(50),
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "account inbox accepted administrator audience content");
+        }
+        catch (InvalidDataException)
+        {
+            // Launcher-facing account inbox never widens into admin operations.
+        }
+        handler.AccountInboxAudienceKind = "PRINCIPAL";
+
         var marked = await provider.MarkReadAsync(
             new NotificationMutationRequest(
                 "bke-render-dock",
@@ -2457,6 +2512,9 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
 {
     public bool SawBearer { get; private set; }
     public bool SawProtocol { get; private set; }
+    public bool SawAccountInbox { get; private set; }
+    public string AccountInboxAccountId { get; set; } = "account-1";
+    public string AccountInboxAudienceKind { get; set; } = "PRINCIPAL";
 
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
@@ -2479,6 +2537,72 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
                   "broadcasts":[]
                 }
                 """));
+        }
+
+        if (path == "/api/agent-sessions/notification-inbox")
+        {
+            SawBearer =
+                request.Headers.Authorization?.Scheme == "Bearer" &&
+                request.Headers.Authorization.Parameter == "account-access-secret";
+            SawProtocol =
+                request.Headers.TryGetValues(
+                    "x-bke-account-session-version",
+                    out var accountVersions) &&
+                accountVersions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+            SawAccountInbox =
+                request.RequestUri?.Query.Contains(
+                    "limit=50",
+                    StringComparison.Ordinal) == true;
+
+            if (!SawBearer || !SawProtocol || !SawAccountInbox)
+            {
+                return Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            }
+
+            var response = JsonResponse(
+                $"""
+                {
+                  "status":"ok",
+                  "account_id":"{{AccountInboxAccountId}}",
+                  "notifications":[
+                    {
+                      "id":"bke-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                      "source":"payments",
+                      "event":"PAYMENT_RECEIVED",
+                      "title":"Payment received",
+                      "body":"Payment for order TEST-ACCOUNT was confirmed.",
+                      "category":"TRANSACTIONAL",
+                      "priority":"NORMAL",
+                      "state":"UNREAD",
+                      "audience_kind":"{{AccountInboxAudienceKind}}",
+                      "product_id":"bke-render-dock",
+                      "created_at":"2026-09-25T08:00:00.000Z",
+                      "expires_at":null,
+                      "data":{"orderNumber":"TEST-ACCOUNT"}
+                    },
+                    {
+                      "id":"bke-ffffffff-1111-2222-3333-444444444444",
+                      "source":"operations",
+                      "event":"BETA_ENDED",
+                      "title":"Beta period ended",
+                      "body":"Commercial licensing now applies.",
+                      "category":"CUSTOM",
+                      "priority":"HIGH",
+                      "state":"UNREAD",
+                      "audience_kind":"ALL_ACTIVE_CLIENTS",
+                      "product_id":null,
+                      "created_at":"2026-09-25T08:01:00.000Z",
+                      "expires_at":null,
+                      "data":{"ignored":"not-forwarded"}
+                    }
+                  ]
+                }
+                """);
+            response.Headers.TryAddWithoutValidation(
+                "x-bke-account-session-version",
+                AccountSessionRemote.ProtocolVersion);
+            return Task.FromResult(response);
         }
 
         if (path == "/api/agent-sessions/notifications")
