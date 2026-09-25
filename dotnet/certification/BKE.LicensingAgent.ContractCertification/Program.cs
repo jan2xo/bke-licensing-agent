@@ -241,7 +241,7 @@ await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
 await CertifyStoreCheckoutStartBoundary();
-await CertifyStoreCheckoutStatusBoundary();
+await CertifyStoreCheckoutStatusBoundary();\nawait StoreGiftClaimRevealCertification.RunAsync();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
@@ -263,7 +263,7 @@ Console.WriteLine("Claim Code redemption session, secret, and single-attempt bou
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-start intent, no-retry mutation, strict-parser, and secret boundary certified");
-Console.WriteLine("Store checkout-status read-only recovery, strict-parser, and secret boundary certified");
+Console.WriteLine("Store checkout-status read-only recovery, strict-parser, and secret boundary certified");\nConsole.WriteLine("Store GIFT Claim Code session, strict-parser, no-persistence, and secret boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
