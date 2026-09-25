@@ -42,6 +42,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.RequestNotificationPath}",
     $"POST {LocalAgentContract.NotificationFeedPath}",
     $"POST {LocalAgentContract.AccountNotificationFeedPath}",
+    $"POST {LocalAgentContract.AccountNotificationReceiptPath}",
     $"POST {LocalAgentContract.NotificationMarkReadPath}",
     $"POST {LocalAgentContract.NotificationDismissPath}",
     $"POST {LocalAgentContract.NotificationUnreadCountPath}",
@@ -185,11 +186,17 @@ Require(accountNotificationInbox.GetProperty("feed_limit_max").GetInt32() == 200
 Require(accountNotificationInbox.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "account notification inbox cloud token exposure drifted");
 Require(accountNotificationInbox.GetProperty("local_responses_expose_account_id").GetBoolean() == false, "account notification inbox account id exposure drifted");
 Require(accountNotificationInbox.GetProperty("arbitrary_data_forwarded").GetBoolean() == false, "account notification inbox arbitrary data boundary drifted");
-Require(accountNotificationInbox.GetProperty("receipt_mutation_supported").GetBoolean() == false, "account notification inbox unexpectedly widened receipt mutation authority");
+Require(accountNotificationInbox.GetProperty("receipt_mutation_local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["notification_id", "action"]), "account notification receipt local request widened");
+Require(accountNotificationInbox.GetProperty("receipt_mutation_actions").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["MARK_READ", "DISMISS"]), "account notification receipt action set drifted");
+Require(accountNotificationInbox.GetProperty("receipt_mutation_supported").GetBoolean(), "account notification receipt mutation support missing");
+Require(accountNotificationInbox.GetProperty("receipt_authority").GetString() == "bke-digital-solutions", "account notification receipt authority drifted");
 Require(notificationsPolicy.GetProperty("account_inbox_authority").GetString() == "bke-digital-solutions", "account inbox authority metadata drifted");
 Require(notificationsPolicy.GetProperty("account_inbox_local_mediator").GetString() == "bke-licensing-agent", "account inbox mediator metadata drifted");
 Require(notificationsPolicy.GetProperty("account_notification_content_owner").GetString() == "bke-digital-solutions", "account notification content ownership drifted");
 Require(outboundDefaults.GetProperty("account_notification_inbox_endpoint").GetString() == "/api/agent-sessions/notification-inbox", "account notification endpoint metadata drifted");
+Require(outboundDefaults.GetProperty("account_notification_receipt_endpoint").GetString() == "/api/agent-sessions/notification-receipt", "account notification receipt endpoint metadata drifted");
 
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.ProductId)) == "product_id", "authorize product_id wire name mismatch");
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.InstallationId)) == "installation_id", "authorize installation_id wire name mismatch");
@@ -200,6 +207,9 @@ Require(JsonName<NotificationItem>(nameof(NotificationItem.DeliveryMode)) == "de
 Require(JsonName<AccountNotificationFeedRequest>(nameof(AccountNotificationFeedRequest.Limit)) == "limit", "account notification limit wire name mismatch");
 Require(JsonName<AccountNotificationItem>(nameof(AccountNotificationItem.AudienceKind)) == "audience_kind", "account notification audience_kind wire name mismatch");
 Require(JsonName<AccountNotificationItem>(nameof(AccountNotificationItem.ProductId)) == "product_id", "account notification product_id wire name mismatch");
+Require(JsonName<AccountNotificationReceiptRequest>(nameof(AccountNotificationReceiptRequest.NotificationId)) == "notification_id", "account notification receipt notification_id wire name mismatch");
+Require(JsonName<AccountNotificationReceiptRequest>(nameof(AccountNotificationReceiptRequest.Action)) == "action", "account notification receipt action wire name mismatch");
+Require(JsonName<AccountNotificationReceiptResponse>(nameof(AccountNotificationReceiptResponse.MutationStatus)) == "mutation_status", "account notification receipt mutation_status wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.CurrentVersion)) == "current_version", "update current_version wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.RequestedVersion)) == "requested_version", "update requested_version wire name mismatch");
 Require(JsonName<AccountSessionDeviceContextRequest>(nameof(AccountSessionDeviceContextRequest.CorrelationId)) == "correlation_id", "account-session device context correlation_id wire name mismatch");
@@ -242,7 +252,7 @@ Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.ProductId))
 Require(MethodNames<IAuthorizationService>().SetEquals(["AuthorizeAsync"]), "authorization port drifted");
 Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activation port drifted");
 Require(MethodNames<ILicenseCenterService>().SetEquals(["OpenAsync"]), "License Center port drifted");
-Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "AccountFeedAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
+Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "AccountFeedAsync", "AccountReceiptAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
@@ -800,6 +810,79 @@ static async Task CertifyAuthenticatedAccountNotificationSync()
         Require(!accountInboxWire.Contains("refresh-secret", StringComparison.Ordinal), "account inbox leaked refresh token");
         Require(!accountInboxWire.Contains("account-1", StringComparison.Ordinal), "account inbox leaked selected cloud account id");
         Require(!accountInboxWire.Contains("orderNumber", StringComparison.Ordinal), "account inbox forwarded arbitrary notification data");
+
+        var markedAccountReceipt = await provider.AccountReceiptAsync(
+            new AccountNotificationReceiptRequest(
+                principalNotice.Id,
+                "MARK_READ"),
+            CancellationToken.None);
+        Require(markedAccountReceipt.Status == "Succeeded", "account notification MARK_READ bridge failed");
+        Require(markedAccountReceipt.MutationStatus == "UPDATED", "account notification mutation status drifted");
+        Require(markedAccountReceipt.State == "READ", "account notification MARK_READ state drifted");
+        Require(handler.SawAccountReceipt, "account receipt bridge did not call the Digital Solutions receipt endpoint");
+        Require(handler.LastAccountReceiptNotificationId == principalNotice.Id, "account receipt bridge changed notification id");
+        Require(handler.LastAccountReceiptAction == "MARK_READ", "account receipt bridge changed MARK_READ action");
+
+        var receiptWire = JsonSerializer.Serialize(markedAccountReceipt);
+        Require(!receiptWire.Contains("account-access-secret", StringComparison.Ordinal), "account receipt leaked access token");
+        Require(!receiptWire.Contains("refresh-secret", StringComparison.Ordinal), "account receipt leaked refresh token");
+        Require(!receiptWire.Contains("account-1", StringComparison.Ordinal), "account receipt leaked selected cloud account id");
+
+        handler.AccountReceiptAccountId = "other-account";
+        try
+        {
+            _ = await provider.AccountReceiptAsync(
+                new AccountNotificationReceiptRequest(
+                    principalNotice.Id,
+                    "MARK_READ"),
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "account receipt accepted a cloud response for a different account");
+        }
+        catch (InvalidDataException)
+        {
+            // Receipt authority must remain bound to the Agent-selected account.
+        }
+        handler.AccountReceiptAccountId = "account-1";
+
+        handler.AccountReceiptMutationStatus = "NOT_FOUND";
+        handler.AccountReceiptState = null;
+        var missingAccountReceipt = await provider.AccountReceiptAsync(
+            new AccountNotificationReceiptRequest(
+                principalNotice.Id,
+                "MARK_READ"),
+            CancellationToken.None);
+        Require(missingAccountReceipt.Status == "NotFound", "account receipt NOT_FOUND mapping drifted");
+        Require(missingAccountReceipt.MutationStatus == "NOT_FOUND", "account receipt NOT_FOUND status drifted");
+        Require(missingAccountReceipt.State is null, "account receipt NOT_FOUND invented state");
+
+        handler.AccountReceiptMutationStatus = "UPDATED";
+        handler.AccountReceiptState = "DISMISSED";
+        try
+        {
+            _ = await provider.AccountReceiptAsync(
+                new AccountNotificationReceiptRequest(
+                    principalNotice.Id,
+                    "MARK_READ"),
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "account receipt accepted a state that did not match MARK_READ");
+        }
+        catch (InvalidDataException)
+        {
+            // Cloud mutation status/state must agree with the requested action.
+        }
+
+        var dismissedAccountReceipt = await provider.AccountReceiptAsync(
+            new AccountNotificationReceiptRequest(
+                principalNotice.Id,
+                "DISMISS"),
+            CancellationToken.None);
+        Require(dismissedAccountReceipt.Status == "Succeeded", "account notification DISMISS bridge failed");
+        Require(dismissedAccountReceipt.State == "DISMISSED", "account notification DISMISS state drifted");
+        Require(handler.LastAccountReceiptAction == "DISMISS", "account receipt bridge changed DISMISS action");
+
+        handler.AccountReceiptState = "READ";
 
         handler.AccountInboxAccountId = "other-account";
         try
@@ -2519,8 +2602,14 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
     public bool SawBearer { get; private set; }
     public bool SawProtocol { get; private set; }
     public bool SawAccountInbox { get; private set; }
+    public bool SawAccountReceipt { get; private set; }
+    public string? LastAccountReceiptNotificationId { get; private set; }
+    public string? LastAccountReceiptAction { get; private set; }
     public string AccountInboxAccountId { get; set; } = "account-1";
     public string AccountInboxAudienceKind { get; set; } = "PRINCIPAL";
+    public string AccountReceiptAccountId { get; set; } = "account-1";
+    public string AccountReceiptMutationStatus { get; set; } = "UPDATED";
+    public string? AccountReceiptState { get; set; } = "READ";
 
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
@@ -2543,6 +2632,65 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
                   "broadcasts":[]
                 }
                 """));
+        }
+
+        if (path == "/api/agent-sessions/notification-receipt")
+        {
+            SawBearer =
+                request.Headers.Authorization?.Scheme == "Bearer" &&
+                request.Headers.Authorization.Parameter == "account-access-secret";
+            SawProtocol =
+                request.Headers.TryGetValues(
+                    "x-bke-account-session-version",
+                    out var receiptVersions) &&
+                receiptVersions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+
+            var body = request.Content is null
+                ? string.Empty
+                : request.Content.ReadAsStringAsync(cancellationToken)
+                    .GetAwaiter()
+                    .GetResult();
+            using var receiptDocument = JsonDocument.Parse(body);
+            var receiptRoot = receiptDocument.RootElement;
+            var receiptKeys = receiptRoot.ValueKind == JsonValueKind.Object
+                ? receiptRoot.EnumerateObject()
+                    .Select(property => property.Name)
+                    .ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+            var bodyValid =
+                receiptRoot.ValueKind == JsonValueKind.Object &&
+                receiptKeys.SetEquals(["notification_id", "action"]) &&
+                receiptRoot.TryGetProperty("notification_id", out var notificationId) &&
+                notificationId.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(notificationId.GetString()) &&
+                receiptRoot.TryGetProperty("action", out var action) &&
+                action.ValueKind == JsonValueKind.String &&
+                action.GetString() is ("MARK_READ" or "DISMISS");
+
+            if (!SawBearer || !SawProtocol || !bodyValid)
+            {
+                return Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            }
+
+            SawAccountReceipt = true;
+            LastAccountReceiptNotificationId =
+                receiptRoot.GetProperty("notification_id").GetString();
+            LastAccountReceiptAction =
+                receiptRoot.GetProperty("action").GetString();
+
+            var response = JsonResponse(
+                JsonSerializer.Serialize(new
+                {
+                    status = "ok",
+                    account_id = AccountReceiptAccountId,
+                    mutation_status = AccountReceiptMutationStatus,
+                    state = AccountReceiptState,
+                }));
+            response.Headers.TryAddWithoutValidation(
+                "x-bke-account-session-version",
+                AccountSessionRemote.ProtocolVersion);
+            return Task.FromResult(response);
         }
 
         if (path == "/api/agent-sessions/notification-inbox")

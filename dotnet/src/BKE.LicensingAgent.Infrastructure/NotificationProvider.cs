@@ -435,6 +435,196 @@ public sealed class NotificationProvider : INotificationService
             null);
     }
 
+    public async Task<AccountNotificationReceiptResponse> AccountReceiptAsync(
+        AccountNotificationReceiptRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.NotificationId) ||
+            request.NotificationId.Length > 160 ||
+            request.Action is not ("MARK_READ" or "DISMISS"))
+        {
+            return AccountReceiptFailed(
+                "InvalidRequest",
+                "The account notification receipt request is invalid.",
+                false);
+        }
+
+        var session = await _accountSessionService.StatusAsync(
+            new AccountSessionStatusRequest(
+                $"account-notification-receipt-{Guid.NewGuid():N}"),
+            cancellationToken);
+        if (!string.Equals(
+                session.Status,
+                "AUTHENTICATED",
+                StringComparison.Ordinal))
+        {
+            return AccountReceiptFailed(
+                "AUTH_REQUIRED",
+                "Sign in with a BKE account to update notifications.",
+                false);
+        }
+
+        var stored = await _accountSessionStore.ReadAsync(cancellationToken);
+        if (stored is not ActiveAccountSessionState active)
+        {
+            return AccountReceiptFailed(
+                "AUTH_REQUIRED",
+                "The Agent account session is unavailable.",
+                false);
+        }
+
+        var uri = new Uri(
+            _platformBaseUri,
+            "/api/agent-sessions/notification-receipt");
+        using var remoteRequest = new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(request),
+                Encoding.UTF8,
+                "application/json"),
+        };
+        remoteRequest.Headers.Accept.ParseAdd("application/json");
+        remoteRequest.Headers.UserAgent.ParseAdd("BKE-Licensing-Agent/1");
+        remoteRequest.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", active.AccessToken);
+        remoteRequest.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        remoteRequest.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString());
+
+        using var response = await _http.SendAsync(
+            remoteRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return AccountReceiptFailed(
+                "AUTH_REQUIRED",
+                "The Agent account session is no longer authorized.",
+                false);
+        }
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return AccountReceiptFailed(
+                "NOT_AVAILABLE",
+                "The account notification receipt authority is not available.",
+                false);
+        }
+        if ((int)response.StatusCode == 429)
+        {
+            return AccountReceiptFailed(
+                "RATE_LIMITED",
+                "The account notification receipt authority is temporarily rate limited.",
+                true);
+        }
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            return AccountReceiptFailed(
+                "REMOTE_UNAVAILABLE",
+                $"The account notification receipt authority returned HTTP {(int)response.StatusCode}.",
+                true);
+        }
+
+        if (!response.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var protocolValues) ||
+            protocolValues.SingleOrDefault() !=
+                AccountSessionRemote.ProtocolVersion)
+        {
+            throw new InvalidDataException(
+                "Account notification receipt protocol version drifted.");
+        }
+
+        await using var stream =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        var rootKeys = root.ValueKind == JsonValueKind.Object
+            ? root.EnumerateObject()
+                .Select(property => property.Name)
+                .ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        if (root.ValueKind != JsonValueKind.Object ||
+            !rootKeys.SetEquals(
+                ["status", "account_id", "mutation_status", "state"]) ||
+            BoundedString(root, "status", 32) != "ok" ||
+            BoundedString(root, "account_id", 256) !=
+                active.Account.AccountId)
+        {
+            throw new InvalidDataException(
+                "Invalid account notification receipt response.");
+        }
+
+        var mutationStatus = BoundedString(
+            root,
+            "mutation_status",
+            32);
+        string? state = null;
+        if (!root.TryGetProperty("state", out var stateElement))
+        {
+            throw new InvalidDataException(
+                "Invalid account notification receipt state.");
+        }
+        if (stateElement.ValueKind == JsonValueKind.String)
+        {
+            state = stateElement.GetString();
+            if (string.IsNullOrWhiteSpace(state) || state.Length > 32)
+            {
+                throw new InvalidDataException(
+                    "Invalid account notification receipt state.");
+            }
+        }
+        else if (stateElement.ValueKind != JsonValueKind.Null)
+        {
+            throw new InvalidDataException(
+                "Invalid account notification receipt state.");
+        }
+
+        if (mutationStatus == "NOT_FOUND")
+        {
+            if (state is not null)
+            {
+                throw new InvalidDataException(
+                    "Account notification NOT_FOUND returned receipt state.");
+            }
+            return new AccountNotificationReceiptResponse(
+                LocalAgentContract.AccountNotificationInboxCapabilityId,
+                LocalAgentContract.AccountNotificationInboxContractVersion,
+                "NotFound",
+                mutationStatus,
+                null,
+                null);
+        }
+
+        if (mutationStatus is not ("UPDATED" or "UNCHANGED"))
+        {
+            throw new InvalidDataException(
+                "Invalid account notification mutation status.");
+        }
+
+        var expectedState = request.Action == "MARK_READ"
+            ? "READ"
+            : "DISMISSED";
+        if (!string.Equals(state, expectedState, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Account notification receipt state does not match the requested action.");
+        }
+
+        return new AccountNotificationReceiptResponse(
+            LocalAgentContract.AccountNotificationInboxCapabilityId,
+            LocalAgentContract.AccountNotificationInboxContractVersion,
+            "Succeeded",
+            mutationStatus,
+            state,
+            null);
+    }
+
     public async Task<NotificationMutationResponse> MarkReadAsync(
         NotificationMutationRequest request,
         CancellationToken cancellationToken)
@@ -1128,6 +1318,17 @@ public sealed class NotificationProvider : INotificationService
             LocalAgentContract.AccountNotificationInboxContractVersion,
             "Failed",
             Array.Empty<AccountNotificationItem>(),
+            new NotificationCapabilityError(code, message, retryable));
+
+    private static AccountNotificationReceiptResponse AccountReceiptFailed(
+        string code,
+        string message,
+        bool retryable) => new(
+            LocalAgentContract.AccountNotificationInboxCapabilityId,
+            LocalAgentContract.AccountNotificationInboxContractVersion,
+            "Failed",
+            null,
+            null,
             new NotificationCapabilityError(code, message, retryable));
 
     private static NotificationMutationResponse Mutation(string status) => new(

@@ -1,6 +1,6 @@
 {
   "inventory_id": "bke.licensing-agent.certified-contract-baseline",
-  "inventory_version": 7,
+  "inventory_version": 8,
   "local_api": {
     "contract_id": "bke.licensing-agent.local-api",
     "contract_version": 1,
@@ -37,6 +37,10 @@
       {
         "method": "POST",
         "path": "/v1/notifications/account-feed"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/notifications/account-receipt"
       },
       {
         "method": "POST",
@@ -277,7 +281,16 @@
       "local_responses_expose_cloud_tokens": false,
       "local_responses_expose_account_id": false,
       "arbitrary_data_forwarded": false,
-      "receipt_mutation_supported": false
+      "receipt_mutation_supported": true,
+      "receipt_mutation_local_request_fields": [
+        "notification_id",
+        "action"
+      ],
+      "receipt_mutation_actions": [
+        "MARK_READ",
+        "DISMISS"
+      ],
+      "receipt_authority": "bke-digital-solutions"
     }
   },
   "notifications": {
@@ -404,11 +417,12 @@
     "retry_backoff_seconds": 0.25,
     "product_broadcast_endpoint": "/api/licensing-agent/notifications",
     "product_broadcast_redirects_allowed": false,
-    "account_notification_inbox_endpoint": "/api/agent-sessions/notification-inbox"
+    "account_notification_inbox_endpoint": "/api/agent-sessions/notification-inbox",
+    "account_notification_receipt_endpoint": "/api/agent-sessions/notification-receipt"
   },
   "certification_lineage": {
     "basis": "Certified local API, capability, wire, and schema contract frozen after Gen2 convergence",
-    "schema_version": 8,
+    "schema_version": 9,
     "language_neutral": true
   },
   "convergence_guardrails": {
