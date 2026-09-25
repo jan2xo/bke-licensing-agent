@@ -14,6 +14,8 @@ using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
 var root = inventory.RootElement;
 var localApi = root.GetProperty("local_api");
 var capabilities = root.GetProperty("capabilities");
+var notificationsPolicy = root.GetProperty("notifications");
+var outboundDefaults = root.GetProperty("outbound_defaults");
 var storage = root.GetProperty("storage");
 Require(localApi.GetProperty("contract_id").GetString() == LocalAgentContract.ContractId, "contract id mismatch");
 Require(localApi.GetProperty("contract_version").GetInt32() == LocalAgentContract.ContractVersion, "contract version mismatch");
@@ -39,6 +41,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.OpenLicenseCenterPath}",
     $"POST {LocalAgentContract.RequestNotificationPath}",
     $"POST {LocalAgentContract.NotificationFeedPath}",
+    $"POST {LocalAgentContract.AccountNotificationFeedPath}",
     $"POST {LocalAgentContract.NotificationMarkReadPath}",
     $"POST {LocalAgentContract.NotificationDismissPath}",
     $"POST {LocalAgentContract.NotificationUnreadCountPath}",
@@ -169,12 +172,34 @@ Require(notificationInbox.GetProperty("contract_version").GetInt32() == LocalAge
 Require(notificationInbox.GetProperty("feed_limit_min").GetInt32() == 1, "notification feed minimum changed");
 Require(notificationInbox.GetProperty("feed_limit_max").GetInt32() == 200, "notification feed maximum changed");
 
+var accountNotificationInbox = capabilities.GetProperty("account_notification_inbox");
+Require(accountNotificationInbox.GetProperty("capability_id").GetString() == LocalAgentContract.AccountNotificationInboxCapabilityId, "account notification inbox capability id mismatch");
+Require(accountNotificationInbox.GetProperty("contract_version").GetInt32() == LocalAgentContract.AccountNotificationInboxContractVersion, "account notification inbox contract version mismatch");
+Require(accountNotificationInbox.GetProperty("account_session_required").GetBoolean(), "account notification inbox session requirement drifted");
+Require(accountNotificationInbox.GetProperty("account_scope_owner").GetString() == "bke-licensing-agent-session", "account notification scope ownership drifted");
+Require(accountNotificationInbox.GetProperty("audience_authority").GetString() == "bke-digital-solutions", "account notification audience authority drifted");
+Require(accountNotificationInbox.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["limit"]), "account notification local request widened");
+Require(accountNotificationInbox.GetProperty("feed_limit_min").GetInt32() == 1, "account notification feed minimum changed");
+Require(accountNotificationInbox.GetProperty("feed_limit_max").GetInt32() == 200, "account notification feed maximum changed");
+Require(accountNotificationInbox.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "account notification inbox cloud token exposure drifted");
+Require(accountNotificationInbox.GetProperty("local_responses_expose_account_id").GetBoolean() == false, "account notification inbox account id exposure drifted");
+Require(accountNotificationInbox.GetProperty("arbitrary_data_forwarded").GetBoolean() == false, "account notification inbox arbitrary data boundary drifted");
+Require(accountNotificationInbox.GetProperty("receipt_mutation_supported").GetBoolean() == false, "account notification inbox unexpectedly widened receipt mutation authority");
+Require(notificationsPolicy.GetProperty("account_inbox_authority").GetString() == "bke-digital-solutions", "account inbox authority metadata drifted");
+Require(notificationsPolicy.GetProperty("account_inbox_local_mediator").GetString() == "bke-licensing-agent", "account inbox mediator metadata drifted");
+Require(notificationsPolicy.GetProperty("account_notification_content_owner").GetString() == "bke-digital-solutions", "account notification content ownership drifted");
+Require(outboundDefaults.GetProperty("account_notification_inbox_endpoint").GetString() == "/api/agent-sessions/notification-inbox", "account notification endpoint metadata drifted");
+
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.ProductId)) == "product_id", "authorize product_id wire name mismatch");
 Require(JsonName<AuthorizeRequest>(nameof(AuthorizeRequest.InstallationId)) == "installation_id", "authorize installation_id wire name mismatch");
 Require(JsonName<ActivateRequest>(nameof(ActivateRequest.LicenseKey)) == "license_key", "activation license_key wire name mismatch");
 Require(JsonName<TypedNotificationRequest>(nameof(TypedNotificationRequest.Code)) == "code", "notification code wire name mismatch");
 Require(JsonName<NotificationFeedRequest>(nameof(NotificationFeedRequest.IncludeDismissed)) == "include_dismissed", "notification include_dismissed wire name mismatch");
 Require(JsonName<NotificationItem>(nameof(NotificationItem.DeliveryMode)) == "delivery_mode", "notification delivery_mode wire name mismatch");
+Require(JsonName<AccountNotificationFeedRequest>(nameof(AccountNotificationFeedRequest.Limit)) == "limit", "account notification limit wire name mismatch");
+Require(JsonName<AccountNotificationItem>(nameof(AccountNotificationItem.AudienceKind)) == "audience_kind", "account notification audience_kind wire name mismatch");
+Require(JsonName<AccountNotificationItem>(nameof(AccountNotificationItem.ProductId)) == "product_id", "account notification product_id wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.CurrentVersion)) == "current_version", "update current_version wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.RequestedVersion)) == "requested_version", "update requested_version wire name mismatch");
 Require(JsonName<AccountSessionDeviceContextRequest>(nameof(AccountSessionDeviceContextRequest.CorrelationId)) == "correlation_id", "account-session device context correlation_id wire name mismatch");
@@ -217,7 +242,7 @@ Require(JsonName<SoftwareRemoveRequest>(nameof(SoftwareRemoveRequest.ProductId))
 Require(MethodNames<IAuthorizationService>().SetEquals(["AuthorizeAsync"]), "authorization port drifted");
 Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activation port drifted");
 Require(MethodNames<ILicenseCenterService>().SetEquals(["OpenAsync"]), "License Center port drifted");
-Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
+Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "AccountFeedAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
@@ -750,6 +775,61 @@ static async Task CertifyAuthenticatedAccountNotificationSync()
         Require(received.State == "Unread", "new account notification was not unread");
         Require(handler.SawBearer, "account notification sync omitted Agent-owned bearer token");
         Require(handler.SawProtocol, "account notification sync omitted account-session protocol version");
+
+        var accountInbox = await provider.AccountFeedAsync(
+            new AccountNotificationFeedRequest(50),
+            CancellationToken.None);
+        Require(accountInbox.Status == "Succeeded", "account notification inbox bridge failed");
+        Require(accountInbox.Items.Count == 2, "account notification inbox item count drifted");
+        var principalNotice = accountInbox.Items.Single(item =>
+            item.Id == "bke-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        Require(principalNotice.Source == "payments", "account inbox source drifted");
+        Require(principalNotice.Event == "PAYMENT_RECEIVED", "account inbox event drifted");
+        Require(principalNotice.Category == "General", "account inbox category mapping drifted");
+        Require(principalNotice.Severity == "Information", "account inbox severity mapping drifted");
+        Require(principalNotice.State == "Unread", "account inbox state mapping drifted");
+        Require(principalNotice.AudienceKind == "PRINCIPAL", "account inbox audience drifted");
+        var activeClientNotice = accountInbox.Items.Single(item =>
+            item.Id == "bke-ffffffff-1111-2222-3333-444444444444");
+        Require(activeClientNotice.AudienceKind == "ALL_ACTIVE_CLIENTS", "active-client account inbox audience drifted");
+        Require(activeClientNotice.ProductId is null, "global account notification invented a product id");
+        Require(handler.SawAccountInbox, "account inbox bridge did not call the Digital Solutions account endpoint");
+
+        var accountInboxWire = JsonSerializer.Serialize(accountInbox);
+        Require(!accountInboxWire.Contains("account-access-secret", StringComparison.Ordinal), "account inbox leaked access token");
+        Require(!accountInboxWire.Contains("refresh-secret", StringComparison.Ordinal), "account inbox leaked refresh token");
+        Require(!accountInboxWire.Contains("account-1", StringComparison.Ordinal), "account inbox leaked selected cloud account id");
+        Require(!accountInboxWire.Contains("orderNumber", StringComparison.Ordinal), "account inbox forwarded arbitrary notification data");
+
+        handler.AccountInboxAccountId = "other-account";
+        try
+        {
+            _ = await provider.AccountFeedAsync(
+                new AccountNotificationFeedRequest(50),
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "account inbox accepted a cloud response for a different account");
+        }
+        catch (InvalidDataException)
+        {
+            // Selected account scope must match the Agent-owned session exactly.
+        }
+        handler.AccountInboxAccountId = "account-1";
+
+        handler.AccountInboxAudienceKind = "ADMINISTRATORS";
+        try
+        {
+            _ = await provider.AccountFeedAsync(
+                new AccountNotificationFeedRequest(50),
+                CancellationToken.None);
+            throw new InvalidOperationException(
+                "account inbox accepted administrator audience content");
+        }
+        catch (InvalidDataException)
+        {
+            // Launcher-facing account inbox never widens into admin operations.
+        }
+        handler.AccountInboxAudienceKind = "PRINCIPAL";
 
         var marked = await provider.MarkReadAsync(
             new NotificationMutationRequest(
@@ -2438,6 +2518,9 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
 {
     public bool SawBearer { get; private set; }
     public bool SawProtocol { get; private set; }
+    public bool SawAccountInbox { get; private set; }
+    public string AccountInboxAccountId { get; set; } = "account-1";
+    public string AccountInboxAudienceKind { get; set; } = "PRINCIPAL";
 
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
@@ -2460,6 +2543,80 @@ sealed class FakeNotificationAuthorityHandler : HttpMessageHandler
                   "broadcasts":[]
                 }
                 """));
+        }
+
+        if (path == "/api/agent-sessions/notification-inbox")
+        {
+            SawBearer =
+                request.Headers.Authorization?.Scheme == "Bearer" &&
+                request.Headers.Authorization.Parameter == "account-access-secret";
+            SawProtocol =
+                request.Headers.TryGetValues(
+                    "x-bke-account-session-version",
+                    out var accountVersions) &&
+                accountVersions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+            SawAccountInbox =
+                request.RequestUri?.Query.Contains(
+                    "limit=50",
+                    StringComparison.Ordinal) == true;
+
+            if (!SawBearer || !SawProtocol || !SawAccountInbox)
+            {
+                return Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            }
+
+            var response = JsonResponse(
+                """
+                {
+                  "status":"ok",
+                  "account_id":"__ACCOUNT_ID__",
+                  "notifications":[
+                    {
+                      "id":"bke-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                      "source":"payments",
+                      "event":"PAYMENT_RECEIVED",
+                      "title":"Payment received",
+                      "body":"Payment for order TEST-ACCOUNT was confirmed.",
+                      "category":"TRANSACTIONAL",
+                      "priority":"NORMAL",
+                      "state":"UNREAD",
+                      "audience_kind":"__AUDIENCE_KIND__",
+                      "product_id":"bke-render-dock",
+                      "created_at":"2026-09-25T08:00:00.000Z",
+                      "expires_at":null,
+                      "data":{"orderNumber":"TEST-ACCOUNT"}
+                    },
+                    {
+                      "id":"bke-ffffffff-1111-2222-3333-444444444444",
+                      "source":"operations",
+                      "event":"BETA_ENDED",
+                      "title":"Beta period ended",
+                      "body":"Commercial licensing now applies.",
+                      "category":"CUSTOM",
+                      "priority":"HIGH",
+                      "state":"UNREAD",
+                      "audience_kind":"ALL_ACTIVE_CLIENTS",
+                      "product_id":null,
+                      "created_at":"2026-09-25T08:01:00.000Z",
+                      "expires_at":null,
+                      "data":{"ignored":"not-forwarded"}
+                    }
+                  ]
+                }
+                """
+                .Replace(
+                    "__ACCOUNT_ID__",
+                    AccountInboxAccountId,
+                    StringComparison.Ordinal)
+                .Replace(
+                    "__AUDIENCE_KIND__",
+                    AccountInboxAudienceKind,
+                    StringComparison.Ordinal));
+            response.Headers.TryAddWithoutValidation(
+                "x-bke-account-session-version",
+                AccountSessionRemote.ProtocolVersion);
+            return Task.FromResult(response);
         }
 
         if (path == "/api/agent-sessions/notifications")

@@ -10,6 +10,7 @@ public sealed class NotificationEndpointMiddleware
     {
         LocalAgentContract.RequestNotificationPath,
         LocalAgentContract.NotificationFeedPath,
+        LocalAgentContract.AccountNotificationFeedPath,
         LocalAgentContract.NotificationMarkReadPath,
         LocalAgentContract.NotificationDismissPath,
         LocalAgentContract.NotificationUnreadCountPath,
@@ -30,6 +31,7 @@ public sealed class NotificationEndpointMiddleware
 
         context.Response.Headers.CacheControl = "no-store";
         var typed = string.Equals(path, LocalAgentContract.RequestNotificationPath, StringComparison.Ordinal);
+        var accountFeed = string.Equals(path, LocalAgentContract.AccountNotificationFeedPath, StringComparison.Ordinal);
 
         if (context.Request.Headers.ContainsKey("Origin"))
         {
@@ -39,7 +41,7 @@ public sealed class NotificationEndpointMiddleware
             }
             else
             {
-                await InboxFailure(context, 403, "Rejected", "Browser-origin requests are not allowed.", false);
+                await NotificationFailure(context, accountFeed, 403, "Rejected", "Browser-origin requests are not allowed.", false);
             }
             return;
         }
@@ -53,7 +55,7 @@ public sealed class NotificationEndpointMiddleware
             }
             else
             {
-                await InboxFailure(context, 415, "InvalidRequest", "Notification requests must use application/json.", false);
+                await NotificationFailure(context, accountFeed, 415, "InvalidRequest", "Notification requests must use application/json.", false);
             }
             return;
         }
@@ -124,7 +126,7 @@ public sealed class NotificationEndpointMiddleware
             }
             else
             {
-                await InboxFailure(context, 400, "InvalidRequest", "Invalid notification request.", false);
+                await NotificationFailure(context, accountFeed, 400, "InvalidRequest", "Invalid notification request.", false);
             }
             return;
         }
@@ -141,7 +143,7 @@ public sealed class NotificationEndpointMiddleware
                     }
                     else
                     {
-                        await InboxFailure(context, 400, "InvalidRequest", "Invalid notification product context.", false);
+                        await NotificationFailure(context, accountFeed, 400, "InvalidRequest", "Invalid notification request.", false);
                     }
                     return;
                 }
@@ -149,6 +151,10 @@ public sealed class NotificationEndpointMiddleware
                 if (typed)
                 {
                     await HandleTyped(context, service, document.RootElement);
+                }
+                else if (accountFeed)
+                {
+                    await HandleAccountFeed(context, service, document.RootElement);
                 }
                 else
                 {
@@ -167,7 +173,7 @@ public sealed class NotificationEndpointMiddleware
                 }
                 else
                 {
-                    await InboxFailure(context, 500, "Unknown", "The notification provider failed.", true);
+                    await NotificationFailure(context, accountFeed, 500, "Unknown", "The notification provider failed.", true);
                 }
             }
         }
@@ -189,6 +195,34 @@ public sealed class NotificationEndpointMiddleware
             new TypedNotificationRequest(productId!, version!, installationId!, code!),
             context.RequestAborted);
         await WriteJson(context, 200, result);
+    }
+
+    private static async Task HandleAccountFeed(
+        HttpContext context,
+        INotificationService service,
+        JsonElement body)
+    {
+        if (!HasExactKeys(body, "limit") ||
+            !body.TryGetProperty("limit", out var limitElement) ||
+            limitElement.ValueKind != JsonValueKind.Number ||
+            !limitElement.TryGetInt32(out var limit) ||
+            limit is < 1 or > 200)
+        {
+            await AccountInboxFailure(
+                context,
+                400,
+                "InvalidRequest",
+                "Invalid account notification feed request.",
+                false);
+            return;
+        }
+
+        await WriteJson(
+            context,
+            200,
+            await service.AccountFeedAsync(
+                new AccountNotificationFeedRequest(limit),
+                context.RequestAborted));
     }
 
     private static async Task HandleInbox(
@@ -313,6 +347,30 @@ public sealed class NotificationEndpointMiddleware
             LocalAgentContract.NotificationInboxContractVersion,
             "Failed",
             new NotificationCapabilityError(code, message, retryable)));
+
+    private static Task AccountInboxFailure(
+        HttpContext context,
+        int statusCode,
+        string code,
+        string message,
+        bool retryable) =>
+        WriteJson(context, statusCode, new AccountNotificationFeedResponse(
+            LocalAgentContract.AccountNotificationInboxCapabilityId,
+            LocalAgentContract.AccountNotificationInboxContractVersion,
+            "Failed",
+            Array.Empty<AccountNotificationItem>(),
+            new NotificationCapabilityError(code, message, retryable)));
+
+    private static Task NotificationFailure(
+        HttpContext context,
+        bool accountFeed,
+        int statusCode,
+        string code,
+        string message,
+        bool retryable) =>
+        accountFeed
+            ? AccountInboxFailure(context, statusCode, code, message, retryable)
+            : InboxFailure(context, statusCode, code, message, retryable);
 
     private static async Task WriteJson<T>(HttpContext context, int statusCode, T body)
     {

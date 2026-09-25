@@ -18,6 +18,7 @@ public static class LocalAgentContract
     public const string OpenLicenseCenterPath = "/v1/license-center/open";
     public const string RequestNotificationPath = "/v1/notifications/request";
     public const string NotificationFeedPath = "/v1/notifications/feed";
+    public const string AccountNotificationFeedPath = "/v1/notifications/account-feed";
     public const string NotificationMarkReadPath = "/v1/notifications/mark-read";
     public const string NotificationDismissPath = "/v1/notifications/dismiss";
     public const string NotificationUnreadCountPath = "/v1/notifications/unread-count";
@@ -47,6 +48,8 @@ public static class LocalAgentContract
     public const int TypedNotificationContractVersion = 1;
     public const string NotificationInboxCapabilityId = "bke.notifications";
     public const int NotificationInboxContractVersion = 1;
+    public const string AccountNotificationInboxCapabilityId = "bke.account-notifications";
+    public const int AccountNotificationInboxContractVersion = 1;
     public const string AccountSessionCapabilityId = "bke.account-session";
     public const int AccountSessionContractVersion = 1;
     public const string SoftwareCatalogCapabilityId = "bke.software-catalog";
@@ -159,6 +162,30 @@ public sealed record NotificationFeedResponse(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("items")] IReadOnlyList<NotificationItem> Items,
     [property: JsonPropertyName("error")] NotificationCapabilityError? Error);
+
+public sealed record AccountNotificationFeedRequest(
+    [property: JsonPropertyName("limit")] int Limit);
+
+public sealed record AccountNotificationItem(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("event")] string Event,
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("body")] string Body,
+    [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("audience_kind")] string AudienceKind,
+    [property: JsonPropertyName("product_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ProductId,
+    [property: JsonPropertyName("created_at")] string CreatedAt,
+    [property: JsonPropertyName("expires_at"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExpiresAt);
+
+public sealed record AccountNotificationFeedResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("items")] IReadOnlyList<AccountNotificationItem> Items,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] NotificationCapabilityError? Error);
 
 public sealed record NotificationMutationResponse(
     [property: JsonPropertyName("capability_id")] string CapabilityId,

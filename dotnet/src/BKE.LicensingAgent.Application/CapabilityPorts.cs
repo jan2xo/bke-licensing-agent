@@ -24,6 +24,8 @@ public interface INotificationService
 
     Task<NotificationFeedResponse> FeedAsync(NotificationFeedRequest request, CancellationToken cancellationToken);
 
+    Task<AccountNotificationFeedResponse> AccountFeedAsync(AccountNotificationFeedRequest request, CancellationToken cancellationToken);
+
     Task<NotificationMutationResponse> MarkReadAsync(NotificationMutationRequest request, CancellationToken cancellationToken);
 
     Task<NotificationMutationResponse> DismissAsync(NotificationMutationRequest request, CancellationToken cancellationToken);
