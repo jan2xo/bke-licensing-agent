@@ -1,6 +1,12 @@
 name: UTM disposable Render Dock target trust
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/utm-disposable-target-trust.yml"
+      - "certification/utm/**"
+      - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
   workflow_call:
     inputs:
       source_sha:
@@ -18,11 +24,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: utm-disposable-target-trust-${{ inputs.source_sha }}
+  group: utm-disposable-target-trust-${{ inputs.source_sha || github.sha }}
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: ${{ inputs.source_sha }}
+  SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
 
 jobs:
   disposable-render-dock-trust:
