@@ -26,6 +26,8 @@ var utmPrepareSource = File.ReadAllText(
     Path.Combine("certification", "utm", "Prepare-BkeAgent-UtmEnvironment.ps1"));
 var utmWorkflowSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
+var intentCertificationSource = File.ReadAllText(
+    Path.Combine(".github", "workflows", "certify.yml"));
 
 Require(
     utmRunbookSource.Contains("BKE parent installer", StringComparison.OrdinalIgnoreCase),
@@ -65,6 +67,10 @@ Require(
     utmWorkflowSource.Contains("branches: [main]", StringComparison.Ordinal) &&
     utmWorkflowSource.Contains("certification/utm/**", StringComparison.Ordinal),
     "UTM trust bundle is not emitted from relevant merged-main changes.");
+Require(
+    intentCertificationSource.Contains("\"utm-trust\"", StringComparison.Ordinal) &&
+    intentCertificationSource.Contains("uses: ./.github/workflows/utm-disposable-target-trust.yml", StringComparison.Ordinal),
+    "Intent certification planner does not expose the UTM trust ownership target.");
 Require(localApi.GetProperty("contract_id").GetString() == LocalAgentContract.ContractId, "contract id mismatch");
 Require(localApi.GetProperty("contract_version").GetInt32() == LocalAgentContract.ContractVersion, "contract version mismatch");
 Require(localApi.GetProperty("bind_host").GetString() == LocalAgentContract.BindHost, "bind host mismatch");
