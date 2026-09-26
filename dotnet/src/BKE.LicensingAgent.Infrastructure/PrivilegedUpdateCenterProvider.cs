@@ -26,6 +26,8 @@ public sealed class PrivilegedUpdateCenterProvider :
     private const string UpdatePackageContentType = "application/vnd.bke.update-package+zip";
     private const long MaximumStandalonePackageBytes = 4L * 1024 * 1024 * 1024;
     private const int MaximumReleaseMetadataBytes = 64 * 1024;
+    private static readonly TimeSpan GitHubControlRequestTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan GitHubAssetTransferTimeout = TimeSpan.FromMinutes(8);
     private static readonly Uri GitHubApiBaseUri = new("https://api.github.com/", UriKind.Absolute);
     private static readonly HashSet<string> ApprovedGitHubAssetHosts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -105,7 +107,7 @@ public sealed class PrivilegedUpdateCenterProvider :
         _platformBaseUri = baseUri;
         _http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
         {
-            Timeout = TimeSpan.FromSeconds(30),
+            Timeout = Timeout.InfiniteTimeSpan,
         };
     }
 
@@ -1211,10 +1213,15 @@ public sealed class PrivilegedUpdateCenterProvider :
             "X-GitHub-Api-Version",
             "2022-11-28");
 
+        using var requestTimeoutSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestTimeoutSource.CancelAfter(GitHubControlRequestTimeout);
+        var requestToken = requestTimeoutSource.Token;
+
         using var response = await _http.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+            requestToken);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -1232,10 +1239,10 @@ public sealed class PrivilegedUpdateCenterProvider :
         }
 
         await using var stream =
-            await response.Content.ReadAsStreamAsync(cancellationToken);
+            await response.Content.ReadAsStreamAsync(requestToken);
         using var document = await JsonDocument.ParseAsync(
             stream,
-            cancellationToken: cancellationToken);
+            cancellationToken: requestToken);
         var root = document.RootElement;
 
         if (root.ValueKind != JsonValueKind.Object ||
@@ -1431,9 +1438,14 @@ public sealed class PrivilegedUpdateCenterProvider :
         int maximumBytes,
         CancellationToken cancellationToken)
     {
+        using var transferTimeoutSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        transferTimeoutSource.CancelAfter(GitHubControlRequestTimeout);
+        var transferToken = transferTimeoutSource.Token;
+
         using var response = await SendGitHubAssetAsync(
             new Uri(url, UriKind.Absolute),
-            cancellationToken);
+            transferToken);
 
         if (response.Content.Headers.ContentLength is long announced &&
             announced > maximumBytes)
@@ -1445,7 +1457,7 @@ public sealed class PrivilegedUpdateCenterProvider :
         }
 
         await using var input =
-            await response.Content.ReadAsStreamAsync(cancellationToken);
+            await response.Content.ReadAsStreamAsync(transferToken);
         using var output = new MemoryStream();
         var buffer = new byte[16 * 1024];
 
@@ -1490,6 +1502,11 @@ public sealed class PrivilegedUpdateCenterProvider :
         string expectedSha256,
         CancellationToken cancellationToken)
     {
+        using var transferTimeoutSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        transferTimeoutSource.CancelAfter(GitHubAssetTransferTimeout);
+        var transferToken = transferTimeoutSource.Token;
+
         if (expectedSize <= 0 ||
             expectedSize > MaximumStandalonePackageBytes ||
             !HashPattern.IsMatch(expectedSha256))
@@ -1505,7 +1522,7 @@ public sealed class PrivilegedUpdateCenterProvider :
         {
             using var response = await SendGitHubAssetAsync(
                 new Uri(url, UriKind.Absolute),
-                cancellationToken);
+                transferToken);
 
             if (response.Content.Headers.ContentLength is long announced &&
                 announced > expectedSize)
@@ -1515,7 +1532,7 @@ public sealed class PrivilegedUpdateCenterProvider :
             }
 
             await using var input =
-                await response.Content.ReadAsStreamAsync(cancellationToken);
+                await response.Content.ReadAsStreamAsync(transferToken);
             await using var output = File.Create(temporary);
             using var hash =
                 IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -1535,7 +1552,7 @@ public sealed class PrivilegedUpdateCenterProvider :
                     buffer.AsMemory(
                         0,
                         (int)Math.Min(buffer.Length, remaining)),
-                    cancellationToken);
+                    transferToken);
                 if (read == 0)
                 {
                     break;
@@ -1551,7 +1568,7 @@ public sealed class PrivilegedUpdateCenterProvider :
                 hash.AppendData(buffer, 0, read);
                 await output.WriteAsync(
                     buffer.AsMemory(0, read),
-                    cancellationToken);
+                    transferToken);
             }
 
             var digest =
@@ -1657,6 +1674,11 @@ public sealed class PrivilegedUpdateCenterProvider :
         string expectedSha256,
         CancellationToken cancellationToken)
     {
+        using var transferTimeoutSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        transferTimeoutSource.CancelAfter(GitHubAssetTransferTimeout);
+        var transferToken = transferTimeoutSource.Token;
+
         if (expectedSize < 0 || !HashPattern.IsMatch(expectedSha256))
         {
             throw new InvalidDataException("invalid artifact bounds");
@@ -1676,13 +1698,13 @@ public sealed class PrivilegedUpdateCenterProvider :
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, transferToken);
             response.EnsureSuccessStatusCode();
             if (response.Content.Headers.ContentLength is long announced && announced > expectedSize)
             {
                 throw new InvalidDataException("artifact exceeds bounded size");
             }
-            await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
+            await using var input = await response.Content.ReadAsStreamAsync(transferToken);
             await using var output = File.Create(temporary);
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var buffer = new byte[1024 * 1024];
@@ -1691,12 +1713,12 @@ public sealed class PrivilegedUpdateCenterProvider :
             {
                 var remaining = expectedSize - count + 1;
                 if (remaining <= 0) throw new InvalidDataException("artifact exceeds bounded size");
-                var read = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken);
+                var read = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), transferToken);
                 if (read == 0) break;
                 count += read;
                 if (count > expectedSize) throw new InvalidDataException("artifact exceeds bounded size");
                 hash.AppendData(buffer, 0, read);
-                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                await output.WriteAsync(buffer.AsMemory(0, read), transferToken);
             }
             if (count != expectedSize ||
                 !string.Equals(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), expectedSha256.ToLowerInvariant(), StringComparison.Ordinal))
