@@ -1,6 +1,22 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = ".\BKE-UTM-EVIDENCE"
+    [string]$OutputDirectory = ".\BKE-UTM-EVIDENCE",
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[0-9a-fA-F]{40}$")]
+    [string]$DigitalSolutionsSourceSha,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[0-9a-fA-F]{40}$")]
+    [string]$LauncherSourceSha,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[0-9a-fA-F]{40}$")]
+    [string]$AgentSourceSha,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[0-9a-fA-F]{64}$")]
+    [string]$ParentInstallerSha256
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +42,15 @@ function Invoke-AgentPost([string]$Path, [object]$Body) {
         }
     }
 }
+
+Write-JsonEvidence "00-stack-provenance.json" ([ordered]@{
+    captured_at = [DateTimeOffset]::UtcNow.ToString("O")
+    digital_solutions_source_sha = $DigitalSolutionsSourceSha.ToLowerInvariant()
+    launcher_source_sha = $LauncherSourceSha.ToLowerInvariant()
+    agent_source_sha = $AgentSourceSha.ToLowerInvariant()
+    parent_installer_sha256 = $ParentInstallerSha256.ToLowerInvariant()
+    certification_state = "PREPRODUCTION_DISPOSABLE_UTM"
+})
 
 $runtimeArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 $architecture = if ($null -ne $runtimeArchitecture) {
@@ -93,7 +118,6 @@ if (Test-Path $configPath) {
 Write-JsonEvidence "06-privileged-config.json" $configEvidence
 
 $trustMarker = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\UTM-TEST-ONLY-Render-Dock-target-trust.txt"
-Write-Host "[07/09] Capturing UTM target-trust marker..."
 $markerExists = [IO.File]::Exists($trustMarker)
 $markerContent = if ($markerExists) {
     [IO.File]::ReadAllText($trustMarker)
@@ -104,7 +128,6 @@ Write-JsonEvidence "07-utm-target-trust.json" ([ordered]@{
     marker_exists = $markerExists
     marker = $markerContent
 })
-Write-Host "[07/09] UTM target-trust marker captured."
 
 $agentEnvPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\.env"
 $environmentEvidence = [ordered]@{
@@ -162,6 +185,31 @@ Write-JsonEvidence "09-render-dock-local.json" ([ordered]@{
         $null
     }
 })
+
+$bkeRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\BKE"
+$bkeEntryPoint = Join-Path $bkeRoot "bke-launcher.exe"
+$bkeItem = if (Test-Path $bkeEntryPoint -PathType Leaf) {
+    Get-Item -LiteralPath $bkeEntryPoint
+} else {
+    $null
+}
+Write-JsonEvidence "10-bke-installation.json" ([ordered]@{
+    bke_root = $bkeRoot
+    bke_root_exists = Test-Path $bkeRoot
+    launcher_exists = $null -ne $bkeItem
+    launcher_sha256 = if ($bkeItem) {
+        (Get-FileHash -LiteralPath $bkeItem.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else {
+        $null
+    }
+    launcher_file_version = if ($bkeItem) { $bkeItem.VersionInfo.FileVersion } else { $null }
+    launcher_product_version = if ($bkeItem) { $bkeItem.VersionInfo.ProductVersion } else { $null }
+})
+
+$notifications = Invoke-AgentPost "/v1/notifications/account-feed" ([ordered]@{
+    limit = 50
+})
+Write-JsonEvidence "11-notification-inbox.json" $notifications
 
 Get-ChildItem -LiteralPath $OutputDirectory -File |
     Sort-Object Name |

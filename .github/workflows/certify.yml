@@ -42,7 +42,7 @@ jobs:
           DISPATCH_TARGETS: ${{ inputs.targets }}
         with:
           script: |
-            const allowedTargets = ["contracts"];
+            const allowedTargets = ["contracts", "utm-trust"];
             let sourceSha;
             let requested;
 
@@ -83,7 +83,7 @@ jobs:
             const unknown = tokens.filter(target => !allowedTargets.includes(target));
             if (tokens.length === 0 || unknown.length > 0) {
               core.setFailed(
-                `Allowed certification target: contracts. Requested: ${tokens.join(", ") || "none"}.`,
+                `Allowed certification targets: ${allowedTargets.join(", ")}. Requested: ${tokens.join(", ") || "none"}.`,
               );
               return;
             }
@@ -103,22 +103,33 @@ jobs:
     with:
       source_sha: ${{ needs.plan.outputs.source_sha }}
 
+  utm-trust:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'utm-trust')
+    uses: ./.github/workflows/utm-disposable-target-trust.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
   required-certification:
     name: Required certification
     if: always() && needs.plan.result == 'success'
-    needs: [plan, contracts]
+    needs: [plan, contracts, utm-trust]
     runs-on: ubuntu-latest
     env:
       SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
       TARGETS_JSON: ${{ needs.plan.outputs.targets_json }}
       CONTRACTS_RESULT: ${{ needs.contracts.result }}
+      UTM_TRUST_RESULT: ${{ needs.utm-trust.result }}
     steps:
       - name: Verify declared certification plan
         shell: bash
         run: |
           node <<'NODE'
           const targets = JSON.parse(process.env.TARGETS_JSON);
-          const results = { contracts: process.env.CONTRACTS_RESULT };
+          const results = {
+            contracts: process.env.CONTRACTS_RESULT,
+            "utm-trust": process.env.UTM_TRUST_RESULT,
+          };
           const failed = targets
             .filter(target => results[target] !== "success")
             .map(target => `${target}=${results[target] ?? "missing"}`);

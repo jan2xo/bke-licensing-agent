@@ -17,6 +17,60 @@ var capabilities = root.GetProperty("capabilities");
 var notificationsPolicy = root.GetProperty("notifications");
 var outboundDefaults = root.GetProperty("outbound_defaults");
 var storage = root.GetProperty("storage");
+
+var utmRunbookSource = File.ReadAllText(
+    Path.Combine("certification", "utm", "README-BKE-Launcher-Utm-E2E.md"));
+var utmEvidenceSource = File.ReadAllText(
+    Path.Combine("certification", "utm", "Collect-BkeLauncher-UtmEvidence.ps1"));
+var utmPrepareSource = File.ReadAllText(
+    Path.Combine("certification", "utm", "Prepare-BkeAgent-UtmEnvironment.ps1"));
+var utmWorkflowSource = File.ReadAllText(
+    Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
+var intentCertificationSource = File.ReadAllText(
+    Path.Combine(".github", "workflows", "certify.yml"));
+
+Require(
+    utmRunbookSource.Contains("BKE parent installer", StringComparison.OrdinalIgnoreCase),
+    "UTM runbook no longer treats BKE as the customer-facing parent install unit.");
+Require(
+    utmRunbookSource.Contains("Sign in with BKE", StringComparison.Ordinal),
+    "UTM runbook no longer certifies native Launcher sign-in.");
+Require(
+    !utmRunbookSource.Contains("Complete browser approval", StringComparison.Ordinal),
+    "UTM runbook regressed to browser/device-code approval.");
+Require(
+    utmRunbookSource.Contains("CLAIM_CODE_CHECKOUT_ENABLED=false", StringComparison.Ordinal) &&
+    utmRunbookSource.Contains("AGENT_ACCOUNT_SESSION_ENABLED=true", StringComparison.Ordinal),
+    "UTM runbook disposable feature flags drifted.");
+Require(
+    utmEvidenceSource.Contains("[string]$DigitalSolutionsSourceSha", StringComparison.Ordinal) &&
+    utmEvidenceSource.Contains("[string]$LauncherSourceSha", StringComparison.Ordinal) &&
+    utmEvidenceSource.Contains("[string]$AgentSourceSha", StringComparison.Ordinal) &&
+    utmEvidenceSource.Contains("[string]$ParentInstallerSha256", StringComparison.Ordinal),
+    "UTM evidence is not bound to exact stack provenance.");
+Require(
+    utmEvidenceSource.Contains("/v1/notifications/account-feed", StringComparison.Ordinal) &&
+    utmEvidenceSource.Contains("10-bke-installation.json", StringComparison.Ordinal) &&
+    utmEvidenceSource.Contains("11-notification-inbox.json", StringComparison.Ordinal),
+    "UTM evidence no longer captures BKE installation and Agent-projected notifications.");
+Require(
+    utmPrepareSource.Contains("jl-bke.com", StringComparison.OrdinalIgnoreCase) &&
+    utmPrepareSource.Contains("production jl-bke.com authority", StringComparison.OrdinalIgnoreCase),
+    "UTM Agent environment no longer fails closed against production authority.");
+Require(
+    utmWorkflowSource.Contains("SOURCE_SHA: ${{ inputs.source_sha || github.sha }}", StringComparison.Ordinal) &&
+    utmWorkflowSource.Contains("ref: ${{ env.SOURCE_SHA }}", StringComparison.Ordinal) &&
+    utmWorkflowSource.Contains("test \"$(git rev-parse HEAD)\" = \"$SOURCE_SHA\"", StringComparison.Ordinal) &&
+    utmWorkflowSource.Contains("\"$SOURCE_SHA\" > \"$root/SOURCE-SHA.txt\"", StringComparison.Ordinal),
+    "UTM trust bundle is not exact-source bound.");
+Require(
+    utmWorkflowSource.Contains("branches: [main]", StringComparison.Ordinal) &&
+    utmWorkflowSource.Contains("certification/utm/**", StringComparison.Ordinal),
+    "UTM trust bundle is not emitted from relevant merged-main changes.");
+Require(
+    intentCertificationSource.Contains("\"utm-trust\"", StringComparison.Ordinal) &&
+    intentCertificationSource.Contains("uses: ./.github/workflows/utm-disposable-target-trust.yml", StringComparison.Ordinal),
+    "Intent certification planner does not expose the UTM trust ownership target.");
 Require(localApi.GetProperty("contract_id").GetString() == LocalAgentContract.ContractId, "contract id mismatch");
 Require(localApi.GetProperty("contract_version").GetInt32() == LocalAgentContract.ContractVersion, "contract version mismatch");
 Require(localApi.GetProperty("bind_host").GetString() == LocalAgentContract.BindHost, "bind host mismatch");
