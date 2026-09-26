@@ -28,6 +28,12 @@ var utmWorkflowSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
 var intentCertificationSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "certify.yml"));
+var privilegedUpdateCenterSource = File.ReadAllText(
+    Path.Combine(
+        "dotnet",
+        "src",
+        "BKE.LicensingAgent.Infrastructure",
+        "PrivilegedUpdateCenterProvider.cs"));
 
 Require(
     utmRunbookSource.Contains("BKE parent installer", StringComparison.OrdinalIgnoreCase),
@@ -71,6 +77,20 @@ Require(
     intentCertificationSource.Contains("\"utm-trust\"", StringComparison.Ordinal) &&
     intentCertificationSource.Contains("uses: ./.github/workflows/utm-disposable-target-trust.yml", StringComparison.Ordinal),
     "Intent certification planner does not expose the UTM trust ownership target.");
+Require(
+    privilegedUpdateCenterSource.Contains(
+        "Timeout = Timeout.InfiniteTimeSpan",
+        StringComparison.Ordinal) &&
+    privilegedUpdateCenterSource.Contains(
+        "GitHubControlRequestTimeout = TimeSpan.FromSeconds(30)",
+        StringComparison.Ordinal) &&
+    privilegedUpdateCenterSource.Contains(
+        "GitHubAssetTransferTimeout = TimeSpan.FromMinutes(8)",
+        StringComparison.Ordinal) &&
+    privilegedUpdateCenterSource.Contains(
+        "transferTimeoutSource.CancelAfter(GitHubAssetTransferTimeout)",
+        StringComparison.Ordinal),
+    "Standalone release acquisition regressed to an unbounded or control-plane-sized package timeout.");
 Require(localApi.GetProperty("contract_id").GetString() == LocalAgentContract.ContractId, "contract id mismatch");
 Require(localApi.GetProperty("contract_version").GetInt32() == LocalAgentContract.ContractVersion, "contract version mismatch");
 Require(localApi.GetProperty("bind_host").GetString() == LocalAgentContract.BindHost, "bind host mismatch");
