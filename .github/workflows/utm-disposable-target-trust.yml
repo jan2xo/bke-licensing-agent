@@ -1,10 +1,28 @@
 name: UTM disposable Render Dock target trust
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Licensing Agent source SHA to certify
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Licensing Agent source SHA to certify
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+concurrency:
+  group: utm-disposable-target-trust-${{ inputs.source_sha }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha }}
 
 jobs:
   disposable-render-dock-trust:
@@ -12,6 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -57,7 +81,7 @@ jobs:
           cp certification/utm/README-RenderDock-UtmTargetTrust.md "$root/README.md"
           cp certification/utm/README-BKE-Launcher-Utm-E2E.md "$root/UTM-E2E-RUNBOOK.md"
           cp certification/utm/Collect-BkeLauncher-UtmEvidence.ps1 "$root/"
-          printf '%s\n' "$GITHUB_SHA" > "$root/SOURCE-SHA.txt"
+          printf '%s\n' "$SOURCE_SHA" > "$root/SOURCE-SHA.txt"
 
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
             --configuration Release --no-build -- \
