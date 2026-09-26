@@ -1672,10 +1672,10 @@ public sealed class PrivilegedUpdateCenterProvider :
         string destination,
         long expectedSize,
         string expectedSha256,
-        CancellationToken transferToken)
+        CancellationToken cancellationToken)
     {
         using var transferTimeoutSource =
-            CancellationTokenSource.CreateLinkedTokenSource(transferToken);
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         transferTimeoutSource.CancelAfter(GitHubAssetTransferTimeout);
         var transferToken = transferTimeoutSource.Token;
 
