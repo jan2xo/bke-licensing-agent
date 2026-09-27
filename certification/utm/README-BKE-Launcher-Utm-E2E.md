@@ -147,10 +147,12 @@ The helper must reject `jl-bke.com` and every `*.jl-bke.com` authority.
 
 ## Phase C — install BKE as the root product
 
-Use the architecture-correct PREPRODUCTION parent installer. On Windows ARM64:
+Use the single Windows x64 PREPRODUCTION parent installer. On a Windows ARM64 UTM guest,
+run this same x64 BKE/Agent stack through Windows x64 compatibility. Do not look for or
+certify a separate native ARM64 BKE package.
 
 ```powershell
-$installer = Resolve-Path .\BKE-*-PREPRODUCTION-Windows-arm64.exe
+$installer = Resolve-Path .\BKE-*-PREPRODUCTION-Windows.exe
 $installerHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 $installerHash
 Start-Process -FilePath $installer -Verb RunAs -Wait
@@ -171,7 +173,7 @@ After the parent install creates the privileged Agent configuration, install the
 disposable Render Dock target trust:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Install-RenderDock-UtmTargetTrust.ps1 -Architecture arm64
+powershell -ExecutionPolicy Bypass -File .\Install-RenderDock-UtmTargetTrust.ps1 -Architecture x64
 ```
 
 Capture pre-login evidence with the exact stack provenance:
@@ -192,6 +194,8 @@ Expected before login:
 - Agent loopback is healthy;
 - Agent environment is `utm`;
 - Agent authority host is `bke-v3.test`;
+- Agent `/v1/runtime/platform-authority` reports `READY`, environment `utm`, and the same disposable origin;
+- the recorded Agent authority matches the canonical ProgramData `.env`;
 - production authority is false;
 - disposable target-trust marker exists;
 - account session is not authenticated yet;
@@ -226,7 +230,9 @@ In BKE:
 4. if account selection is offered, select the intended disposable account;
 5. confirm the Launcher reports `AUTHENTICATED`.
 
-There is no browser/device-code approval in this path.
+There is no browser/device-code approval in this path. BKE must not require a
+Launcher-side `BKE_PLATFORM_BASE_URL` shell variable; native login inherits the
+platform origin from the Agent loopback authority contract.
 
 Open BKE License Center separately and confirm it sees the same Agent-owned account
 without another login.
@@ -276,8 +282,7 @@ Required Digital Solutions catalog state:
 - `launcherExecutionType = STANDALONE`;
 - stable/LTS ProductVersion `1.0.2`;
 - operating system compatible with Windows;
-- architecture `universal` is preferred for one release containing both x64 and
-  ARM64 assets;
+- architecture compatible with the canonical Windows x64 product release;
 - active current entitlement for the selected disposable account.
 
 Do not create duplicate `ProductVersion 1.0.2` rows for architectures.
@@ -290,11 +295,11 @@ gates. Do not bypass `RELEASE_COMPATIBILITY_EDIT_REQUIRES_UNPUBLISH`.
 ## Phase H — GitHub release gate
 
 The stable GitHub release `v1.0.2` in `jan2xo/BKE_RENDER_DOCK` must contain the
-architecture-specific updater metadata and ZIP. For ARM64:
+canonical Windows x64 updater metadata and ZIP:
 
 ```text
-Render-Dock-1.0.2-Windows-arm64.update.json
-Render-Dock-1.0.2-Windows-arm64.update.zip
+Render-Dock-1.0.2-Windows-x64.update.json
+Render-Dock-1.0.2-Windows-x64.update.zip
 ```
 
 The Agent resolves the exact GitHub Release tag. A workflow artifact alone is not a
@@ -309,7 +314,7 @@ Expected Agent path:
 1. verify current account entitlement and requested product/version with Digital
    Solutions;
 2. resolve exact GitHub release `v1.0.2`;
-3. resolve ARM64 metadata + ZIP;
+3. resolve x64 metadata + ZIP;
 4. verify release metadata identity;
 5. verify artifact size + SHA-256;
 6. verify disposable signed target policy;
@@ -403,6 +408,7 @@ Keep:
 - privileged configuration projection;
 - disposable target-trust marker;
 - safe Agent environment projection;
+- Agent platform-authority loopback projection + equality with the ProgramData environment;
 - Render Dock local existence + entry-point SHA-256;
 - BKE Launcher existence + SHA-256/version;
 - Agent-projected notification inbox;
