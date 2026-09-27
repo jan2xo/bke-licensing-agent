@@ -62,7 +62,7 @@ jobs:
         run: |
           dotnet run             --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj             --configuration Release
 
-      - name: Export real V2 signed x64 + ARM64 authority fixtures
+      - name: Export real V2 signed authority fixtures
         working-directory: .ci/bke-digital-solutions
         run: |
           npx tsx scripts/certify-licensing-agent-signed-update.ts "${RUNNER_TEMP}/phase9-authority-fixture.json"
