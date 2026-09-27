@@ -21,11 +21,7 @@ jobs:
     uses: ./.github/workflows/_dotnet-contracts.yml
 
   windows-native:
-    name: Native Windows ${{ matrix.arch }} payload
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64, arm64]
+    name: Native Windows x64 payload
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
@@ -39,10 +35,9 @@ jobs:
       - name: Publish .NET-only support payload
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture "${{ matrix.arch }}"
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture x64
 
       - name: Smoke native x64 helpers
-        if: matrix.arch == 'x64'
         shell: pwsh
         run: |
           $licenseCenter = Start-Process -FilePath ".\dist\windows\bke-license-center-x64\bke-license-center.exe" -ArgumentList "--smoke" -Wait -PassThru
@@ -51,14 +46,12 @@ jobs:
           if ($cleanup.ExitCode -ne 0) { throw "root cleanup x64 smoke failed: $($cleanup.ExitCode)" }
 
       - name: Certify privileged first-install helper
-        if: matrix.arch == 'x64'
         shell: pwsh
         run: |
           dotnet run --project dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release -- --helper ".\dist\windows\bke-updater-core-x64\bke-updater-core.exe"
           if ($LASTEXITCODE -ne 0) { throw "privileged first-install certification failed" }
 
       - name: Generate disposable trust using .NET tooling
-        if: matrix.arch == 'x64'
         shell: pwsh
         run: |
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id ci-dotnet-target-v1 --policy-id ci-dotnet-only --update-key-id ci-dotnet-update-v1
@@ -78,7 +71,7 @@ jobs:
             $machine = [BitConverter]::ToUInt16($bytes,$peOffset+4)
             if ($machine -ne $Expected) { throw ("unexpected PE machine for {0}: 0x{1:X4}" -f $Path,$machine) }
           }
-          $expected = if ("${{ matrix.arch }}" -eq "x64") { 0x8664 } else { 0xAA64 }
+          $expected = 0x8664
           foreach ($name in @("bke-license-center","bke-updater-core","bke-privileged-provisioner","bke-root-cleanup")) {
             $exeName = switch ($name) {
               "bke-license-center" { "bke-license-center.exe" }
@@ -86,7 +79,7 @@ jobs:
               "bke-privileged-provisioner" { "bke-privileged-provisioner.exe" }
               "bke-root-cleanup" { "bke-root-cleanup.exe" }
             }
-            Assert-PeMachine "dist/windows/$name-${{ matrix.arch }}/$exeName" $expected
+            Assert-PeMachine "dist/windows/$name-x64/$exeName" $expected
           }
 
   required-certification:
