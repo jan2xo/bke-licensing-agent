@@ -1,7 +1,18 @@
 name: .NET-only Gen2 production installer
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: ${{ github.sha }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
   AGENT_VERSION: "2.0.0"
   SERVICE_NAME: BKE-Licensing-Agent
 
@@ -20,28 +31,9 @@ jobs:
     name: Fast contract gate
     uses: ./.github/workflows/_dotnet-contracts.yml
 
-  acceptance-verifier:
-    name: ARM64 verifier syntax
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-          fetch-depth: 0
-
-      - name: Validate ARM64 acceptance verifier
-        shell: pwsh
-        run: |
-          $path = (Resolve-Path "certification/windows_dotnet_only_arm64.ps1").Path
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors) | Out-Null
-          if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_.Message }; throw "ARM64 verifier parse failed" }
-
   installer-package:
-    name: Build immutable x64 + ARM64 installer package
-    needs: [dotnet-contracts, acceptance-verifier]
+    name: Build immutable x64 installer package
+    needs: dotnet-contracts
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -49,6 +41,12 @@ jobs:
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
+
+      - name: Verify exact source checkout
+        shell: pwsh
+        run: |
+          $actual=(git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Agent source checkout drifted: $actual" }
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -58,10 +56,10 @@ jobs:
         shell: pwsh
         run: choco install innosetup -y --no-progress
 
-      - name: Publish native .NET support payloads
+      - name: Publish native .NET x64 support payloads
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture all
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture x64
 
       - name: Generate disposable package trust with .NET
         shell: pwsh
@@ -69,20 +67,18 @@ jobs:
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id dotnet-installer-target-v1 --policy-id dotnet-installer-only --update-key-id dotnet-installer-update-v1
           if ($LASTEXITCODE -ne 0) { throw "disposable trust generation failed" }
 
-      - name: Publish x64 + ARM64 service/runtime
+      - name: Publish x64 service/runtime
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service-arm64 | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime-arm64 | Out-Null
 
           dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-service
+          if ($LASTEXITCODE -ne 0) { throw "x64 bootstrap publish failed" }
           dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-runtime
-          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-service-arm64
-          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-runtime-arm64
+          if ($LASTEXITCODE -ne 0) { throw "x64 runtime publish failed" }
 
-      - name: Verify every packaged executable architecture
+      - name: Verify every packaged executable is x64
         shell: pwsh
         run: |
           function Assert-PeMachine([string]$Path,[int]$Expected) {
@@ -93,7 +89,6 @@ jobs:
             $machine=[BitConverter]::ToUInt16($bytes,$offset+4)
             if ($machine -ne $Expected) { throw ("wrong PE machine {0}: 0x{1:X4}" -f $Path,$machine) }
           }
-
           foreach ($path in @(
             "dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe",
             "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe",
@@ -103,40 +98,36 @@ jobs:
             "dist/windows/bke-root-cleanup-x64/bke-root-cleanup.exe"
           )) { Assert-PeMachine $path 0x8664 }
 
-          foreach ($path in @(
-            "dist/windows/bke-licensing-agent-service-arm64/bke-licensing-agent-service.exe",
-            "dist/windows/bke-licensing-agent-runtime-arm64/bke-licensing-agent-runtime.exe",
-            "dist/windows/bke-license-center-arm64/bke-license-center.exe",
-            "dist/windows/bke-updater-core-arm64/bke-updater-core.exe",
-            "dist/windows/bke-privileged-provisioner-arm64/bke-privileged-provisioner.exe",
-            "dist/windows/bke-root-cleanup-arm64/bke-root-cleanup.exe"
-          )) { Assert-PeMachine $path 0xAA64 }
+          $installerDefinition=Get-Content packaging/windows/bke-licensing-agent.iss -Raw
+          if (!$installerDefinition.Contains("ArchitecturesAllowed=x64compatible")) { throw "Agent installer is not x64-compatible gated." }
+          if (!$installerDefinition.Contains("ArchitecturesInstallIn64BitMode=x64compatible")) { throw "Agent installer 64-bit mode is not x64-compatible gated." }
 
-      - name: Compile canonical x64 + ARM64 installers
+      - name: Compile canonical x64 installer
         shell: pwsh
         run: |
           $iscc=Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
           & $iscc packaging/windows/bke-licensing-agent.iss
           if ($LASTEXITCODE -ne 0) { throw "x64 installer compile failed" }
-          & $iscc packaging/windows/bke-licensing-agent-arm64.iss
-          if ($LASTEXITCODE -ne 0) { throw "ARM64 installer compile failed" }
 
       - name: Build immutable installer package manifest
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/package | Out-Null
-          $x64 = Get-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe"
-          $arm64 = Get-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-arm64.exe"
+          $installer = Get-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe"
           $manifest = [ordered]@{
-            schema = "bke.agent-installer-package.v1"
+            schema = "bke.agent-installer-package.v2"
             status = "PREPRODUCTION"
             production_ready = $false
             source_sha = $env:SOURCE_SHA
             version = $env:AGENT_VERSION
             trust = "DISPOSABLE_PREPRODUCTION"
-            installers = [ordered]@{
-              x64 = [ordered]@{ file = $x64.Name; sha256 = (Get-FileHash $x64.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $x64.Length }
-              arm64 = [ordered]@{ file = $arm64.Name; sha256 = (Get-FileHash $arm64.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = $arm64.Length }
+            platform = "windows"
+            application_architecture = "x64"
+            hardware_architecture_selection = "NONE"
+            installer = [ordered]@{
+              file = $installer.Name
+              sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              bytes = $installer.Length
             }
           }
           $manifest | ConvertTo-Json -Depth 8 | Set-Content dist/package/PACKAGE-MANIFEST.json -Encoding utf8
@@ -148,7 +139,6 @@ jobs:
           name: agent-installer-package
           path: |
             dist/installer/BKE-Licensing-Agent-${{ env.AGENT_VERSION }}-Windows-x64.exe
-            dist/installer/BKE-Licensing-Agent-${{ env.AGENT_VERSION }}-Windows-arm64.exe
             dist/package/PACKAGE-MANIFEST.json
           if-no-files-found: error
           retention-days: 2
@@ -183,13 +173,9 @@ jobs:
           $mp=Get-ChildItem $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if ($null -eq $mp) { $fallback=Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"; if (Test-Path $fallback) { $mp=Get-Item $fallback } }
           if ($null -eq $mp) { throw "Defender unavailable" }
-          foreach ($path in @(
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe",
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe"
-          )) {
-            & $mp.FullName -Scan -ScanType 3 -File (Resolve-Path $path).Path -DisableRemediation
-            if ($LASTEXITCODE -ne 0) { throw "Defender failed for $path" }
-          }
+          $path = "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe"
+          & $mp.FullName -Scan -ScanType 3 -File (Resolve-Path $path).Path -DisableRemediation
+          if ($LASTEXITCODE -ne 0) { throw "Defender failed for $path" }
 
   fresh-install:
     name: Fresh install + runtime health
@@ -372,63 +358,9 @@ jobs:
 
           Write-Host "BKE root cleanup functional certification: PASS"
 
-  arm64-acceptance-kit:
-    name: ARM64 acceptance kit
-    needs: installer-package
-    runs-on: windows-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-          fetch-depth: 0
-
-      - name: Download immutable installer package
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-installer-package
-          path: dist
-
-      - name: Verify immutable installer package
-        uses: ./.github/actions/verify-installer-package
-        with:
-          source_sha: ${{ env.SOURCE_SHA }}
-          agent_version: ${{ env.AGENT_VERSION }}
-
-      - name: Assemble ARM64 .NET-only UTM acceptance kit
-        shell: pwsh
-        run: |
-          $package="dist/dotnet-only-arm64-kit"
-          New-Item -ItemType Directory -Force $package | Out-Null
-          Copy-Item "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe" $package
-          Copy-Item "certification/windows_dotnet_only_arm64.ps1" $package
-          @"
-          BKE Licensing Agent 2.0.0 - .NET-only ARM64 acceptance
-
-          Source SHA: $env:SOURCE_SHA
-
-          This candidate contains native .NET 10 implementations of:
-          - stable bootstrap service
-          - Agent runtime
-          - License Center
-          - privileged updater helper
-          - privileged provisioner
-
-          Run Prepare -> Install -> Collect with windows_dotnet_only_arm64.ps1 on the persistent Windows 11 ARM64 UTM machine.
-          "@ | Set-Content (Join-Path $package "README-DOTNET-ONLY.txt") -Encoding utf8
-          Compress-Archive -Path "$package/*" -DestinationPath "dist/BKE-Licensing-Agent-2.0.0-Windows-arm64-DOTNET-ONLY-$env:SOURCE_SHA.zip" -Force
-
-      - name: Upload ARM64 acceptance kit module
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-arm64-acceptance-kit
-          path: dist/BKE-Licensing-Agent-${{ env.AGENT_VERSION }}-Windows-arm64-DOTNET-ONLY-*.zip
-          if-no-files-found: error
-          retention-days: 2
-
   evidence:
     name: Evidence + final candidates
-    needs: [installer-package, defender-scan, fresh-install, root-cleanup, arm64-acceptance-kit]
+    needs: [installer-package, defender-scan, fresh-install, root-cleanup]
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -449,20 +381,12 @@ jobs:
           source_sha: ${{ env.SOURCE_SHA }}
           agent_version: ${{ env.AGENT_VERSION }}
 
-      - name: Download ARM64 acceptance kit
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-arm64-acceptance-kit
-          path: dist
-
       - name: Assemble final PREPRODUCTION evidence
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/final-evidence | Out-Null
           Copy-Item dist/package/PACKAGE-MANIFEST.json dist/final-evidence/
           Copy-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe" dist/final-evidence/
-          Copy-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-arm64.exe" dist/final-evidence/
-          Copy-Item "dist/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-arm64-DOTNET-ONLY-*.zip" dist/final-evidence/
           @(
             "PREPRODUCTION ONLY",
             "Disposable trust / unsigned certification artifacts.",
@@ -472,7 +396,7 @@ jobs:
       - name: Upload .NET-only candidates
         uses: actions/upload-artifact@v4
         with:
-          name: BKE-Licensing-Agent-2.0.0-Windows-DOTNET-ONLY
+          name: BKE-Licensing-Agent-2.0.0-Windows-x64-DOTNET-ONLY
           path: dist/final-evidence/**
           if-no-files-found: error
           retention-days: 14
@@ -482,27 +406,23 @@ jobs:
     if: ${{ always() }}
     needs:
       - dotnet-contracts
-      - acceptance-verifier
       - installer-package
       - defender-scan
       - fresh-install
       - root-cleanup
-      - arm64-acceptance-kit
       - evidence
     runs-on: ubuntu-latest
     steps:
       - name: Require every installer module
         env:
           CONTRACTS: ${{ needs.dotnet-contracts.result }}
-          VERIFIER: ${{ needs.acceptance-verifier.result }}
           PACKAGE: ${{ needs.installer-package.result }}
           DEFENDER: ${{ needs.defender-scan.result }}
           FRESH_INSTALL: ${{ needs.fresh-install.result }}
           ROOT_CLEANUP: ${{ needs.root-cleanup.result }}
-          ARM64_KIT: ${{ needs.arm64-acceptance-kit.result }}
           EVIDENCE: ${{ needs.evidence.result }}
         run: |
-          for value in "$CONTRACTS" "$VERIFIER" "$PACKAGE" "$DEFENDER" "$FRESH_INSTALL" "$ROOT_CLEANUP" "$ARM64_KIT" "$EVIDENCE"; do
+          for value in "$CONTRACTS" "$PACKAGE" "$DEFENDER" "$FRESH_INSTALL" "$ROOT_CLEANUP" "$EVIDENCE"; do
             test "$value" = "success" || { echo "Required installer module did not pass: $value"; exit 1; }
           done
           echo "Required Agent installer certification: PASS"
