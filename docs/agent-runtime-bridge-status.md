@@ -2,6 +2,8 @@
 
 This branch proves a language-independent BKE Licensing Agent machine boundary without changing production release authority.
 
+> Current architecture supersession: the active Windows Agent application family is now **x64 only**. Windows 11 ARM64 runs the same x64 build through Windows x64 emulation. Native ARM64 installer/payload references below are retained only as historical certification evidence from earlier phases and are not current release authority.
+
 ## Stable machine contract
 
 - Windows service: `BKE-Licensing-Agent`
