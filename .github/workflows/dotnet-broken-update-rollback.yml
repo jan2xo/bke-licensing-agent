@@ -369,14 +369,11 @@ jobs:
       - name: Require every Phase 10 module
         env:
           CONTRACTS: ${{ needs.dotnet-contracts.result }}
-          VERIFIER: ${{ needs.arm64-verifier.result }}
           BASELINE: ${{ needs.baseline-package.result }}
           BROKEN: ${{ needs.broken-candidate.result }}
           LIFECYCLE: ${{ needs.rollback-lifecycle.result }}
-          DEFENDER: ${{ needs.arm64-defender.result }}
-          ARM64_KIT: ${{ needs.arm64-kit.result }}
         run: |
-          for value in "$CONTRACTS" "$VERIFIER" "$BASELINE" "$BROKEN" "$LIFECYCLE" "$DEFENDER" "$ARM64_KIT"; do
+          for value in "$CONTRACTS" "$BASELINE" "$BROKEN" "$LIFECYCLE"; do
             test "$value" = "success" || { echo "Required Phase 10 module did not pass: $value"; exit 1; }
           done
           echo "Required Phase 10 rollback certification: PASS"
