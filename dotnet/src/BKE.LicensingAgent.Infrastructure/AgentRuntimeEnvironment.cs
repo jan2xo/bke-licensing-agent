@@ -3,13 +3,20 @@ namespace BKE.LicensingAgent.Infrastructure;
 public sealed record AgentRuntimeEnvironment(
     string Name,
     string EnvFilePath,
-    string? PlatformBaseUrl);
+    string? PlatformBaseUrl)
+{
+    public string EffectivePlatformBaseUrl =>
+        string.IsNullOrWhiteSpace(PlatformBaseUrl)
+            ? AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl
+            : PlatformBaseUrl;
+}
 
 public static class AgentRuntimeEnvironmentLoader
 {
     public const string EnvironmentVariableName = "BKE_ENVIRONMENT";
     public const string PlatformBaseUrlVariableName = "BKE_PLATFORM_BASE_URL";
     public const string ProductionEnvironment = "production";
+    public const string ProductionPlatformBaseUrl = "https://jl-bke.com";
     public const string UtmEnvironment = "utm";
 
     private const long MaxEnvFileBytes = 64 * 1024;
