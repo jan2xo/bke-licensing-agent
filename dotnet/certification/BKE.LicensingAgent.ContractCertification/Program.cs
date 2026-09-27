@@ -122,6 +122,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.NotificationUnreadCountPath}",
     $"POST {LocalAgentContract.CheckUpdatesPath}",
     $"POST {LocalAgentContract.OpenUpdateCenterPath}",
+    $"POST {LocalAgentContract.PlatformAuthorityPath}",
     $"POST {LocalAgentContract.AccountSessionDeviceContextPath}",
     $"POST {LocalAgentContract.AccountSessionCompletePath}",
     $"POST {LocalAgentContract.AccountSessionStartPath}",
@@ -143,6 +144,16 @@ Require(update.GetProperty("contract_version").GetInt32() == LocalAgentContract.
 var typedNotifications = capabilities.GetProperty("typed_notifications");
 Require(typedNotifications.GetProperty("capability_id").GetString() == LocalAgentContract.TypedNotificationCapabilityId, "typed-notification capability id mismatch");
 Require(typedNotifications.GetProperty("contract_version").GetInt32() == LocalAgentContract.TypedNotificationContractVersion, "typed-notification contract version mismatch");
+
+var platformAuthority = capabilities.GetProperty("platform_authority");
+Require(platformAuthority.GetProperty("capability_id").GetString() == LocalAgentContract.PlatformAuthorityCapabilityId, "platform-authority capability id mismatch");
+Require(platformAuthority.GetProperty("contract_version").GetInt32() == LocalAgentContract.PlatformAuthorityContractVersion, "platform-authority contract version mismatch");
+Require(platformAuthority.GetProperty("owner").GetString() == "bke-licensing-agent", "platform-authority ownership drifted");
+Require(platformAuthority.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id"]), "platform-authority local request widened");
+Require(platformAuthority.GetProperty("local_response_fields").EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal)
+    .SetEquals(["environment", "platform_base_url"]), "platform-authority local response widened");
+Require(platformAuthority.GetProperty("local_responses_expose_cloud_secrets").GetBoolean() == false, "platform-authority secret boundary drifted");
 
 var accountSession = capabilities.GetProperty("account_session");
 Require(accountSession.GetProperty("capability_id").GetString() == LocalAgentContract.AccountSessionCapabilityId, "account-session capability id mismatch");
@@ -286,6 +297,8 @@ Require(JsonName<AccountNotificationReceiptRequest>(nameof(AccountNotificationRe
 Require(JsonName<AccountNotificationReceiptResponse>(nameof(AccountNotificationReceiptResponse.MutationStatus)) == "mutation_status", "account notification receipt mutation_status wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.CurrentVersion)) == "current_version", "update current_version wire name mismatch");
 Require(JsonName<UpdateCheckRequest>(nameof(UpdateCheckRequest.RequestedVersion)) == "requested_version", "update requested_version wire name mismatch");
+Require(JsonName<PlatformAuthorityRequest>(nameof(PlatformAuthorityRequest.CorrelationId)) == "correlation_id", "platform-authority correlation_id wire name mismatch");
+Require(JsonName<PlatformAuthorityResponse>(nameof(PlatformAuthorityResponse.PlatformBaseUrl)) == "platform_base_url", "platform-authority platform_base_url wire name mismatch");
 Require(JsonName<AccountSessionDeviceContextRequest>(nameof(AccountSessionDeviceContextRequest.CorrelationId)) == "correlation_id", "account-session device context correlation_id wire name mismatch");
 Require(JsonName<AccountSessionCompleteRequest>(nameof(AccountSessionCompleteRequest.CorrelationId)) == "correlation_id", "account-session complete correlation_id wire name mismatch");
 Require(JsonName<AccountSessionCompleteRequest>(nameof(AccountSessionCompleteRequest.HandoffCode)) == "handoff_code", "account-session complete handoff_code wire name mismatch");
@@ -424,6 +437,13 @@ static void CertifyRuntimeEnvironmentBoundary()
         Require(
             loaded.PlatformBaseUrl == "https://utm-bke.invalid",
             "Agent .env did not override stray process-level platform authority");
+        Require(
+            loaded.EffectivePlatformBaseUrl == "https://utm-bke.invalid",
+            "Agent effective platform authority did not follow the loaded machine environment");
+        Require(
+            new AgentRuntimeEnvironment("production", envPath, null).EffectivePlatformBaseUrl ==
+                AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl,
+            "Agent production default platform authority drifted");
 
         File.WriteAllText(
             envPath,
