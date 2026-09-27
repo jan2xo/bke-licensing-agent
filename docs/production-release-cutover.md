@@ -7,7 +7,7 @@ This document defines the production boundary after successful Gen2 certificatio
 Certified Windows architecture set:
 
 - x64 / AMD64 — Intel and AMD 64-bit Windows
-- ARM64 — Windows on ARM
+- Windows 11 ARM64 — supported through the same x64 Agent build via Windows x64 emulation
 
 32-bit Windows is intentionally out of scope.
 
@@ -20,20 +20,19 @@ Before production cutover, the following certification phases are closed:
 - Phase 9 — signed self-update pre-publication certification
 - Phase 10 — broken-update rollback certification
 
-Phase 10 includes hosted x64 rollback and persistent Windows 11 ARM64 rollback with byte-for-byte restoration.
+Historical Phase 10 evidence includes both hosted x64 rollback and an earlier native ARM64 rollback proof. The current release architecture supersedes the native ARM64 package family.
 
 ## Phase 11 — release preflight
 
-The Phase 11 workflow builds both canonical Gen2 Windows installers from one exact source commit:
+The Phase 11 workflow builds the single canonical Gen2 Windows x64 installer from one exact source commit:
 
 - `BKE-Licensing-Agent-2.0.0-Windows-x64.exe`
-- `BKE-Licensing-Agent-2.0.0-Windows-arm64.exe`
 
 It then:
 
 1. rebuilds the Gen2 bootstrap/runtime,
-2. verifies x64 and ARM64 PE machine identities,
-3. compiles both canonical installers,
+2. verifies x64 PE machine identities,
+3. compiles the canonical x64 installer,
 4. scans both installers with Microsoft Defender,
 5. records SHA-256 and byte size,
 6. records Authenticode state,
@@ -79,7 +78,6 @@ Both Windows installers require the approved BKE publisher identity.
 Required final state:
 
 - x64 installer Authenticode status = `Valid`,
-- ARM64 installer Authenticode status = `Valid`,
 - signer subject/thumbprint matches the approved BKE code-signing certificate,
 - the controlled signing process signs the intended installer bytes only,
 - signed-file SHA-256 values are recomputed after signing.
@@ -110,7 +108,7 @@ The final manifest must not reuse unsigned preflight hashes.
 Publish only the two approved signed installers:
 
 - Windows x64,
-- Windows ARM64.
+- Windows 11 ARM64 through x64 emulation.
 
 The GitHub release tag and asset names must exactly match the signed update-policy contract.
 
@@ -127,7 +125,6 @@ Deploy the reviewed V2 signed-update authority with the complete production conf
 - protected signing private key,
 - published timestamp,
 - exact x64 signed SHA-256 + size,
-- exact ARM64 signed SHA-256 + size.
 
 Partial configuration must fail closed.
 
@@ -145,7 +142,7 @@ Using controlled machines:
 8. verify loopback-only port 43873,
 9. verify rollback remains available.
 
-Run this for x64 and ARM64.
+Run this for x64.
 
 ### Gate H — customer publication
 
@@ -173,7 +170,7 @@ PRE-PRODUCTION RELEASE PREFLIGHT
         ↓
 APPROVED PRODUCTION SIGNING IDENTITIES
         ↓
-SIGNED x64 + ARM64 FINAL BYTES
+SIGNED x64 FINAL BYTES
         ↓
 PRODUCTION CATALOG + V2 AUTHORITY
         ↓
