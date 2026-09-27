@@ -2,7 +2,7 @@
 
 **Current implementation:** .NET 10 Generation 2  
 **Version:** 2.0.0 candidate  
-**Windows application architecture:** x64 only (including Windows 11 ARM64 through x64 emulation)  
+**Windows application architecture:** x64 only (including Windows 11 ARM64 through x64 emulation)
 **Production release:** pending signing/cutover
 
 The BKE Licensing Agent is the shared, product-agnostic licensing, authorization, notification, update, and trusted-execution layer for BKE software.
