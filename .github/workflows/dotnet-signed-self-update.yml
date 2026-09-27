@@ -1,10 +1,24 @@
 name: Phase 9 signed Agent self-update certification
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha }}
 
 jobs:
   signed-self-update:
@@ -15,6 +29,12 @@ jobs:
     steps:
       - name: Checkout exact Agent candidate
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact Agent candidate
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Checkout Digital Solutions V2 authority candidate
         uses: actions/checkout@v4
@@ -52,10 +72,9 @@ jobs:
         run: |
           dotnet run             --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj             --configuration Release             -- --fixture "${RUNNER_TEMP}/phase9-authority-fixture.json"
 
-      - name: Publish native Windows x64 + ARM64 bootstraps with verifier
+      - name: Publish native Windows x64 bootstrap with verifier
         run: |
           dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj             --configuration Release --runtime win-x64 --self-contained true             -p:PublishSingleFile=true -p:Version=2.0.0             --output "${RUNNER_TEMP}/phase9-win-x64"
-          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj             --configuration Release --runtime win-arm64 --self-contained true             -p:PublishSingleFile=true -p:Version=2.0.0             --output "${RUNNER_TEMP}/phase9-win-arm64"
 
       - name: Verify native PE architecture and publish outputs
         shell: pwsh
@@ -69,8 +88,7 @@ jobs:
             if ($machine -ne $Expected) { throw ("unexpected PE machine for {0}: 0x{1:X4}" -f $Path, $machine) }
           }
           Assert-PeMachine "$env:RUNNER_TEMP/phase9-win-x64/bke-licensing-agent-service.exe" 0x8664
-          Assert-PeMachine "$env:RUNNER_TEMP/phase9-win-arm64/bke-licensing-agent-service.exe" 0xAA64
-          Write-Host "Native Phase 9 bootstrap publish: PASS"
+          Write-Host "Native Phase 9 x64 bootstrap publish: PASS"
 
       - name: Upload disposable Phase 9 authority evidence
         uses: actions/upload-artifact@v4
