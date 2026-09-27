@@ -34,6 +34,13 @@ var privilegedUpdateCenterSource = File.ReadAllText(
         "src",
         "BKE.LicensingAgent.Infrastructure",
         "PrivilegedUpdateCenterProvider.cs"));
+var hostSource = File.ReadAllText(
+    Path.Combine(
+        "dotnet",
+        "src",
+        "BKE.LicensingAgent.Host",
+        "Program.cs"));
+
 
 Require(
     utmRunbookSource.Contains("BKE parent installer", StringComparison.OrdinalIgnoreCase),
@@ -77,6 +84,15 @@ Require(
     intentCertificationSource.Contains("\"utm-trust\"", StringComparison.Ordinal) &&
     intentCertificationSource.Contains("uses: ./.github/workflows/utm-disposable-target-trust.yml", StringComparison.Ordinal),
     "Intent certification planner does not expose the UTM trust ownership target.");
+Require(
+    hostSource.Contains(
+        "app.MapPost(LocalAgentContract.PlatformAuthorityPath",
+        StringComparison.Ordinal) &&
+    hostSource.Contains(
+        "runtimeEnvironment.EffectivePlatformBaseUrl",
+        StringComparison.Ordinal),
+    "Agent Host no longer serves the startup-resolved platform authority over loopback.");
+
 Require(
     privilegedUpdateCenterSource.Contains(
         "Timeout = Timeout.InfiniteTimeSpan",
