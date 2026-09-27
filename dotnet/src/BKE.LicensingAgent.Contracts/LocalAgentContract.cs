@@ -25,6 +25,7 @@ public static class LocalAgentContract
     public const string NotificationUnreadCountPath = "/v1/notifications/unread-count";
     public const string CheckUpdatesPath = "/v1/updates/check";
     public const string OpenUpdateCenterPath = "/v1/update-center/open";
+    public const string PlatformAuthorityPath = "/v1/runtime/platform-authority";
     public const string AccountSessionDeviceContextPath = "/v1/account-session/device-context";
     public const string AccountSessionCompletePath = "/v1/account-session/complete";
     public const string AccountSessionStartPath = "/v1/account-session/start";
@@ -51,6 +52,8 @@ public static class LocalAgentContract
     public const int NotificationInboxContractVersion = 1;
     public const string AccountNotificationInboxCapabilityId = "bke.account-notifications";
     public const int AccountNotificationInboxContractVersion = 1;
+    public const string PlatformAuthorityCapabilityId = "bke.platform-authority";
+    public const int PlatformAuthorityContractVersion = 1;
     public const string AccountSessionCapabilityId = "bke.account-session";
     public const int AccountSessionContractVersion = 1;
     public const string SoftwareCatalogCapabilityId = "bke.software-catalog";
@@ -78,6 +81,16 @@ public static class LocalAgentContract
     public const string StoreGiftClaimRevealCapabilityId = "bke.store-gift-claim-reveal";
     public const int StoreGiftClaimRevealContractVersion = 1;
 }
+
+public sealed record PlatformAuthorityRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId);
+
+public sealed record PlatformAuthorityResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("environment")] string Environment,
+    [property: JsonPropertyName("platform_base_url")] string PlatformBaseUrl);
 
 public sealed record AuthorizeRequest(
     [property: JsonPropertyName("product_id")] string ProductId,
