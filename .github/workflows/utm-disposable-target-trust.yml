@@ -32,7 +32,7 @@ env:
 
 jobs:
   disposable-render-dock-trust:
-    name: Generate Render Dock x64 + ARM64 disposable trust
+    name: Generate Render Dock x64 disposable trust
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
 
           root="dist/utm-render-dock-target-trust"
-          mkdir -p "$root/x64" "$root/arm64"
+          mkdir -p "$root/x64"
           cp certification/utm/Prepare-BkeAgent-UtmEnvironment.ps1 "$root/"
           cp certification/utm/Install-RenderDock-UtmTargetTrust.ps1 "$root/"
           cp certification/utm/Remove-RenderDock-UtmTargetTrust.ps1 "$root/"
@@ -102,19 +102,6 @@ jobs:
             --policy-id "utm-render-dock-windows-x64-v1" \
             --revision "1"
 
-          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
-            --configuration Release --no-build -- \
-            generate-disposable-target-policy \
-            --output-dir "$root/arm64" \
-            --product-id "bke-render-dock" \
-            --platform "windows" \
-            --architecture "arm64" \
-            --install-root 'C:\Program Files\BKE Digital Solutions\Render Dock' \
-            --entry-point 'RENDER DOCK.exe' \
-            --target-key-id "utm-render-dock-arm64-target-v1" \
-            --policy-id "utm-render-dock-windows-arm64-v1" \
-            --revision "1"
-
       - name: Certify disposable bundle shape and private-key absence
         shell: bash
         run: |
@@ -124,8 +111,6 @@ jobs:
           test -f "$root/Prepare-BkeAgent-UtmEnvironment.ps1"
           test -f "$root/x64/target-keys/utm-render-dock-x64-target-v1.pem"
           test -f "$root/x64/target-policies/utm-render-dock-windows-x64-v1.json"
-          test -f "$root/arm64/target-keys/utm-render-dock-arm64-target-v1.pem"
-          test -f "$root/arm64/target-policies/utm-render-dock-windows-arm64-v1.json"
 
           if find "$root" -type f -name '*.pem' -print0 |
             xargs -0 grep -H -n "BEGIN PRIVATE KEY"; then
@@ -143,17 +128,6 @@ jobs:
             .uninstall.strategy == "MANAGED_DIRECTORY" and
             .algorithm == "Ed25519"
           ' "$root/x64/target-policies/utm-render-dock-windows-x64-v1.json" >/dev/null
-
-          jq -e '
-            .schema == "bke.install-target-policy.v2" and
-            .product_id == "bke-render-dock" and
-            .platform == "windows" and
-            .architecture == "arm64" and
-            .install_root == "C:\\Program Files\\BKE Digital Solutions\\Render Dock" and
-            .entry_point == "RENDER DOCK.exe" and
-            .uninstall.strategy == "MANAGED_DIRECTORY" and
-            .algorithm == "Ed25519"
-          ' "$root/arm64/target-policies/utm-render-dock-windows-arm64-v1.json" >/dev/null
 
           (
             cd "$root"

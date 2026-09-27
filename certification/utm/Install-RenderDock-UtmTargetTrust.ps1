@@ -1,6 +1,6 @@
 param(
-    [ValidateSet("auto","x64","arm64")]
-    [string]$Architecture = "auto"
+    [ValidateSet("x64")]
+    [string]$Architecture = "x64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,11 +9,6 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Run this UTM TEST-ONLY trust installer from an elevated PowerShell."
-}
-
-if ($Architecture -eq "auto") {
-    $machine = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
-    $Architecture = if ($machine -eq "arm64") { "arm64" } else { "x64" }
 }
 
 $bundleRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -47,16 +42,8 @@ foreach ($path in @($keyDir, $policyDir)) {
     }
 }
 
-$keyName = if ($Architecture -eq "arm64") {
-    "utm-render-dock-arm64-target-v1.pem"
-} else {
-    "utm-render-dock-x64-target-v1.pem"
-}
-$policyName = if ($Architecture -eq "arm64") {
-    "utm-render-dock-windows-arm64-v1.json"
-} else {
-    "utm-render-dock-windows-x64-v1.json"
-}
+$keyName = "utm-render-dock-x64-target-v1.pem"
+$policyName = "utm-render-dock-windows-x64-v1.json"
 
 $sourceKey = Join-Path (Join-Path $sourceRoot "target-keys") $keyName
 $sourcePolicy = Join-Path (Join-Path $sourceRoot "target-policies") $policyName

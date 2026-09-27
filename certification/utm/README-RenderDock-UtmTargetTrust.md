@@ -8,12 +8,13 @@ only in CI process memory and were not written to the artifact. The generated Re
 
 For the Windows UTM test:
 
-1. Install the certified BKE Licensing Agent candidate first.
-2. Open PowerShell as Administrator in this bundle directory.
-3. Run:
-   `powershell -ExecutionPolicy Bypass -File .\Install-RenderDock-UtmTargetTrust.ps1`
-4. Run the Launcher candidate and exercise the account/catalog/install flow.
-5. After the test, remove the disposable trust with:
+1. Install the certified BKE parent package first. The bundled Launcher and Agent are Windows x64.
+2. On a Windows ARM64 guest, run that same x64 BKE stack through Windows x64 compatibility; there is no separate native ARM64 product target.
+3. Open PowerShell as Administrator in this bundle directory.
+4. Run:
+   `powershell -ExecutionPolicy Bypass -File .\Install-RenderDock-UtmTargetTrust.ps1 -Architecture x64`
+5. Run BKE and exercise the account/catalog/install flow.
+6. After the test, remove the disposable trust with:
    `powershell -ExecutionPolicy Bypass -File .\Remove-RenderDock-UtmTargetTrust.ps1`
 
-The installer auto-selects x64 or ARM64 from the guest OS architecture.
+This bundle generates and installs x64 Render Dock target trust only.
