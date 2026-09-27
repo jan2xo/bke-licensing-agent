@@ -31,7 +31,7 @@ public sealed class AccountSessionRemote : IAccountSessionRemote, IDisposable
         _platformBaseUrl = (
             platformBaseUrl ??
             Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
-            "https://jl-bke.com"
+            AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl
         ).TrimEnd('/');
         ValidatePlatformBaseUrl(_platformBaseUrl);
 
