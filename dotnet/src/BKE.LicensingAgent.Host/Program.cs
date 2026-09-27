@@ -4,9 +4,10 @@ using BKE.LicensingAgent.Host;
 using BKE.LicensingAgent.Infrastructure;
 using BKE.LicensingAgent.Storage;
 
+AgentRuntimeEnvironment runtimeEnvironment;
 try
 {
-    var runtimeEnvironment =
+    runtimeEnvironment =
         AgentRuntimeEnvironmentLoader.LoadDefault();
     Console.WriteLine(
         $"BKE Licensing Agent environment: {runtimeEnvironment.Name}");
@@ -408,6 +409,23 @@ app.MapPost(LocalAgentContract.OpenUpdateCenterPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.PlatformAuthorityPath, (
+    PlatformAuthorityRequest request) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return PlatformAuthorityInvalidRequest();
+    }
+
+    return Results.Json(new PlatformAuthorityResponse(
+        LocalAgentContract.PlatformAuthorityCapabilityId,
+        LocalAgentContract.PlatformAuthorityContractVersion,
+        "READY",
+        runtimeEnvironment.Name,
+        runtimeEnvironment.EffectivePlatformBaseUrl,
+        null), statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountSessionDeviceContextPath, (
     AccountSessionDeviceContextRequest request) =>
 {
@@ -752,6 +770,19 @@ static string LicenseCenterPage(string productId, string version, string install
         .Replace("__BKE_VERSION__", safeVersion, StringComparison.Ordinal)
         .Replace("__BKE_CONTEXT__", contextJson, StringComparison.Ordinal);
 }
+
+static IResult PlatformAuthorityInvalidRequest() =>
+    Results.Json(new PlatformAuthorityResponse(
+        LocalAgentContract.PlatformAuthorityCapabilityId,
+        LocalAgentContract.PlatformAuthorityContractVersion,
+        "FAILED",
+        null,
+        null,
+        new PlatformAuthorityError(
+            "INVALID_REQUEST",
+            "The platform-authority request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
 
 static IResult AccountSessionDeviceContextInvalidRequest() =>
     Results.Json(new AccountSessionDeviceContextResponse(
