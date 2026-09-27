@@ -1,7 +1,7 @@
 param(
     [string]$Version = "2.0.0",
-    [ValidateSet("x64", "arm64", "all")]
-    [string]$Architecture = "all"
+    [ValidateSet("x64")]
+    [string]$Architecture = "x64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,11 +36,6 @@ function Publish-Architecture([string]$Name, [string]$Runtime) {
     }
 }
 
-if ($Architecture -in @("x64", "all")) {
-    Publish-Architecture "x64" "win-x64"
-}
-if ($Architecture -in @("arm64", "all")) {
-    Publish-Architecture "arm64" "win-arm64"
-}
+Publish-Architecture "x64" "win-x64"
 
-Write-Host "BKE .NET-only Windows support payloads published: $Architecture"
+Write-Host "BKE .NET-only Windows x64 support payloads published"
