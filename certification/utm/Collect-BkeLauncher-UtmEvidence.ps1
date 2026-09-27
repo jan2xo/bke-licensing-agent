@@ -130,6 +130,7 @@ Write-JsonEvidence "07-utm-target-trust.json" ([ordered]@{
 })
 
 $agentEnvPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\.env"
+$expectedPlatformBaseUrl = $null
 $environmentEvidence = [ordered]@{
     exists = Test-Path $agentEnvPath
     environment = $null
@@ -156,6 +157,7 @@ if (Test-Path $agentEnvPath) {
 
     $environmentEvidence.environment = $safeValues["BKE_ENVIRONMENT"]
     if ($safeValues.ContainsKey("BKE_PLATFORM_BASE_URL")) {
+        $expectedPlatformBaseUrl = [string]$safeValues["BKE_PLATFORM_BASE_URL"]
         $platformUri = $null
         if ([Uri]::TryCreate(
             $safeValues["BKE_PLATFORM_BASE_URL"],
@@ -172,6 +174,31 @@ if (Test-Path $agentEnvPath) {
     }
 }
 Write-JsonEvidence "08-agent-environment.json" $environmentEvidence
+
+$platformAuthority = Invoke-AgentPost "/v1/runtime/platform-authority" ([ordered]@{
+    correlation_id = "utm-authority-" + [Guid]::NewGuid().ToString("N")
+})
+$authorityBaseUrl = if ($null -ne $platformAuthority.platform_base_url) {
+    [string]$platformAuthority.platform_base_url
+} else {
+    $null
+}
+$authorityEnvironment = if ($null -ne $platformAuthority.environment) {
+    [string]$platformAuthority.environment
+} else {
+    $null
+}
+$authorityMatchesEnvironment =
+    [string]$platformAuthority.status -eq "READY" -and
+    -not [string]::IsNullOrWhiteSpace($expectedPlatformBaseUrl) -and
+    -not [string]::IsNullOrWhiteSpace($authorityBaseUrl) -and
+    $authorityBaseUrl.TrimEnd("/") -ceq $expectedPlatformBaseUrl.TrimEnd("/") -and
+    $authorityEnvironment -ceq [string]$environmentEvidence.environment
+
+Write-JsonEvidence "08-agent-platform-authority.json" ([ordered]@{
+    response = $platformAuthority
+    matches_agent_environment = $authorityMatchesEnvironment
+})
 
 $productRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Render Dock"
 $entryPoint = Join-Path $productRoot "RENDER DOCK.exe"
