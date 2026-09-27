@@ -89,8 +89,14 @@ public sealed record PlatformAuthorityResponse(
     [property: JsonPropertyName("capability_id")] string CapabilityId,
     [property: JsonPropertyName("contract_version")] int ContractVersion,
     [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("environment")] string Environment,
-    [property: JsonPropertyName("platform_base_url")] string PlatformBaseUrl);
+    [property: JsonPropertyName("environment"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Environment,
+    [property: JsonPropertyName("platform_base_url"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PlatformBaseUrl,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PlatformAuthorityError? Error);
+
+public sealed record PlatformAuthorityError(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("retryable")] bool Retryable);
 
 public sealed record AuthorizeRequest(
     [property: JsonPropertyName("product_id")] string ProductId,
