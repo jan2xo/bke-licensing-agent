@@ -24,6 +24,8 @@ var utmEvidenceSource = File.ReadAllText(
     Path.Combine("certification", "utm", "Collect-BkeLauncher-UtmEvidence.ps1"));
 var utmPrepareSource = File.ReadAllText(
     Path.Combine("certification", "utm", "Prepare-BkeAgent-UtmEnvironment.ps1"));
+var utmInstallTrustSource = File.ReadAllText(
+    Path.Combine("certification", "utm", "Install-RenderDock-UtmTargetTrust.ps1"));
 var utmWorkflowSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
 var intentCertificationSource = File.ReadAllText(
@@ -56,6 +58,17 @@ Require(
     utmRunbookSource.Contains("AGENT_ACCOUNT_SESSION_ENABLED=true", StringComparison.Ordinal),
     "UTM runbook disposable feature flags drifted.");
 Require(
+    utmRunbookSource.Contains("BKE-*-PREPRODUCTION-Windows.exe", StringComparison.Ordinal) &&
+    utmRunbookSource.Contains("-Architecture x64", StringComparison.Ordinal) &&
+    utmRunbookSource.Contains("Windows ARM64", StringComparison.Ordinal) &&
+    utmRunbookSource.Contains("Windows x64 compatibility", StringComparison.Ordinal),
+    "UTM runbook no longer certifies the single Windows x64 stack on an ARM64 compatibility host.");
+Require(
+    !utmRunbookSource.Contains("Windows-arm64.exe", StringComparison.OrdinalIgnoreCase) &&
+    !utmRunbookSource.Contains("-Architecture arm64", StringComparison.OrdinalIgnoreCase) &&
+    !utmRunbookSource.Contains("Windows-arm64.update", StringComparison.OrdinalIgnoreCase),
+    "UTM runbook regressed to a native ARM64 product target.");
+Require(
     utmEvidenceSource.Contains("[string]$DigitalSolutionsSourceSha", StringComparison.Ordinal) &&
     utmEvidenceSource.Contains("[string]$LauncherSourceSha", StringComparison.Ordinal) &&
     utmEvidenceSource.Contains("[string]$AgentSourceSha", StringComparison.Ordinal) &&
@@ -67,9 +80,20 @@ Require(
     utmEvidenceSource.Contains("11-notification-inbox.json", StringComparison.Ordinal),
     "UTM evidence no longer captures BKE installation and Agent-projected notifications.");
 Require(
+    utmEvidenceSource.Contains("/v1/runtime/platform-authority", StringComparison.Ordinal) &&
+    utmEvidenceSource.Contains("08-agent-platform-authority.json", StringComparison.Ordinal) &&
+    utmEvidenceSource.Contains("matches_agent_environment", StringComparison.Ordinal),
+    "UTM evidence no longer proves Launcher-visible Agent platform-authority convergence.");
+Require(
     utmPrepareSource.Contains("jl-bke.com", StringComparison.OrdinalIgnoreCase) &&
     utmPrepareSource.Contains("production jl-bke.com authority", StringComparison.OrdinalIgnoreCase),
     "UTM Agent environment no longer fails closed against production authority.");
+Require(
+    utmInstallTrustSource.Contains("[ValidateSet(\"x64\")]", StringComparison.Ordinal) &&
+    utmInstallTrustSource.Contains("[string]$Architecture = \"x64\"", StringComparison.Ordinal) &&
+    !utmInstallTrustSource.Contains("arm64", StringComparison.OrdinalIgnoreCase) &&
+    !utmInstallTrustSource.Contains("\"auto\"", StringComparison.OrdinalIgnoreCase),
+    "UTM Render Dock target-trust installer is not x64-only.");
 Require(
     utmWorkflowSource.Contains("SOURCE_SHA: ${{ inputs.source_sha || github.sha }}", StringComparison.Ordinal) &&
     utmWorkflowSource.Contains("ref: ${{ env.SOURCE_SHA }}", StringComparison.Ordinal) &&
@@ -80,6 +104,14 @@ Require(
     utmWorkflowSource.Contains("branches: [main]", StringComparison.Ordinal) &&
     utmWorkflowSource.Contains("certification/utm/**", StringComparison.Ordinal),
     "UTM trust bundle is not emitted from relevant merged-main changes.");
+Require(
+    utmWorkflowSource.Contains("Generate Render Dock x64 disposable trust", StringComparison.Ordinal) &&
+    utmWorkflowSource.Contains("--architecture \"x86_64\"", StringComparison.Ordinal) &&
+    utmWorkflowSource.Contains("\"$root/x64\"", StringComparison.Ordinal) &&
+    !utmWorkflowSource.Contains("\"$root/arm64\"", StringComparison.Ordinal) &&
+    !utmWorkflowSource.Contains("utm-render-dock-arm64", StringComparison.OrdinalIgnoreCase) &&
+    !utmWorkflowSource.Contains("--architecture \"arm64\"", StringComparison.OrdinalIgnoreCase),
+    "UTM target-trust workflow is not converged on the canonical Windows x64 target.");
 Require(
     intentCertificationSource.Contains("\"utm-trust\"", StringComparison.Ordinal) &&
     intentCertificationSource.Contains("uses: ./.github/workflows/utm-disposable-target-trust.yml", StringComparison.Ordinal),
