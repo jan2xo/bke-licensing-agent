@@ -10,7 +10,7 @@ The workflow is manual-only and requires the exact dispatch token:
 AUTHORIZE_PRODUCTION_SIGNING
 ```
 
-It rebuilds the Windows x64 and ARM64 installers using production public trust, Authenticode-signs both, verifies the approved signer identity, recomputes final signed hashes, and emits a signed release manifest.
+It rebuilds the single Windows x64 installer using production public trust, Authenticode-signs it, verifies the approved signer identity, recomputes the final signed hash, and emits a signed release manifest. Windows 11 ARM64 uses this same x64 application through Windows x64 emulation.
 
 It does **not** publish a GitHub release, software-catalog asset, or Digital Solutions deployment.
 
@@ -27,7 +27,7 @@ BKE_WINDOWS_CODESIGN_PFX_PASSWORD
 
 `BKE_WINDOWS_CODESIGN_PFX_B64` is the base64-encoded approved BKE code-signing PFX.
 
-The workflow imports the certificate into the ephemeral runner certificate store with `Exportable=false`, verifies its exact approved subject and thumbprint, signs both installers, then verifies `Get-AuthenticodeSignature.Status == Valid`.
+The workflow imports the certificate into the ephemeral runner certificate store with `Exportable=false`, verifies its exact approved subject and thumbprint, signs the installer, then verifies `Get-AuthenticodeSignature.Status == Valid`.
 
 If the approved production code-signing identity is non-exportable/HSM-backed instead of PFX-based, replace only the signing adapter step; keep the same signer subject/thumbprint and post-sign verification contract.
 
@@ -64,6 +64,7 @@ The corresponding private Ed25519 key belongs only in the protected Digital Solu
 ## Required workflow-dispatch inputs
 
 ```text
+source_sha
 release_version
 approved_signer_thumbprint
 approved_signer_subject
@@ -91,7 +92,6 @@ BKE-Licensing-Agent-2.0.0-Windows-PRODUCTION-SIGNED-UNPUBLISHED
 containing:
 
 - signed x64 installer,
-- signed ARM64 installer,
 - `PRODUCTION-RELEASE-MANIFEST.json`.
 
 Manifest schema:
@@ -126,8 +126,6 @@ BKE_AGENT_UPDATE_REVISION
 BKE_AGENT_UPDATE_PUBLISHED_AT
 BKE_AGENT_UPDATE_WINDOWS_X64_SHA256
 BKE_AGENT_UPDATE_WINDOWS_X64_SIZE
-BKE_AGENT_UPDATE_WINDOWS_ARM64_SHA256
-BKE_AGENT_UPDATE_WINDOWS_ARM64_SIZE
 ```
 
 The SHA-256 and byte-size fields must come from the signed production release manifest, not the unsigned preflight.

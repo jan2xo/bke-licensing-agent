@@ -2,7 +2,7 @@
 
 **Current implementation:** .NET 10 Generation 2  
 **Version:** 2.0.0 candidate  
-**Windows architectures:** x64/AMD64 and ARM64  
+**Windows application architecture:** x64 only (including Windows 11 ARM64 through x64 emulation)
 **Production release:** pending signing/cutover
 
 The BKE Licensing Agent is the shared, product-agnostic licensing, authorization, notification, update, and trusted-execution layer for BKE software.
@@ -18,7 +18,7 @@ The active repository tree is now **.NET 10-only**. The retired Generation 1 Pyt
 - `dotnet/src/BKE.LicensingAgent.Updater/` — elevated privileged update helper
 - `dotnet/src/BKE.LicensingAgent.Provisioner/` — privileged machine trust provisioner
 - `dotnet/tools/BKE.LicensingAgent.ReleaseTooling/` — release/trust/key tooling
-- `packaging/windows/` — canonical x64 and ARM64 installers
+- `packaging/windows/` — canonical Windows x64 installer
 - `certification/` — retained real-machine certification scripts/evidence documentation
 
 ## Windows machine contract
@@ -56,11 +56,11 @@ Publish all native Windows support executables:
 powershell -ExecutionPolicy Bypass -File .\scripts\publish_dotnet_windows_payloads.ps1 -Version 2.0.0 -Architecture all
 ```
 
-The supported Windows release matrix is x64/AMD64 (Intel + AMD 64-bit) and ARM64.
+The supported Windows application build is x64. Windows 11 ARM64 systems are supported through the OS x64 compatibility layer; BKE does not publish a separate native ARM64 Agent family.
 
 ## Certification state
 
-Runtime bridge, canonical installer migration, signed self-update pre-publication, and broken-update rollback have all passed their certified phases. The .NET-only convergence is a new post-certification packaging/runtime wave and must pass its own hosted x64 and persistent ARM64 acceptance before production signing.
+Runtime bridge, canonical installer migration, signed self-update pre-publication, and broken-update rollback have all passed their certified phases. The .NET-only convergence is certified; the current packaging/runtime line now converges on the single x64 Windows application family.
 
 # BKE Licensing Agent Installation & Product Integration Standard
 

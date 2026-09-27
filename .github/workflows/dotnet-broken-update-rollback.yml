@@ -1,7 +1,18 @@
 name: Phase 10 broken production update rollback certification
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: ${{ github.sha }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
   SERVICE_NAME: BKE-Licensing-Agent
   BASELINE_VERSION: "2.0.0"
   BROKEN_VERSION: "2.0.1"
@@ -20,39 +31,6 @@ jobs:
   dotnet-contracts:
     name: Fast contract gate
     uses: ./.github/workflows/_dotnet-contracts.yml
-
-  arm64-verifier:
-    name: ARM64 rollback verifier
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout exact candidate
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-
-      - name: Validate ARM64 rollback verifier
-        shell: pwsh
-        run: |
-          $path = (Resolve-Path "certification/windows_broken_update_rollback_arm64.ps1").Path
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count -ne 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            throw "Phase 10 ARM64 rollback verifier has parse errors"
-          }
-          $source = Get-Content -LiteralPath $path -Raw
-          foreach ($required in @(
-            "bke.broken-update-rollback-arm64.v1",
-            "payload_hashes_restored",
-            "signed_authorization_recovered",
-            "rollback_staging_cleared",
-            "loopback_boundary_preserved",
-            "data_root_contract_preserved"
-          )) {
-            if (!$source.Contains($required)) { throw "ARM64 verifier missing marker: $required" }
-          }
 
   baseline-package:
     name: Healthy 2.0.0 baseline artifact
@@ -130,12 +108,8 @@ jobs:
           retention-days: 2
 
   broken-candidate:
-    name: Broken 2.0.1 ${{ matrix.arch }} artifact
-    needs: [dotnet-contracts, arm64-verifier]
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64, arm64]
+    name: Broken 2.0.1 x64 artifact
+    needs: dotnet-contracts
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
@@ -155,7 +129,7 @@ jobs:
       - name: Publish support payloads for broken candidate
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:BASELINE_VERSION -Architecture "${{ matrix.arch }}"
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:BASELINE_VERSION -Architecture x64
 
       - name: Generate disposable rollback trust
         shell: pwsh
@@ -163,26 +137,16 @@ jobs:
           dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id phase10-target-disposable-v1 --policy-id phase10-packaging-only --update-key-id phase10-update-disposable-v1
           if ($LASTEXITCODE -ne 0) { throw ".NET Phase 10 trust generation failed" }
 
-      - name: Publish deliberately broken service + runtime
+      - name: Publish deliberately broken x64 service + runtime
         shell: pwsh
         run: |
-          $arch="${{ matrix.arch }}"
-          if ($arch -eq "x64") {
-            $runtime="win-x64"
-            $serviceDir="dist/windows/bke-licensing-agent-service"
-            $runtimeDir="dist/windows/bke-licensing-agent-runtime"
-            $expected=0x8664
-          } else {
-            $runtime="win-arm64"
-            $serviceDir="dist/windows/bke-licensing-agent-service-arm64"
-            $runtimeDir="dist/windows/bke-licensing-agent-runtime-arm64"
-            $expected=0xAA64
-          }
+          $serviceDir="dist/windows/bke-licensing-agent-service"
+          $runtimeDir="dist/windows/bke-licensing-agent-runtime"
           New-Item -ItemType Directory -Force $serviceDir | Out-Null
           New-Item -ItemType Directory -Force $runtimeDir | Out-Null
-          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime $runtime --self-contained true -p:PublishSingleFile=true -p:Version=$env:BROKEN_VERSION --output $serviceDir
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:BROKEN_VERSION --output $serviceDir
           if ($LASTEXITCODE -ne 0) { throw "broken candidate bootstrap publish failed" }
-          dotnet publish dotnet/certification/BKE.LicensingAgent.BrokenRuntime/BKE.LicensingAgent.BrokenRuntime.csproj --configuration Release --runtime $runtime --self-contained true -p:PublishSingleFile=true -p:Version=$env:BROKEN_VERSION --output $runtimeDir
+          dotnet publish dotnet/certification/BKE.LicensingAgent.BrokenRuntime/BKE.LicensingAgent.BrokenRuntime.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:BROKEN_VERSION --output $runtimeDir
           if ($LASTEXITCODE -ne 0) { throw "broken runtime publish failed" }
 
           function Assert-PeMachine([string]$Path,[int]$Expected) {
@@ -193,43 +157,40 @@ jobs:
             $machine=[BitConverter]::ToUInt16($bytes,$offset+4)
             if ($machine -ne $Expected) { throw ("wrong PE machine {0}: 0x{1:X4}" -f $Path,$machine) }
           }
-          Assert-PeMachine (Join-Path $serviceDir "bke-licensing-agent-service.exe") $expected
-          Assert-PeMachine (Join-Path $runtimeDir "bke-licensing-agent-runtime.exe") $expected
+          Assert-PeMachine (Join-Path $serviceDir "bke-licensing-agent-service.exe") 0x8664
+          Assert-PeMachine (Join-Path $runtimeDir "bke-licensing-agent-runtime.exe") 0x8664
 
-      - name: Compile deliberately broken installer
+      - name: Compile deliberately broken x64 installer
         shell: pwsh
         run: |
-          $arch="${{ matrix.arch }}"
-          $script = if ($arch -eq "x64") { "packaging/windows/bke-licensing-agent.iss" } else { "packaging/windows/bke-licensing-agent-arm64.iss" }
           $iscc=Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
-          & $iscc "/DAppVersion=$env:BROKEN_VERSION" $script
-          if ($LASTEXITCODE -ne 0) { throw "broken $arch installer compile failed" }
-          $installer="dist/installer/BKE-Licensing-Agent-$($env:BROKEN_VERSION)-Windows-$arch.exe"
-          if (!(Test-Path $installer -PathType Leaf)) { throw "broken $arch installer missing" }
+          & $iscc "/DAppVersion=$env:BROKEN_VERSION" packaging/windows/bke-licensing-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "broken x64 installer compile failed" }
+          $installer="dist/installer/BKE-Licensing-Agent-$($env:BROKEN_VERSION)-Windows-x64.exe"
+          if (!(Test-Path $installer -PathType Leaf)) { throw "broken x64 installer missing" }
 
       - name: Build broken-candidate artifact manifest
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/phase10 | Out-Null
-          $arch="${{ matrix.arch }}"
-          $installer=Get-Item "dist/installer/BKE-Licensing-Agent-$($env:BROKEN_VERSION)-Windows-$arch.exe"
+          $installer=Get-Item "dist/installer/BKE-Licensing-Agent-$($env:BROKEN_VERSION)-Windows-x64.exe"
           $manifest=[ordered]@{
             schema="bke.phase10-installer-candidate.v1"
             status="INTENTIONALLY_BROKEN_PREPRODUCTION"
             production_ready=$false
             source_sha=$env:SOURCE_SHA
             version=$env:BROKEN_VERSION
-            architecture=$arch
+            architecture="x64"
             installer=[ordered]@{ file=$installer.Name; sha256=(Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); bytes=$installer.Length }
           }
           $manifest | ConvertTo-Json -Depth 6 | Set-Content dist/phase10/PACKAGE-MANIFEST.json -Encoding utf8
 
-      - name: Upload broken candidate artifact
+      - name: Upload broken x64 candidate artifact
         uses: actions/upload-artifact@v4
         with:
-          name: phase10-broken-${{ matrix.arch }}
+          name: phase10-broken-x64
           path: |
-            dist/installer/BKE-Licensing-Agent-${{ env.BROKEN_VERSION }}-Windows-${{ matrix.arch }}.exe
+            dist/installer/BKE-Licensing-Agent-${{ env.BROKEN_VERSION }}-Windows-x64.exe
             dist/phase10/PACKAGE-MANIFEST.json
           if-no-files-found: error
           retention-days: 2
@@ -395,152 +356,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  arm64-defender:
-    name: ARM64 broken candidate Defender scan
-    needs: broken-candidate
-    runs-on: windows-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout exact candidate
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-
-      - name: Download phase10-broken-arm64
-        uses: actions/download-artifact@v4
-        with:
-          name: phase10-broken-arm64
-          path: broken-arm64
-
-      - name: Verify phase10-broken-arm64
-        uses: ./.github/actions/verify-phase10-candidate
-        with:
-          artifact_root: broken-arm64
-          source_sha: ${{ env.SOURCE_SHA }}
-          version: ${{ env.BROKEN_VERSION }}
-          architecture: arm64
-          status: INTENTIONALLY_BROKEN_PREPRODUCTION
-
-      - name: Scan ARM64 broken-update acceptance candidate
-        shell: pwsh
-        run: |
-          $installer="broken-arm64/installer/BKE-Licensing-Agent-$($env:BROKEN_VERSION)-Windows-arm64.exe"
-          $platformRoot = Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform"
-          $mpCmd = Get-ChildItem -Path $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($null -eq $mpCmd) {
-            $fallback = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
-            if (Test-Path $fallback) { $mpCmd = Get-Item $fallback }
-          }
-          if ($null -eq $mpCmd) { throw "Microsoft Defender scanner unavailable" }
-          & $mpCmd.FullName -Scan -ScanType 3 -File (Resolve-Path $installer).Path -DisableRemediation
-          if ($LASTEXITCODE -ne 0) { throw "Defender ARM64 candidate scan failed: $LASTEXITCODE" }
-
-  arm64-kit:
-    name: ARM64 UTM rollback kit
-    needs: [broken-candidate, arm64-defender]
-    runs-on: windows-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout exact candidate
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-
-      - name: Download phase10-broken-arm64
-        uses: actions/download-artifact@v4
-        with:
-          name: phase10-broken-arm64
-          path: broken-arm64
-
-      - name: Verify phase10-broken-arm64
-        uses: ./.github/actions/verify-phase10-candidate
-        with:
-          artifact_root: broken-arm64
-          source_sha: ${{ env.SOURCE_SHA }}
-          version: ${{ env.BROKEN_VERSION }}
-          architecture: arm64
-          status: INTENTIONALLY_BROKEN_PREPRODUCTION
-
-      - name: Assemble ARM64 Phase 10 UTM rollback kit
-        shell: pwsh
-        run: |
-          $package = "dist/phase10-arm64-kit"
-          Remove-Item $package -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $package | Out-Null
-          Copy-Item "broken-arm64/installer/BKE-Licensing-Agent-$($env:BROKEN_VERSION)-Windows-arm64.exe" $package
-          Copy-Item "certification/windows_broken_update_rollback_arm64.ps1" $package
-          @"
-          BKE Licensing Agent - Phase 10 Windows ARM64 Broken-Update Rollback Acceptance
-
-          SOURCE COMMIT:
-          $env:SOURCE_SHA
-
-          THIS IS AN INTENTIONALLY BROKEN, UNSIGNED CERTIFICATION CANDIDATE.
-          DO NOT PUBLISH IT TO THE PRODUCTION SOFTWARE CATALOG.
-          DO NOT USE IT AS A NORMAL UPDATE.
-
-          Preconditions:
-          - persistent Windows 11 ARM64 UTM machine
-          - canonical healthy Gen2 2.0.0 from Phase 8 remains installed
-          - service BKE-Licensing-Agent is healthy
-          - signed runtime-bridge-cert authorization fixture still returns authorized
-
-          Run from an ELEVATED PowerShell in this extracted directory:
-
-          1. powershell -ExecutionPolicy Bypass -File .\windows_broken_update_rollback_arm64.ps1 -Mode Prepare
-          2. powershell -ExecutionPolicy Bypass -File .\windows_broken_update_rollback_arm64.ps1 -Mode Install
-          3. powershell -ExecutionPolicy Bypass -File .\windows_broken_update_rollback_arm64.ps1 -Mode Collect
-
-          Required result:
-          schema = bke.broken-update-rollback-arm64.v1
-          status = PASS
-
-          NO MERGE.
-          NO PRODUCTION RELEASE/TAG.
-          NO PRODUCTION CATALOG PUBLICATION.
-          NO PRODUCTION SIGNING CUTOVER.
-          "@ | Set-Content -LiteralPath (Join-Path $package "README-PHASE10-ARM64.txt") -Encoding utf8
-          $sum = Join-Path $package "SHA256SUMS.txt"
-          Get-ChildItem -LiteralPath $package -File | Where-Object Name -ne "SHA256SUMS.txt" | ForEach-Object {
-            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)" | Add-Content -LiteralPath $sum -Encoding ascii
-          }
-          $zip = "dist/BKE-Licensing-Agent-$($env:BROKEN_VERSION)-Windows-arm64-Phase10-BROKEN-ROLLBACK-$($env:SOURCE_SHA).zip"
-          Compress-Archive -Path "$package/*" -DestinationPath $zip -CompressionLevel Optimal -Force
-          Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List
-
-      - name: Upload Phase 10 ARM64 UTM rollback kit
-        uses: actions/upload-artifact@v4
-        with:
-          name: BKE-Licensing-Agent-2.0.1-Windows-arm64-Phase10-UTM-Rollback-Kit
-          path: dist/BKE-Licensing-Agent-2.0.1-Windows-arm64-Phase10-BROKEN-ROLLBACK-*.zip
-          if-no-files-found: error
-          retention-days: 14
-
   required-certification:
     name: Required rollback certification
     if: ${{ always() }}
     needs:
       - dotnet-contracts
-      - arm64-verifier
       - baseline-package
       - broken-candidate
       - rollback-lifecycle
-      - arm64-defender
-      - arm64-kit
     runs-on: ubuntu-latest
     steps:
       - name: Require every Phase 10 module
         env:
           CONTRACTS: ${{ needs.dotnet-contracts.result }}
-          VERIFIER: ${{ needs.arm64-verifier.result }}
           BASELINE: ${{ needs.baseline-package.result }}
           BROKEN: ${{ needs.broken-candidate.result }}
           LIFECYCLE: ${{ needs.rollback-lifecycle.result }}
-          DEFENDER: ${{ needs.arm64-defender.result }}
-          ARM64_KIT: ${{ needs.arm64-kit.result }}
         run: |
-          for value in "$CONTRACTS" "$VERIFIER" "$BASELINE" "$BROKEN" "$LIFECYCLE" "$DEFENDER" "$ARM64_KIT"; do
+          for value in "$CONTRACTS" "$BASELINE" "$BROKEN" "$LIFECYCLE"; do
             test "$value" = "success" || { echo "Required Phase 10 module did not pass: $value"; exit 1; }
           done
           echo "Required Phase 10 rollback certification: PASS"

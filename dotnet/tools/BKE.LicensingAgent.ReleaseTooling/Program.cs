@@ -429,12 +429,12 @@ internal static class Program
 
         var architectures = root.GetProperty("architectures").EnumerateArray()
             .Select(item => item.GetString()).Where(item => item is not null).Cast<string>().ToHashSet(StringComparer.Ordinal);
-        if (!architectures.SetEquals(["x64", "arm64"]))
-            throw new InvalidDataException("expected exactly x64 + arm64 release architectures");
+        if (!architectures.SetEquals(["x64"]))
+            throw new InvalidDataException("expected exactly the x64 Agent release architecture");
 
         var installers = root.GetProperty("installers");
         var artifacts = new List<Dictionary<string, object?>>();
-        foreach (var architecture in new[] { "x64", "arm64" })
+        foreach (var architecture in new[] { "x64" })
         {
             var item = installers.GetProperty(architecture);
             var hash = RequiredString(item, "sha256");

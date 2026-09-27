@@ -3,6 +3,9 @@ name: Production Windows signing gate
 on:
   workflow_dispatch:
     inputs:
+      source_sha:
+        description: Exact certified Agent commit SHA to rebuild and sign
+        required: true
       release_version:
         description: Exact production version
         required: true
@@ -25,7 +28,7 @@ permissions:
 
 jobs:
   sign-windows:
-    name: Rebuild and sign x64 + ARM64 production installers
+    name: Rebuild and sign x64 production installer
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 50
@@ -55,8 +58,14 @@ jobs:
       - name: Checkout exact signing candidate
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_sha }}
           fetch-depth: 0
+
+      - name: Verify exact signing candidate
+        shell: pwsh
+        run: |
+          $actual=(git rev-parse HEAD).Trim()
+          if ($actual -ne "${{ inputs.source_sha }}") { throw "Production signing source SHA drifted: $actual" }
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -111,7 +120,7 @@ jobs:
       - name: Publish native .NET support payloads
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:RELEASE_VERSION -Architecture all
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:RELEASE_VERSION -Architecture x64
 
       - name: Materialize production public trust only
         shell: pwsh
@@ -142,22 +151,16 @@ jobs:
             }
           }
 
-      - name: Publish native x64 + ARM64 Gen2 payloads
+      - name: Publish native x64 Gen2 payloads
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
           New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service-arm64 | Out-Null
-          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime-arm64 | Out-Null
 
           dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-service
           if ($LASTEXITCODE -ne 0) { throw "x64 bootstrap publish failed" }
           dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-runtime
           if ($LASTEXITCODE -ne 0) { throw "x64 runtime publish failed" }
-          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-service-arm64
-          if ($LASTEXITCODE -ne 0) { throw "ARM64 bootstrap publish failed" }
-          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-arm64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:RELEASE_VERSION --output dist/windows/bke-licensing-agent-runtime-arm64
-          if ($LASTEXITCODE -ne 0) { throw "ARM64 runtime publish failed" }
 
       - name: Verify native PE machines
         shell: pwsh
@@ -172,17 +175,13 @@ jobs:
           }
           Assert-PeMachine "dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe" 0x8664
           Assert-PeMachine "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe" 0x8664
-          Assert-PeMachine "dist/windows/bke-licensing-agent-service-arm64/bke-licensing-agent-service.exe" 0xAA64
-          Assert-PeMachine "dist/windows/bke-licensing-agent-runtime-arm64/bke-licensing-agent-runtime.exe" 0xAA64
 
-      - name: Build canonical x64 + ARM64 installers with production public trust
+      - name: Build canonical x64 installer with production public trust
         shell: pwsh
         run: |
           $iscc = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
           & $iscc packaging/windows/bke-licensing-agent.iss
           if ($LASTEXITCODE -ne 0) { throw "x64 installer compile failed" }
-          & $iscc packaging/windows/bke-licensing-agent-arm64.iss
-          if ($LASTEXITCODE -ne 0) { throw "ARM64 installer compile failed" }
 
       - name: Defender scan unsigned production-trust installers
         shell: pwsh
@@ -194,13 +193,9 @@ jobs:
             if (Test-Path $fallback) { $mpCmd = Get-Item $fallback }
           }
           if ($null -eq $mpCmd) { throw "Microsoft Defender scanner unavailable" }
-          foreach ($installer in @(
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe",
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe"
-          )) {
-            & $mpCmd.FullName -Scan -ScanType 3 -File (Resolve-Path $installer).Path -DisableRemediation
-            if ($LASTEXITCODE -ne 0) { throw "Defender scan failed for $installer" }
-          }
+          $installer = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe"
+          & $mpCmd.FullName -Scan -ScanType 3 -File (Resolve-Path $installer).Path -DisableRemediation
+          if ($LASTEXITCODE -ne 0) { throw "Defender scan failed for $installer" }
 
       - name: Import approved Windows signing identity
         shell: pwsh
@@ -219,7 +214,7 @@ jobs:
           "SIGNER_THUMBPRINT=$actualThumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Remove-Item -LiteralPath $pfxPath -Force
 
-      - name: Authenticode sign x64 + ARM64 installers
+      - name: Authenticode sign x64 installer
         shell: pwsh
         run: |
           $windowsKits = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Windows Kits\10\bin"
@@ -229,13 +224,9 @@ jobs:
             Select-Object -First 1
           if ($null -eq $signtool) { throw "signtool.exe not found" }
 
-          foreach ($installer in @(
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe",
-            "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe"
-          )) {
-            & $signtool.FullName sign /fd SHA256 /sha1 $env:SIGNER_THUMBPRINT /tr http://timestamp.digicert.com /td SHA256 $installer
-            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $installer" }
-          }
+          $installer = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe"
+          & $signtool.FullName sign /fd SHA256 /sha1 $env:SIGNER_THUMBPRINT /tr http://timestamp.digicert.com /td SHA256 $installer
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $installer" }
 
       - name: Verify signed publisher identity and generate final signed manifest
         shell: pwsh
@@ -257,8 +248,7 @@ jobs:
           }
 
           foreach ($entry in @(
-            @{ architecture = "x64"; path = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe" },
-            @{ architecture = "arm64"; path = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-arm64.exe" }
+            @{ architecture = "x64"; path = "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe" }
           )) {
             $signature = Get-AuthenticodeSignature -FilePath $entry.path
             if ($signature.Status -ne "Valid") { throw "Authenticode status is not Valid for $($entry.path): $($signature.Status)" }
