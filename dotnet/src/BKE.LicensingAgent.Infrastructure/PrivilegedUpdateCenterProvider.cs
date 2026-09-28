@@ -1531,49 +1531,53 @@ public sealed class PrivilegedUpdateCenterProvider :
                     "GitHub artifact exceeds bounded size");
             }
 
-            await using var input =
-                await response.Content.ReadAsStreamAsync(transferToken);
-            await using var output = File.Create(temporary);
-            using var hash =
-                IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var buffer = new byte[1024 * 1024];
             long count = 0;
-
-            while (true)
+            string digest;
+            await using (var input =
+                await response.Content.ReadAsStreamAsync(transferToken))
+            await using (var output = File.Create(temporary))
+            using (var hash =
+                IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
-                var remaining = expectedSize - count + 1;
-                if (remaining <= 0)
+                var buffer = new byte[1024 * 1024];
+
+                while (true)
                 {
-                    throw new InvalidDataException(
-                        "GitHub artifact exceeds bounded size");
+                    var remaining = expectedSize - count + 1;
+                    if (remaining <= 0)
+                    {
+                        throw new InvalidDataException(
+                            "GitHub artifact exceeds bounded size");
+                    }
+
+                    var read = await input.ReadAsync(
+                        buffer.AsMemory(
+                            0,
+                            (int)Math.Min(buffer.Length, remaining)),
+                        transferToken);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    count += read;
+                    if (count > expectedSize)
+                    {
+                        throw new InvalidDataException(
+                            "GitHub artifact exceeds bounded size");
+                    }
+
+                    hash.AppendData(buffer, 0, read);
+                    await output.WriteAsync(
+                        buffer.AsMemory(0, read),
+                        transferToken);
                 }
 
-                var read = await input.ReadAsync(
-                    buffer.AsMemory(
-                        0,
-                        (int)Math.Min(buffer.Length, remaining)),
-                    transferToken);
-                if (read == 0)
-                {
-                    break;
-                }
-
-                count += read;
-                if (count > expectedSize)
-                {
-                    throw new InvalidDataException(
-                        "GitHub artifact exceeds bounded size");
-                }
-
-                hash.AppendData(buffer, 0, read);
-                await output.WriteAsync(
-                    buffer.AsMemory(0, read),
-                    transferToken);
+                digest =
+                    Convert.ToHexString(hash.GetHashAndReset())
+                        .ToLowerInvariant();
             }
 
-            var digest =
-                Convert.ToHexString(hash.GetHashAndReset())
-                    .ToLowerInvariant();
             if (count != expectedSize ||
                 !string.Equals(
                     digest,
@@ -1704,24 +1708,28 @@ public sealed class PrivilegedUpdateCenterProvider :
             {
                 throw new InvalidDataException("artifact exceeds bounded size");
             }
-            await using var input = await response.Content.ReadAsStreamAsync(transferToken);
-            await using var output = File.Create(temporary);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var buffer = new byte[1024 * 1024];
             long count = 0;
-            while (true)
+            string digest;
+            await using (var input = await response.Content.ReadAsStreamAsync(transferToken))
+            await using (var output = File.Create(temporary))
+            using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
-                var remaining = expectedSize - count + 1;
-                if (remaining <= 0) throw new InvalidDataException("artifact exceeds bounded size");
-                var read = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), transferToken);
-                if (read == 0) break;
-                count += read;
-                if (count > expectedSize) throw new InvalidDataException("artifact exceeds bounded size");
-                hash.AppendData(buffer, 0, read);
-                await output.WriteAsync(buffer.AsMemory(0, read), transferToken);
+                var buffer = new byte[1024 * 1024];
+                while (true)
+                {
+                    var remaining = expectedSize - count + 1;
+                    if (remaining <= 0) throw new InvalidDataException("artifact exceeds bounded size");
+                    var read = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), transferToken);
+                    if (read == 0) break;
+                    count += read;
+                    if (count > expectedSize) throw new InvalidDataException("artifact exceeds bounded size");
+                    hash.AppendData(buffer, 0, read);
+                    await output.WriteAsync(buffer.AsMemory(0, read), transferToken);
+                }
+                digest = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
             }
             if (count != expectedSize ||
-                !string.Equals(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), expectedSha256.ToLowerInvariant(), StringComparison.Ordinal))
+                !string.Equals(digest, expectedSha256.ToLowerInvariant(), StringComparison.Ordinal))
             {
                 throw new InvalidDataException("artifact integrity mismatch");
             }
