@@ -10,10 +10,10 @@ using BKE.LicensingAgent.Infrastructure;
 const string ProductId = "bke-render-dock";
 const string Version = "1.0.3";
 const string Repository = "jan2xo/BKE_RENDER_DOCK";
-const string Tag = "v1.0.3-preproduction-e2e";
+const string Tag = "v1.0.3";
 const string EntryPoint = "RENDER DOCK.exe";
-const long ExpectedArtifactBytes = 54167311;
-const string ExpectedArtifactSha256 = "93763ef85579c252aea05cd0f335c024639ce8d26f2ead8fe09c69933868d4a7";
+const long ExpectedArtifactBytes = 54167312;
+const string ExpectedArtifactSha256 = "916931fb2efe5fb26720e0f150bdef290f064780f534dcfd96577e1fda45ffa0";
 
 string? outputPath = null;
 string? sourceSha = null;
@@ -279,7 +279,7 @@ static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcqui
     string runtimeRoot)
 {
     const string packageUrl =
-        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3-preproduction-e2e/Render-Dock-1.0.3-Windows-x64.update.zip";
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3/Render-Dock-1.0.3-Windows-x64.update.zip";
     var finalPackageUri = await ResolveFinalAssetUriAsync(
         new Uri(packageUrl, UriKind.Absolute),
         CancellationToken.None);
@@ -657,7 +657,7 @@ static async Task<SortedDictionary<string, object?>> DiagnoseProviderAcquisition
 static async Task<SortedDictionary<string, object?>> DiagnoseImmutableReleaseAsync()
 {
     const string metadataUrl =
-        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3-preproduction-e2e/Render-Dock-1.0.3-Windows-x64.update.json";
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3/Render-Dock-1.0.3-Windows-x64.update.json";
 
     var metadataTransfer = await DownloadBytesWithHopsAsync(
         new Uri(metadataUrl, UriKind.Absolute),
@@ -682,7 +682,7 @@ static async Task<SortedDictionary<string, object?>> DiagnoseImmutableReleaseAsy
     }
 
     var packageUrl = new Uri(
-        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3-preproduction-e2e/" +
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3/" +
         fileName,
         UriKind.Absolute);
     var packageTransfer = await DownloadHashWithHopsAsync(
