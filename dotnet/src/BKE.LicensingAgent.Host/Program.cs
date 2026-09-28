@@ -108,6 +108,13 @@ builder.Services.AddSingleton<IClaimCodeRedemptionService>(services => new Claim
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IClaimCodeRedemptionRemote>()));
+builder.Services.AddSingleton<AccountPasswordChangeRemote>();
+builder.Services.AddSingleton<IAccountPasswordChangeRemote>(services =>
+    services.GetRequiredService<AccountPasswordChangeRemote>());
+builder.Services.AddSingleton<IAccountPasswordChangeService>(services => new AccountPasswordChangeService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountPasswordChangeRemote>()));
 builder.Services.AddSingleton<StoreCatalogRemote>();
 builder.Services.AddSingleton<IStoreCatalogRemote>(services =>
     services.GetRequiredService<StoreCatalogRemote>());
@@ -504,6 +511,22 @@ app.MapPost(LocalAgentContract.AccountSessionLogoutPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountPasswordChangePath, async (
+    AccountPasswordChangeRequest request,
+    IAccountPasswordChangeService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPasswordMaterial(request.CurrentPassword) ||
+        !ValidPasswordMaterial(request.NewPassword))
+    {
+        return AccountPasswordChangeInvalidRequest();
+    }
+
+    var response = await service.ChangeAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     ClaimCodeRedeemRequest request,
     IClaimCodeRedemptionService service,
@@ -697,6 +720,9 @@ static bool ValidCorrelationId(string? correlationId) =>
 static bool ValidAccountSessionCorrelationId(string? correlationId) =>
     ValidCorrelationId(correlationId) && correlationId!.Length <= 128;
 
+static bool ValidPasswordMaterial(string? password) =>
+    !string.IsNullOrEmpty(password) && password.Length <= 128;
+
 static bool ValidClaimCode(string? code)
 {
     if (string.IsNullOrWhiteSpace(code))
@@ -831,6 +857,18 @@ static IResult AccountSessionLogoutInvalidRequest() =>
         LocalAgentContract.AccountSessionContractVersion,
         "FAILED",
         new AccountSessionError("INVALID_REQUEST", "The account-session request is invalid.", false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountPasswordChangeInvalidRequest() =>
+    Results.Json(new AccountPasswordChangeResponse(
+        LocalAgentContract.AccountPasswordChangeCapabilityId,
+        LocalAgentContract.AccountPasswordChangeContractVersion,
+        "INVALID_INPUT",
+        false,
+        new AccountPasswordChangeError(
+            "INVALID_REQUEST",
+            "The password-change request is invalid.",
+            false)),
         statusCode: StatusCodes.Status400BadRequest);
 
 static IResult ClaimCodeRedeemInvalidRequest() =>
