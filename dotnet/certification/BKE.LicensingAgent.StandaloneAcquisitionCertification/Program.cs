@@ -145,6 +145,22 @@ try
 
         try
         {
+            evidence["provider_handoff_diagnostic"] =
+                await DiagnoseProviderHandoffAsync(
+                    provider,
+                    runtimeRoot);
+        }
+        catch (Exception handoffDiagnosticException)
+        {
+            var root = handoffDiagnosticException.GetBaseException();
+            evidence["provider_handoff_diagnostic_error_type"] =
+                root.GetType().FullName;
+            evidence["provider_handoff_diagnostic_error"] =
+                root.Message;
+        }
+
+        try
+        {
             evidence["release_diagnostic"] =
                 await DiagnoseImmutableReleaseAsync();
         }
@@ -325,6 +341,146 @@ static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcqui
         ["bytes"] = info.Length,
         ["sha256"] = hash,
     };
+}
+
+static async Task<SortedDictionary<string, object?>> DiagnoseProviderHandoffAsync(
+    PrivilegedUpdateCenterProvider provider,
+    string runtimeRoot)
+{
+    const BindingFlags PrivateInstance =
+        BindingFlags.Instance | BindingFlags.NonPublic;
+
+    object Invoke(string methodName, params object?[] arguments)
+    {
+        var methods = typeof(PrivilegedUpdateCenterProvider)
+            .GetMethods(PrivateInstance)
+            .Where(method => method.Name == methodName)
+            .ToArray();
+        var method = methods.SingleOrDefault(candidate =>
+            candidate.GetParameters().Length == arguments.Length)
+            ?? throw new MissingMethodException(
+                typeof(PrivilegedUpdateCenterProvider).FullName,
+                methodName);
+        return method.Invoke(provider, arguments)
+            ?? throw new InvalidOperationException(
+                $"Private provider method {methodName} returned null.");
+    }
+
+    static object RequiredProperty(object instance, string propertyName)
+    {
+        var property = instance.GetType().GetProperty(
+            propertyName,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new MissingMemberException(
+                instance.GetType().FullName,
+                propertyName);
+        return property.GetValue(instance)
+            ?? throw new InvalidDataException(
+                $"Provider diagnostic property {propertyName} was null.");
+    }
+
+    static async Task<object> AwaitResultAsync(object taskObject)
+    {
+        if (taskObject is not Task task)
+        {
+            throw new InvalidDataException(
+                "Provider diagnostic invocation did not return a Task.");
+        }
+        await task;
+        return taskObject.GetType()
+            .GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)!
+            .GetValue(taskObject)
+            ?? throw new InvalidDataException(
+                "Provider diagnostic Task returned null.");
+    }
+
+    var config = Invoke("LoadPrivilegedConfig");
+    var target = Invoke(
+        "ResolveTargetPolicyForProvision",
+        ProductId,
+        "windows",
+        "x64",
+        config);
+    var authorization = new StandaloneProvisionAuthorization(
+        ProductId,
+        Version,
+        Repository,
+        Tag);
+    var package = await AwaitResultAsync(
+        Invoke(
+            "ResolveGitHubReleasePackageAsync",
+            authorization,
+            "x64",
+            target,
+            CancellationToken.None));
+
+    var fileName = (string)RequiredProperty(package, "FileName");
+    var size = (long)RequiredProperty(package, "Size");
+    var sha256 = (string)RequiredProperty(package, "Sha256");
+    var downloadUrl = (string)RequiredProperty(package, "DownloadUrl");
+    var artifact = Path.Combine(
+        runtimeRoot,
+        "downloads",
+        "handoff-diagnostic",
+        fileName);
+
+    var acquisitionTask = Invoke(
+        "AcquireGitHubAssetAsync",
+        downloadUrl,
+        artifact,
+        size,
+        sha256,
+        CancellationToken.None);
+    await (Task)acquisitionTask;
+    artifact = (string)(
+        acquisitionTask.GetType()
+            .GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)!
+            .GetValue(acquisitionTask)
+        ?? throw new InvalidDataException(
+            "Handoff diagnostic acquisition returned null."));
+
+    var entries = new List<string>();
+    using (var archive = ZipFile.OpenRead(artifact))
+    {
+        entries.AddRange(
+            archive.Entries
+                .Select(entry => entry.FullName)
+                .Take(40));
+    }
+
+    var result = new SortedDictionary<string, object?>(
+        StringComparer.Ordinal)
+    {
+        ["artifact_bytes"] = new FileInfo(artifact).Length,
+        ["artifact_sha256"] = Sha256File(artifact),
+        ["root_entry_point_present"] =
+            entries.Contains(EntryPoint, StringComparer.Ordinal),
+        ["sample_entries"] = entries,
+    };
+
+    try
+    {
+        var transactionId =
+            "handoff-diagnostic-" + Guid.NewGuid().ToString("N");
+        _ = Invoke(
+            "PreparePrivilegedProvisionInvocation",
+            authorization,
+            package,
+            target,
+            config,
+            artifact,
+            transactionId);
+        result["prepare_status"] = "PASS";
+    }
+    catch (Exception exception)
+    {
+        var root = exception.GetBaseException();
+        result["prepare_status"] = "FAILED";
+        result["prepare_error_type"] = root.GetType().FullName;
+        result["prepare_error"] = root.Message;
+    }
+
+    return result;
 }
 
 static async Task<Uri> ResolveFinalAssetUriAsync(
