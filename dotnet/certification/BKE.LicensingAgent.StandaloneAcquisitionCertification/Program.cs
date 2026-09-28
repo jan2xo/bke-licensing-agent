@@ -268,6 +268,9 @@ static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcqui
 {
     const string packageUrl =
         "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.2/Render-Dock-1.0.2-Windows-x64.update.zip";
+    var finalPackageUri = await ResolveFinalAssetUriAsync(
+        new Uri(packageUrl, UriKind.Absolute),
+        CancellationToken.None);
     var destination = Path.Combine(
         runtimeRoot,
         "downloads",
@@ -283,7 +286,7 @@ static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcqui
     var taskObject = method.Invoke(
         provider,
         [
-            packageUrl,
+            finalPackageUri.ToString(),
             destination,
             ExpectedArtifactBytes,
             ExpectedArtifactSha256,
@@ -322,6 +325,48 @@ static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcqui
         ["bytes"] = info.Length,
         ["sha256"] = hash,
     };
+}
+
+static async Task<Uri> ResolveFinalAssetUriAsync(
+    Uri initialUri,
+    CancellationToken cancellationToken)
+{
+    using var http = new HttpClient(
+        new HttpClientHandler { AllowAutoRedirect = false })
+    {
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
+
+    var current = initialUri;
+    for (var redirect = 0; redirect <= 5; redirect++)
+    {
+        ValidateDiagnosticUri(current);
+        using var request = new HttpRequestMessage(HttpMethod.Get, current);
+        request.Headers.Accept.ParseAdd("application/octet-stream");
+        request.Headers.UserAgent.ParseAdd(
+            "bke-licensing-agent-certification");
+        using var response = await http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            var location = response.Headers.Location
+                ?? throw new HttpRequestException(
+                    "Certification redirect is missing a location.");
+            current = location.IsAbsoluteUri
+                ? location
+                : new Uri(current, location);
+            continue;
+        }
+
+        response.EnsureSuccessStatusCode();
+        return current;
+    }
+
+    throw new HttpRequestException(
+        "Certification redirect limit exceeded.");
 }
 
 static async Task<SortedDictionary<string, object?>> DiagnoseProviderAcquisitionAsync(
