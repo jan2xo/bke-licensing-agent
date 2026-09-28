@@ -2,6 +2,7 @@ name: Standalone acquisition exact-provider certification
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/standalone-acquisition-certification.yml"
       - "dotnet/certification/BKE.LicensingAgent.StandaloneAcquisitionCertification/**"
