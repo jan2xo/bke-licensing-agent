@@ -1,0 +1,16 @@
+
+name: Post-merge stable Render Dock acquisition verification
+
+on:
+  push:
+    branches:
+      - cert/postmerge-acquisition-138d3553
+
+permissions:
+  contents: read
+
+jobs:
+  verify-main:
+    uses: jan2xo/bke-licensing-agent/.github/workflows/standalone-acquisition-certification.yml@main
+    with:
+      source_sha: 138d3553e137d1639083b618db303b3bb2540751
