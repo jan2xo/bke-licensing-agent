@@ -1,28 +1,12 @@
 name: Standalone acquisition exact-provider certification
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - ".github/workflows/standalone-acquisition-certification.yml"
-      - "dotnet/certification/BKE.LicensingAgent.StandaloneAcquisitionCertification/**"
-      - "dotnet/src/BKE.LicensingAgent.Infrastructure/PrivilegedUpdateCenterProvider.cs"
-      - "dotnet/src/BKE.LicensingAgent.Updater/**"
-      - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
-      - "certification/utm/Install-RenderDock-UtmTargetTrust.ps1"
-      - "certification/utm/Remove-RenderDock-UtmTargetTrust.ps1"
-      - "packaging/windows/**"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/standalone-acquisition-certification.yml"
-      - "dotnet/certification/BKE.LicensingAgent.StandaloneAcquisitionCertification/**"
-      - "dotnet/src/BKE.LicensingAgent.Infrastructure/PrivilegedUpdateCenterProvider.cs"
-      - "dotnet/src/BKE.LicensingAgent.Updater/**"
-      - "dotnet/tools/BKE.LicensingAgent.ReleaseTooling/**"
-      - "certification/utm/Install-RenderDock-UtmTargetTrust.ps1"
-      - "certification/utm/Remove-RenderDock-UtmTargetTrust.ps1"
-      - "packaging/windows/**"
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent source SHA to certify
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       source_sha:
@@ -34,11 +18,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: standalone-acquisition-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+  group: standalone-acquisition-${{ inputs.source_sha }}
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+  SOURCE_SHA: ${{ inputs.source_sha }}
   AGENT_VERSION: "2.0.0"
   SERVICE_NAME: BKE-Licensing-Agent
 
