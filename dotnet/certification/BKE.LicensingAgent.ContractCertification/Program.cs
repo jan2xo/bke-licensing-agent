@@ -353,6 +353,10 @@ Require(JsonName<AccountSessionCompleteRequest>(nameof(AccountSessionCompleteReq
 Require(JsonName<AccountSessionStartRequest>(nameof(AccountSessionStartRequest.CorrelationId)) == "correlation_id", "account-session start correlation_id wire name mismatch");
 Require(JsonName<AccountSessionStatusRequest>(nameof(AccountSessionStatusRequest.CorrelationId)) == "correlation_id", "account-session status correlation_id wire name mismatch");
 Require(JsonName<AccountSessionLogoutRequest>(nameof(AccountSessionLogoutRequest.CorrelationId)) == "correlation_id", "account-session logout correlation_id wire name mismatch");
+Require(JsonName<AccountPasswordChangeRequest>(nameof(AccountPasswordChangeRequest.CorrelationId)) == "correlation_id", "password-change correlation_id wire name mismatch");
+Require(JsonName<AccountPasswordChangeRequest>(nameof(AccountPasswordChangeRequest.CurrentPassword)) == "current_password", "password-change current_password wire name mismatch");
+Require(JsonName<AccountPasswordChangeRequest>(nameof(AccountPasswordChangeRequest.NewPassword)) == "new_password", "password-change new_password wire name mismatch");
+Require(JsonName<AccountPasswordChangeResponse>(nameof(AccountPasswordChangeResponse.ReauthenticationRequired)) == "reauthentication_required", "password-change reauthentication_required wire name mismatch");
 Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.CorrelationId)) == "correlation_id", "claim-code redemption correlation_id wire name mismatch");
 Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.Code)) == "code", "claim-code redemption code wire name mismatch");
 Require(JsonName<StoreCatalogRequest>(nameof(StoreCatalogRequest.CorrelationId)) == "correlation_id", "Store catalog correlation_id wire name mismatch");
@@ -390,6 +394,7 @@ Require(MethodNames<ILicenseCenterService>().SetEquals(["OpenAsync"]), "License 
 Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "AccountFeedAsync", "AccountReceiptAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
+Require(MethodNames<IAccountPasswordChangeService>().SetEquals(["ChangeAsync"]), "account password-change port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
@@ -407,6 +412,7 @@ CertifyFreshStorageBootstrap(storage);
 CertifyNotificationSchemaUpgrade();
 await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
+await CertifyAccountPasswordChangeBoundary();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
@@ -430,6 +436,7 @@ Console.WriteLine("BKE Licensing Agent .NET 10 Gen2 contract certification: PASS
 Console.WriteLine($"Routes certified: {contractRoutes.Count}");
 Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVersion}");
 Console.WriteLine("Account-session device authorization state machine certified");
+Console.WriteLine("Account password-change transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
@@ -1235,6 +1242,189 @@ static async Task CertifyAccountSessionStateMachine()
     Require(nativeRemote.AcknowledgeCount == 1, "native handoff was not acknowledged after secure-store write");
 }
 
+
+static async Task CertifyAccountPasswordChangeBoundary()
+{
+    const string currentPassword = "Current-Password-123";
+    const string newPassword = "Replacement-Password-456";
+    var account = new AccountSessionAccount(
+        "user-password",
+        "password-owner@example.com",
+        "account-password",
+        "INDIVIDUAL",
+        "Password Owner");
+
+    static async Task<FakeAccountSessionStore> ActiveStore(
+        AccountSessionAccount account)
+    {
+        var store = new FakeAccountSessionStore();
+        await store.WriteAsync(
+            new ActiveAccountSessionState(
+                "password-access-secret",
+                "password-refresh-secret",
+                "password-session",
+                DateTimeOffset.UtcNow.AddMinutes(15),
+                DateTimeOffset.UtcNow.AddDays(30),
+                account),
+            CancellationToken.None);
+        return store;
+    }
+
+    var changedStore = await ActiveStore(account);
+    var changedRemote = new FakeAccountPasswordChangeRemote(
+        new RemoteAccountPasswordChangeResult("changed"));
+    var changedService = new AccountPasswordChangeService(
+        new FakeAuthenticatedAccountSessionService(account),
+        changedStore,
+        changedRemote);
+
+    var changed = await changedService.ChangeAsync(
+        new AccountPasswordChangeRequest(
+            "cert-password-change",
+            currentPassword,
+            newPassword),
+        CancellationToken.None);
+
+    Require(changed.Status == "CHANGED", "password change did not become CHANGED");
+    Require(changed.ReauthenticationRequired, "password change did not require reauthentication");
+    Require(changedStore.State is null, "password change did not clear durable Agent session custody");
+    Require(changedRemote.CallCount == 1, "password change service replayed the credential mutation");
+    Require(changedRemote.AccessToken == "password-access-secret", "password change remote did not receive Agent-owned access token");
+    Require(changedRemote.CurrentPassword == currentPassword, "current password did not remain transient through Agent mediation");
+    Require(changedRemote.NewPassword == newPassword, "new password did not remain transient through Agent mediation");
+
+    var changedWire = JsonSerializer.Serialize(changed);
+    Require(!changedWire.Contains(currentPassword, StringComparison.Ordinal), "current password leaked into local response");
+    Require(!changedWire.Contains(newPassword, StringComparison.Ordinal), "new password leaked into local response");
+    Require(!changedWire.Contains("password-access-secret", StringComparison.Ordinal), "password change leaked access token");
+    Require(!changedWire.Contains("password-refresh-secret", StringComparison.Ordinal), "password change leaked refresh token");
+
+    var invalidStore = await ActiveStore(account);
+    var invalidRemote = new FakeAccountPasswordChangeRemote(
+        new RemoteAccountPasswordChangeResult(
+            "invalid_credentials",
+            "INVALID_CREDENTIALS"));
+    var invalidService = new AccountPasswordChangeService(
+        new FakeAuthenticatedAccountSessionService(account),
+        invalidStore,
+        invalidRemote);
+    var invalid = await invalidService.ChangeAsync(
+        new AccountPasswordChangeRequest(
+            "cert-password-invalid",
+            currentPassword,
+            newPassword),
+        CancellationToken.None);
+
+    Require(invalid.Status == "INVALID_CREDENTIALS", "invalid current password status drifted");
+    Require(!invalid.ReauthenticationRequired, "invalid current password unnecessarily forced reauthentication");
+    Require(invalidStore.State is ActiveAccountSessionState, "invalid current password destroyed a still-valid Agent session");
+    Require(invalidRemote.CallCount == 1, "invalid current password was replayed");
+
+    var ambiguousStore = await ActiveStore(account);
+    var ambiguousRemote = new FakeAccountPasswordChangeRemote(
+        null,
+        new HttpRequestException("certified ambiguous password-change transport"));
+    var ambiguousService = new AccountPasswordChangeService(
+        new FakeAuthenticatedAccountSessionService(account),
+        ambiguousStore,
+        ambiguousRemote);
+    var ambiguous = await ambiguousService.ChangeAsync(
+        new AccountPasswordChangeRequest(
+            "cert-password-ambiguous",
+            currentPassword,
+            newPassword),
+        CancellationToken.None);
+
+    Require(
+        ambiguous.Status == "REAUTHENTICATION_REQUIRED",
+        "ambiguous password-change result did not fail closed");
+    Require(
+        ambiguous.ReauthenticationRequired,
+        "ambiguous password-change result did not require reauthentication");
+    Require(
+        ambiguous.Error?.Code == "PASSWORD_CHANGE_OUTCOME_UNKNOWN",
+        "ambiguous password-change error code drifted");
+    Require(
+        ambiguousStore.State is null,
+        "ambiguous password-change result retained durable Agent session custody");
+    Require(
+        ambiguousRemote.CallCount == 1,
+        "ambiguous password-change mutation was replayed");
+
+    var unauthenticatedRemote = new FakeAccountPasswordChangeRemote(
+        new RemoteAccountPasswordChangeResult("changed"));
+    var unauthenticatedService = new AccountPasswordChangeService(
+        new FakeUnauthenticatedAccountSessionService(),
+        await ActiveStore(account),
+        unauthenticatedRemote);
+    var unauthenticated = await unauthenticatedService.ChangeAsync(
+        new AccountPasswordChangeRequest(
+            "cert-password-auth",
+            currentPassword,
+            newPassword),
+        CancellationToken.None);
+
+    Require(unauthenticated.Status == "AUTH_REQUIRED", "password change did not require authentication");
+    Require(unauthenticatedRemote.CallCount == 0, "password change called cloud authority without authentication");
+
+    using var transportHandler = new FakeAccountPasswordChangeAuthorityHandler(
+        HttpStatusCode.OK,
+        """{"status":"changed","reauthentication_required":true}""");
+    using var transportHttp = new HttpClient(transportHandler);
+    using var transport = new AccountPasswordChangeRemote(
+        transportHttp,
+        "https://jl-bke.com");
+
+    var transportResult = await transport.ChangeAsync(
+        "transport-password-access-secret",
+        currentPassword,
+        newPassword,
+        CancellationToken.None);
+
+    Require(transportResult.Status == "changed", "password-change transport success drifted");
+    Require(transportHandler.RequestCount == 1, "password-change transport retried a successful mutation");
+    Require(transportHandler.SawBearer, "password-change transport omitted Agent-owned bearer token");
+    Require(transportHandler.SawProtocol, "password-change transport omitted account-session protocol");
+    Require(transportHandler.SawExpectedPath, "password-change transport endpoint drifted");
+    Require(transportHandler.SawCurrentPassword, "password-change transport omitted current password");
+    Require(transportHandler.SawNewPassword, "password-change transport omitted new password");
+
+    using var deniedHandler = new FakeAccountPasswordChangeAuthorityHandler(
+        HttpStatusCode.Unauthorized,
+        """{"error":"INVALID_CREDENTIALS"}""");
+    using var deniedHttp = new HttpClient(deniedHandler);
+    using var deniedTransport = new AccountPasswordChangeRemote(
+        deniedHttp,
+        "https://jl-bke.com");
+    var deniedResult = await deniedTransport.ChangeAsync(
+        "transport-password-access-secret",
+        currentPassword,
+        newPassword,
+        CancellationToken.None);
+
+    Require(deniedResult.Status == "invalid_credentials", "password-change credential denial drifted");
+    Require(deniedHandler.RequestCount == 1, "password-change credential denial was retried");
+
+    using var unavailableHandler = new FakeAccountPasswordChangeAuthorityHandler(
+        HttpStatusCode.ServiceUnavailable,
+        """{"error":"PASSWORD_PROVIDER_UNAVAILABLE"}""");
+    using var unavailableHttp = new HttpClient(unavailableHandler);
+    using var unavailableTransport = new AccountPasswordChangeRemote(
+        unavailableHttp,
+        "https://jl-bke.com");
+    var unavailableResult = await unavailableTransport.ChangeAsync(
+        "transport-password-access-secret",
+        currentPassword,
+        newPassword,
+        CancellationToken.None);
+
+    Require(
+        unavailableResult.Status == "password_provider_unavailable",
+        "password-change provider-unavailable result drifted");
+    Require(
+        unavailableHandler.RequestCount == 1,
+        "password-change provider-unavailable mutation was retried");
+}
 
 static async Task CertifyClaimCodeRedemptionBoundary()
 {
@@ -3134,6 +3324,116 @@ sealed class FakeUnauthenticatedAccountSessionService : IAccountSessionService
         throw new NotSupportedException();
 }
 
+
+sealed class FakeAccountPasswordChangeRemote : IAccountPasswordChangeRemote
+{
+    private readonly RemoteAccountPasswordChangeResult? _result;
+    private readonly Exception? _exception;
+
+    public FakeAccountPasswordChangeRemote(
+        RemoteAccountPasswordChangeResult? result,
+        Exception? exception = null)
+    {
+        _result = result;
+        _exception = exception;
+    }
+
+    public int CallCount { get; private set; }
+    public string? AccessToken { get; private set; }
+    public string? CurrentPassword { get; private set; }
+    public string? NewPassword { get; private set; }
+
+    public Task<RemoteAccountPasswordChangeResult> ChangeAsync(
+        string accessToken,
+        string currentPassword,
+        string newPassword,
+        CancellationToken cancellationToken)
+    {
+        CallCount += 1;
+        AccessToken = accessToken;
+        CurrentPassword = currentPassword;
+        NewPassword = newPassword;
+
+        if (_exception is not null)
+        {
+            return Task.FromException<RemoteAccountPasswordChangeResult>(_exception);
+        }
+
+        return Task.FromResult(
+            _result ?? throw new InvalidOperationException(
+                "Fake password-change remote requires a result or exception."));
+    }
+}
+
+sealed class FakeAccountPasswordChangeAuthorityHandler : HttpMessageHandler
+{
+    private readonly HttpStatusCode _statusCode;
+    private readonly string _json;
+    private readonly bool _includeProtocol;
+
+    public FakeAccountPasswordChangeAuthorityHandler(
+        HttpStatusCode statusCode,
+        string json,
+        bool includeProtocol = true)
+    {
+        _statusCode = statusCode;
+        _json = json;
+        _includeProtocol = includeProtocol;
+    }
+
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawExpectedPath { get; private set; }
+    public bool SawCurrentPassword { get; private set; }
+    public bool SawNewPassword { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        RequestCount += 1;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "transport-password-access-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var versions) &&
+            versions.SingleOrDefault() == AccountSessionRemote.ProtocolVersion;
+        SawExpectedPath =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/password-change";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(cancellationToken);
+        SawCurrentPassword = body.Contains(
+            "Current-Password-123",
+            StringComparison.Ordinal);
+        SawNewPassword = body.Contains(
+            "Replacement-Password-456",
+            StringComparison.Ordinal);
+
+        var response = new HttpResponseMessage(_statusCode)
+        {
+            Content = new StringContent(
+                _json,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        if (_includeProtocol)
+        {
+            response.Headers.TryAddWithoutValidation(
+                "x-bke-account-session-version",
+                AccountSessionRemote.ProtocolVersion);
+        }
+
+        return response;
+    }
+}
 
 sealed class FakeClaimCodeRedemptionRemote(
     RemoteClaimCodeRedemptionResult result) : IClaimCodeRedemptionRemote
