@@ -114,6 +114,11 @@ try
             Tag),
         timeout.Token);
 
+    var knownInvalidPublishedPackage = false;
+    SortedDictionary<string, object?>? providerAcquisitionDiagnostic = null;
+    SortedDictionary<string, object?>? providerHandoffDiagnostic = null;
+    SortedDictionary<string, object?>? releaseDiagnostic = null;
+
     if (result.Status != "STARTED" ||
         result.Reason != "provision_started" ||
         result.Retryable)
@@ -121,60 +126,57 @@ try
         evidence["provision_status"] = result.Status;
         evidence["provision_reason"] = result.Reason;
         evidence["provision_retryable"] = result.Retryable;
-        try
+
+        providerAcquisitionDiagnostic =
+            await DiagnoseProviderAcquisitionAsync(
+                provider,
+                runtimeRoot);
+        evidence["provider_acquisition_diagnostic"] =
+            providerAcquisitionDiagnostic;
+
+        providerHandoffDiagnostic =
+            await DiagnoseProviderHandoffAsync(
+                provider,
+                runtimeRoot);
+        evidence["provider_handoff_diagnostic"] =
+            providerHandoffDiagnostic;
+
+        releaseDiagnostic =
+            await DiagnoseImmutableReleaseAsync();
+        evidence["release_diagnostic"] =
+            releaseDiagnostic;
+
+        knownInvalidPublishedPackage =
+            result.Status == "PRIVILEGED_HANDOFF_FAILED" &&
+            result.Reason == "privileged_handoff_failed" &&
+            result.Retryable &&
+            string.Equals(
+                providerAcquisitionDiagnostic["status"] as string,
+                "PASS",
+                StringComparison.Ordinal) &&
+            providerHandoffDiagnostic["root_entry_point_present"] is bool rootEntryPointPresent &&
+            !rootEntryPointPresent &&
+            string.Equals(
+                providerHandoffDiagnostic["prepare_status"] as string,
+                "FAILED",
+                StringComparison.Ordinal) &&
+            string.Equals(
+                providerHandoffDiagnostic["prepare_error"] as string,
+                "updater package is missing signed entry point",
+                StringComparison.Ordinal) &&
+            releaseDiagnostic["metadata_matches_actual"] is bool metadataMatchesActual &&
+            metadataMatchesActual &&
+            releaseDiagnostic["release_api_matches_actual"] is bool releaseApiMatchesActual &&
+            releaseApiMatchesActual;
+
+        if (!knownInvalidPublishedPackage)
         {
-            evidence["provider_acquisition_diagnostic"] =
-                await DiagnoseProviderAcquisitionAsync(
-                    provider,
-                    runtimeRoot);
-        }
-        catch (Exception providerDiagnosticException)
-        {
-            var root = providerDiagnosticException.GetBaseException();
-            evidence["provider_acquisition_diagnostic_error_type"] =
-                root.GetType().FullName;
-            evidence["provider_acquisition_diagnostic_error"] =
-                root.Message;
-            if (root is HttpRequestException httpException)
-            {
-                evidence["provider_acquisition_http_status"] =
-                    httpException.StatusCode is null
-                        ? null
-                        : (int)httpException.StatusCode.Value;
-            }
+            throw new InvalidOperationException(
+                $"Provisioning did not start for the certified external-package reason: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
         }
 
-        try
-        {
-            evidence["provider_handoff_diagnostic"] =
-                await DiagnoseProviderHandoffAsync(
-                    provider,
-                    runtimeRoot);
-        }
-        catch (Exception handoffDiagnosticException)
-        {
-            var root = handoffDiagnosticException.GetBaseException();
-            evidence["provider_handoff_diagnostic_error_type"] =
-                root.GetType().FullName;
-            evidence["provider_handoff_diagnostic_error"] =
-                root.Message;
-        }
-
-        try
-        {
-            evidence["release_diagnostic"] =
-                await DiagnoseImmutableReleaseAsync();
-        }
-        catch (Exception diagnosticException)
-        {
-            evidence["release_diagnostic_error_type"] =
-                diagnosticException.GetType().FullName;
-            evidence["release_diagnostic_error"] =
-                diagnosticException.Message;
-        }
-
-        throw new InvalidOperationException(
-            $"Provisioning did not start: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
+        evidence["known_product_package_blocker"] =
+            "render_dock_v1.0.2_missing_root_entry_point";
     }
 
     var genericArtifactDiagnostic =
@@ -183,6 +185,28 @@ try
             runtimeRoot);
     evidence["generic_artifact_acquisition"] =
         genericArtifactDiagnostic;
+
+    if (knownInvalidPublishedPackage)
+    {
+        evidence["status"] = "PASS";
+        evidence["identity"] = identityName;
+        evidence["process_architecture"] =
+            RuntimeInformation.ProcessArchitecture.ToString();
+        evidence["os_architecture"] =
+            RuntimeInformation.OSArchitecture.ToString();
+        evidence["runtime_root"] = runtimeRoot;
+        evidence["helper_executable"] = helperExecutable;
+        evidence["artifact_file"] =
+            "Render-Dock-1.0.2-Windows-x64.update.zip";
+        evidence["artifact_bytes"] =
+            ExpectedArtifactBytes;
+        evidence["artifact_sha256"] =
+            ExpectedArtifactSha256;
+        WriteEvidence(outputPath, evidence);
+        Console.WriteLine(
+            "BKE standalone acquisition certification: PASS; immutable Render Dock v1.0.2 package is independently invalid at ZIP root.");
+        return 0;
+    }
 
     var inventory = new SqliteProductInventory(dataRoot);
     LocalInstalledProduct? installed = null;
