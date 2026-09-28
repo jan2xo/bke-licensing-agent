@@ -160,6 +160,13 @@ try
             $"Provisioning did not start: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
     }
 
+    var genericArtifactDiagnostic =
+        await CertifyGenericArtifactAcquisitionAsync(
+            provider,
+            runtimeRoot);
+    evidence["generic_artifact_acquisition"] =
+        genericArtifactDiagnostic;
+
     var inventory = new SqliteProductInventory(dataRoot);
     LocalInstalledProduct? installed = null;
     var deadline = DateTimeOffset.UtcNow.AddMinutes(2);
@@ -253,6 +260,68 @@ catch (Exception exception)
     WriteEvidence(outputPath, evidence);
     Console.Error.WriteLine(exception);
     return 1;
+}
+
+static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcquisitionAsync(
+    PrivilegedUpdateCenterProvider provider,
+    string runtimeRoot)
+{
+    const string packageUrl =
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.2/Render-Dock-1.0.2-Windows-x64.update.zip";
+    var destination = Path.Combine(
+        runtimeRoot,
+        "downloads",
+        "generic-artifact-cert",
+        "Render-Dock-1.0.2-Windows-x64.update.zip");
+
+    var method = typeof(PrivilegedUpdateCenterProvider)
+        .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+        .Single(candidate =>
+            candidate.Name == "AcquireArtifactAsync" &&
+            candidate.GetParameters().Length == 5);
+
+    var taskObject = method.Invoke(
+        provider,
+        [
+            packageUrl,
+            destination,
+            ExpectedArtifactBytes,
+            ExpectedArtifactSha256,
+            CancellationToken.None,
+        ])
+        ?? throw new InvalidOperationException(
+            "AcquireArtifactAsync returned null.");
+
+    if (taskObject is not Task task)
+    {
+        throw new InvalidDataException(
+            "AcquireArtifactAsync did not return a Task.");
+    }
+
+    await task;
+    var acquiredPath = (string)(
+        taskObject.GetType()
+            .GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)!
+            .GetValue(taskObject)
+        ?? throw new InvalidDataException(
+            "AcquireArtifactAsync Task returned null."));
+
+    var info = new FileInfo(acquiredPath);
+    var hash = Sha256File(acquiredPath);
+    Require(
+        info.Length == ExpectedArtifactBytes,
+        "Generic artifact acquisition size drifted.");
+    Require(
+        hash == ExpectedArtifactSha256,
+        "Generic artifact acquisition hash drifted.");
+
+    return new SortedDictionary<string, object?>(
+        StringComparer.Ordinal)
+    {
+        ["status"] = "PASS",
+        ["bytes"] = info.Length,
+        ["sha256"] = hash,
+    };
 }
 
 static async Task<SortedDictionary<string, object?>> DiagnoseProviderAcquisitionAsync(
