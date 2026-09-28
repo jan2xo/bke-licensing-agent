@@ -156,19 +156,8 @@ jobs:
             if ($result.status -ne "PASS") { throw "SYSTEM acquisition evidence did not report PASS." }
             if ($result.identity -ne "NT AUTHORITY\SYSTEM") { throw "Acquisition certification did not execute as SYSTEM." }
             if ($result.process_architecture -ne "X64") { throw "Acquisition certification process was not x64." }
-            if ([int64]$result.artifact_bytes -ne 54156325) { throw "Render Dock x64 release bytes drifted." }
-            if ([string]$result.artifact_sha256 -ne "88bc6131f6c66d7c6ee69a368e414d4c88bdf1f969e6b398e74c7cbaa299fa1a") { throw "Render Dock x64 release hash drifted." }
-
-            $knownBlocker = [string]$result.known_product_package_blocker
-            if ($knownBlocker) {
-              if ($knownBlocker -ne "render_dock_v1.0.2_missing_root_entry_point") {
-                throw "Unexpected external product-package blocker: $knownBlocker"
-              }
-              "KNOWN_PRODUCT_PACKAGE_BLOCKER=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-              "Known immutable product-package blocker: $knownBlocker" >> $env:GITHUB_STEP_SUMMARY
-            } else {
-              "KNOWN_PRODUCT_PACKAGE_BLOCKER=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            }
+            if ([int64]$result.artifact_bytes -ne 54167311) { throw "Render Dock x64 release bytes drifted." }
+            if ([string]$result.artifact_sha256 -ne "93763ef85579c252aea05cd0f335c024639ce8d26f2ead8fe09c69933868d4a7") { throw "Render Dock x64 release hash drifted." }
 
             Copy-Item -LiteralPath $evidence -Destination "standalone-acquisition-evidence.json"
           }
@@ -177,7 +166,6 @@ jobs:
           }
 
       - name: Hash installed evidence target
-        if: env.KNOWN_PRODUCT_PACKAGE_BLOCKER != 'true'
         shell: pwsh
         run: |
           $entry = "C:\Program Files\BKE Digital Solutions\Render Dock\RENDER DOCK.exe"
@@ -185,16 +173,6 @@ jobs:
           $hash = (Get-FileHash -LiteralPath $entry -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  RENDER DOCK.exe" | Set-Content standalone-acquisition-entrypoint.sha256 -Encoding ascii
           Get-Content standalone-acquisition-entrypoint.sha256
-
-      - name: Verify known immutable product package stayed fail-closed
-        if: env.KNOWN_PRODUCT_PACKAGE_BLOCKER == 'true'
-        shell: pwsh
-        run: |
-          $entry = "C:\Program Files\BKE Digital Solutions\Render Dock\RENDER DOCK.exe"
-          if (Test-Path -LiteralPath $entry) {
-            throw "Malformed immutable Render Dock v1.0.2 package unexpectedly installed."
-          }
-          Write-Host "Malformed immutable Render Dock v1.0.2 package remained fail-closed."
 
       - name: Remove disposable target trust
         if: always()
