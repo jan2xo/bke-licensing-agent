@@ -112,11 +112,29 @@ try
             Tag),
         timeout.Token);
 
-    Require(
-        result.Status == "STARTED" &&
-        result.Reason == "provision_started" &&
-        !result.Retryable,
-        $"Provisioning did not start: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
+    if (result.Status != "STARTED" ||
+        result.Reason != "provision_started" ||
+        result.Retryable)
+    {
+        evidence["provision_status"] = result.Status;
+        evidence["provision_reason"] = result.Reason;
+        evidence["provision_retryable"] = result.Retryable;
+        try
+        {
+            evidence["release_diagnostic"] =
+                await DiagnoseImmutableReleaseAsync();
+        }
+        catch (Exception diagnosticException)
+        {
+            evidence["release_diagnostic_error_type"] =
+                diagnosticException.GetType().FullName;
+            evidence["release_diagnostic_error"] =
+                diagnosticException.Message;
+        }
+
+        throw new InvalidOperationException(
+            $"Provisioning did not start: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
+    }
 
     var inventory = new SqliteProductInventory(dataRoot);
     LocalInstalledProduct? installed = null;
@@ -211,6 +229,237 @@ catch (Exception exception)
     WriteEvidence(outputPath, evidence);
     Console.Error.WriteLine(exception);
     return 1;
+}
+
+static async Task<SortedDictionary<string, object?>> DiagnoseImmutableReleaseAsync()
+{
+    const string metadataUrl =
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.2/Render-Dock-1.0.2-Windows-x64.update.json";
+
+    var metadataTransfer = await DownloadBytesWithHopsAsync(
+        new Uri(metadataUrl, UriKind.Absolute),
+        64 * 1024,
+        CancellationToken.None);
+
+    using var metadataDocument =
+        JsonDocument.Parse(metadataTransfer.Bytes);
+    var metadata = metadataDocument.RootElement;
+    var fileName = metadata.GetProperty("filename").GetString()
+        ?? throw new InvalidDataException("Release metadata filename is missing.");
+    var advertisedBytes = metadata.GetProperty("bytes").GetInt64();
+    var advertisedSha256 = (
+        metadata.GetProperty("sha256").GetString()
+        ?? throw new InvalidDataException("Release metadata SHA-256 is missing."))
+        .ToLowerInvariant();
+
+    if (fileName != "Render-Dock-1.0.2-Windows-x64.update.zip")
+    {
+        throw new InvalidDataException(
+            $"Release metadata selected unexpected file '{fileName}'.");
+    }
+
+    var packageUrl = new Uri(
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.2/" +
+        fileName,
+        UriKind.Absolute);
+    var packageTransfer = await DownloadHashWithHopsAsync(
+        packageUrl,
+        CancellationToken.None);
+
+    return new SortedDictionary<string, object?>(
+        StringComparer.Ordinal)
+    {
+        ["metadata_hops"] = metadataTransfer.Hops,
+        ["metadata_filename"] = fileName,
+        ["metadata_advertised_bytes"] = advertisedBytes,
+        ["metadata_advertised_sha256"] = advertisedSha256,
+        ["release_api_asset_bytes"] = ExpectedArtifactBytes,
+        ["release_api_asset_sha256"] = ExpectedArtifactSha256,
+        ["package_hops"] = packageTransfer.Hops,
+        ["package_actual_bytes"] = packageTransfer.Bytes,
+        ["package_actual_sha256"] = packageTransfer.Sha256,
+        ["metadata_matches_actual"] =
+            advertisedBytes == packageTransfer.Bytes &&
+            advertisedSha256 == packageTransfer.Sha256,
+        ["release_api_matches_actual"] =
+            ExpectedArtifactBytes == packageTransfer.Bytes &&
+            ExpectedArtifactSha256 == packageTransfer.Sha256,
+    };
+}
+
+static async Task<(byte[] Bytes, List<SortedDictionary<string, object?>> Hops)>
+    DownloadBytesWithHopsAsync(
+        Uri initialUri,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+{
+    using var http = new HttpClient(
+        new HttpClientHandler { AllowAutoRedirect = false })
+    {
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
+
+    var hops = new List<SortedDictionary<string, object?>>();
+    var current = initialUri;
+    for (var redirect = 0; redirect <= 5; redirect++)
+    {
+        ValidateDiagnosticUri(current);
+        using var request = new HttpRequestMessage(HttpMethod.Get, current);
+        request.Headers.Accept.ParseAdd("application/octet-stream");
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent-certification");
+
+        using var response = await http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        hops.Add(SafeHop(current, response));
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            var location = response.Headers.Location
+                ?? throw new HttpRequestException(
+                    "Diagnostic redirect is missing a location.");
+            current = location.IsAbsoluteUri
+                ? location
+                : new Uri(current, location);
+            continue;
+        }
+
+        response.EnsureSuccessStatusCode();
+        await using var input =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var output = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        while (true)
+        {
+            var remaining = maximumBytes - (int)output.Length + 1;
+            if (remaining <= 0)
+            {
+                throw new InvalidDataException(
+                    "Diagnostic metadata exceeded bounded size.");
+            }
+
+            var read = await input.ReadAsync(
+                buffer.AsMemory(0, Math.Min(buffer.Length, remaining)),
+                cancellationToken);
+            if (read == 0)
+            {
+                return (output.ToArray(), hops);
+            }
+
+            output.Write(buffer, 0, read);
+            if (output.Length > maximumBytes)
+            {
+                throw new InvalidDataException(
+                    "Diagnostic metadata exceeded bounded size.");
+            }
+        }
+    }
+
+    throw new HttpRequestException(
+        "Diagnostic metadata redirect limit exceeded.");
+}
+
+static async Task<(long Bytes, string Sha256, List<SortedDictionary<string, object?>> Hops)>
+    DownloadHashWithHopsAsync(
+        Uri initialUri,
+        CancellationToken cancellationToken)
+{
+    using var http = new HttpClient(
+        new HttpClientHandler { AllowAutoRedirect = false })
+    {
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
+
+    var hops = new List<SortedDictionary<string, object?>>();
+    var current = initialUri;
+    for (var redirect = 0; redirect <= 5; redirect++)
+    {
+        ValidateDiagnosticUri(current);
+        using var request = new HttpRequestMessage(HttpMethod.Get, current);
+        request.Headers.Accept.ParseAdd("application/octet-stream");
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent-certification");
+
+        using var response = await http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        hops.Add(SafeHop(current, response));
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            var location = response.Headers.Location
+                ?? throw new HttpRequestException(
+                    "Diagnostic package redirect is missing a location.");
+            current = location.IsAbsoluteUri
+                ? location
+                : new Uri(current, location);
+            continue;
+        }
+
+        response.EnsureSuccessStatusCode();
+        await using var input =
+            await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var hash =
+            IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[1024 * 1024];
+        long count = 0;
+
+        while (true)
+        {
+            var read = await input.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                return (
+                    count,
+                    Convert.ToHexString(hash.GetHashAndReset())
+                        .ToLowerInvariant(),
+                    hops);
+            }
+
+            count += read;
+            if (count > 4L * 1024 * 1024 * 1024)
+            {
+                throw new InvalidDataException(
+                    "Diagnostic package exceeded bounded size.");
+            }
+            hash.AppendData(buffer, 0, read);
+        }
+    }
+
+    throw new HttpRequestException(
+        "Diagnostic package redirect limit exceeded.");
+}
+
+static SortedDictionary<string, object?> SafeHop(
+    Uri uri,
+    HttpResponseMessage response) =>
+    new(StringComparer.Ordinal)
+    {
+        ["host"] = uri.Host,
+        ["status"] = (int)response.StatusCode,
+        ["content_length"] = response.Content.Headers.ContentLength,
+    };
+
+static void ValidateDiagnosticUri(Uri uri)
+{
+    var allowed = new HashSet<string>(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        "github.com",
+        "release-assets.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+    };
+
+    if (!uri.IsAbsoluteUri ||
+        uri.Scheme != Uri.UriSchemeHttps ||
+        !allowed.Contains(uri.Host) ||
+        !string.IsNullOrEmpty(uri.Fragment))
+    {
+        throw new InvalidDataException(
+            $"Diagnostic release host is not approved: {uri.Host}");
+    }
 }
 
 static string Sha256File(string path) =>
