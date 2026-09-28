@@ -54,6 +54,7 @@ jobs:
               "rollback",
               "preflight",
               "utm-trust",
+              "acquisition",
             ];
             let sourceSha;
             let requested;
@@ -171,10 +172,17 @@ jobs:
     with:
       source_sha: ${{ needs.plan.outputs.source_sha }}
 
+  acquisition:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'acquisition')
+    uses: ./.github/workflows/standalone-acquisition-certification.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
   required-certification:
     name: Required certification
     if: always() && needs.plan.result == 'success'
-    needs: [plan, contracts, windows-x64, installer, self-update, rollback, preflight, utm-trust]
+    needs: [plan, contracts, windows-x64, installer, self-update, rollback, preflight, utm-trust, acquisition]
     runs-on: ubuntu-latest
     env:
       SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
@@ -186,6 +194,7 @@ jobs:
       ROLLBACK_RESULT: ${{ needs.rollback.result }}
       PREFLIGHT_RESULT: ${{ needs.preflight.result }}
       UTM_TRUST_RESULT: ${{ needs.utm-trust.result }}
+      ACQUISITION_RESULT: ${{ needs.acquisition.result }}
     steps:
       - name: Verify declared certification plan
         shell: bash
@@ -200,6 +209,7 @@ jobs:
             rollback: process.env.ROLLBACK_RESULT,
             preflight: process.env.PREFLIGHT_RESULT,
             "utm-trust": process.env.UTM_TRUST_RESULT,
+            acquisition: process.env.ACQUISITION_RESULT,
           };
           const failed = targets
             .filter(target => results[target] !== "success")
