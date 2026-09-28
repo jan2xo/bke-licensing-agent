@@ -8,12 +8,12 @@ using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Infrastructure;
 
 const string ProductId = "bke-render-dock";
-const string Version = "1.0.2";
+const string Version = "1.0.3";
 const string Repository = "jan2xo/BKE_RENDER_DOCK";
-const string Tag = "v1.0.2";
+const string Tag = "v1.0.3-preproduction-e2e";
 const string EntryPoint = "RENDER DOCK.exe";
-const long ExpectedArtifactBytes = 54156325;
-const string ExpectedArtifactSha256 = "88bc6131f6c66d7c6ee69a368e414d4c88bdf1f969e6b398e74c7cbaa299fa1a";
+const long ExpectedArtifactBytes = 54167311;
+const string ExpectedArtifactSha256 = "93763ef85579c252aea05cd0f335c024639ce8d26f2ead8fe09c69933868d4a7";
 
 string? outputPath = null;
 string? sourceSha = null;
@@ -114,11 +114,6 @@ try
             Tag),
         timeout.Token);
 
-    var knownInvalidPublishedPackage = false;
-    SortedDictionary<string, object?>? providerAcquisitionDiagnostic = null;
-    SortedDictionary<string, object?>? providerHandoffDiagnostic = null;
-    SortedDictionary<string, object?>? releaseDiagnostic = null;
-
     if (result.Status != "STARTED" ||
         result.Reason != "provision_started" ||
         result.Retryable)
@@ -127,56 +122,54 @@ try
         evidence["provision_reason"] = result.Reason;
         evidence["provision_retryable"] = result.Retryable;
 
-        providerAcquisitionDiagnostic =
-            await DiagnoseProviderAcquisitionAsync(
-                provider,
-                runtimeRoot);
-        evidence["provider_acquisition_diagnostic"] =
-            providerAcquisitionDiagnostic;
-
-        providerHandoffDiagnostic =
-            await DiagnoseProviderHandoffAsync(
-                provider,
-                runtimeRoot);
-        evidence["provider_handoff_diagnostic"] =
-            providerHandoffDiagnostic;
-
-        releaseDiagnostic =
-            await DiagnoseImmutableReleaseAsync();
-        evidence["release_diagnostic"] =
-            releaseDiagnostic;
-
-        knownInvalidPublishedPackage =
-            result.Status == "PRIVILEGED_HANDOFF_FAILED" &&
-            result.Reason == "privileged_handoff_failed" &&
-            result.Retryable &&
-            string.Equals(
-                providerAcquisitionDiagnostic["status"] as string,
-                "PASS",
-                StringComparison.Ordinal) &&
-            providerHandoffDiagnostic["root_entry_point_present"] is bool rootEntryPointPresent &&
-            !rootEntryPointPresent &&
-            string.Equals(
-                providerHandoffDiagnostic["prepare_status"] as string,
-                "FAILED",
-                StringComparison.Ordinal) &&
-            string.Equals(
-                providerHandoffDiagnostic["prepare_error"] as string,
-                "updater package is missing signed entry point",
-                StringComparison.Ordinal) &&
-            releaseDiagnostic["metadata_matches_actual"] is bool metadataMatchesActual &&
-            metadataMatchesActual &&
-            releaseDiagnostic["release_api_matches_actual"] is bool releaseApiMatchesActual &&
-            releaseApiMatchesActual;
-
-        if (!knownInvalidPublishedPackage)
+        try
         {
-            throw new InvalidOperationException(
-                $"Provisioning did not start for the certified external-package reason: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
+            evidence["provider_acquisition_diagnostic"] =
+                await DiagnoseProviderAcquisitionAsync(
+                    provider,
+                    runtimeRoot);
+        }
+        catch (Exception providerDiagnosticException)
+        {
+            var root = providerDiagnosticException.GetBaseException();
+            evidence["provider_acquisition_diagnostic_error_type"] =
+                root.GetType().FullName;
+            evidence["provider_acquisition_diagnostic_error"] =
+                root.Message;
         }
 
-        evidence["known_product_package_blocker"] =
-            "render_dock_v1.0.2_missing_root_entry_point";
+        try
+        {
+            evidence["provider_handoff_diagnostic"] =
+                await DiagnoseProviderHandoffAsync(
+                    provider,
+                    runtimeRoot);
+        }
+        catch (Exception handoffDiagnosticException)
+        {
+            var root = handoffDiagnosticException.GetBaseException();
+            evidence["provider_handoff_diagnostic_error_type"] =
+                root.GetType().FullName;
+            evidence["provider_handoff_diagnostic_error"] =
+                root.Message;
+        }
+
+        try
+        {
+            evidence["release_diagnostic"] =
+                await DiagnoseImmutableReleaseAsync();
+        }
+        catch (Exception releaseDiagnosticException)
+        {
+            var root = releaseDiagnosticException.GetBaseException();
+            evidence["release_diagnostic_error_type"] =
+                root.GetType().FullName;
+            evidence["release_diagnostic_error"] =
+                root.Message;
+        }
+
+        throw new InvalidOperationException(
+            $"Corrected Render Dock acquisition did not start: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
     }
 
     var genericArtifactDiagnostic =
@@ -185,28 +178,6 @@ try
             runtimeRoot);
     evidence["generic_artifact_acquisition"] =
         genericArtifactDiagnostic;
-
-    if (knownInvalidPublishedPackage)
-    {
-        evidence["status"] = "PASS";
-        evidence["identity"] = identityName;
-        evidence["process_architecture"] =
-            RuntimeInformation.ProcessArchitecture.ToString();
-        evidence["os_architecture"] =
-            RuntimeInformation.OSArchitecture.ToString();
-        evidence["runtime_root"] = runtimeRoot;
-        evidence["helper_executable"] = helperExecutable;
-        evidence["artifact_file"] =
-            "Render-Dock-1.0.2-Windows-x64.update.zip";
-        evidence["artifact_bytes"] =
-            ExpectedArtifactBytes;
-        evidence["artifact_sha256"] =
-            ExpectedArtifactSha256;
-        WriteEvidence(outputPath, evidence);
-        Console.WriteLine(
-            "BKE standalone acquisition certification: PASS; immutable Render Dock v1.0.2 package is independently invalid at ZIP root.");
-        return 0;
-    }
 
     var inventory = new SqliteProductInventory(dataRoot);
     LocalInstalledProduct? installed = null;
@@ -308,7 +279,7 @@ static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcqui
     string runtimeRoot)
 {
     const string packageUrl =
-        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.2/Render-Dock-1.0.2-Windows-x64.update.zip";
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3-preproduction-e2e/Render-Dock-1.0.3-Windows-x64.update.zip";
     var finalPackageUri = await ResolveFinalAssetUriAsync(
         new Uri(packageUrl, UriKind.Absolute),
         CancellationToken.None);
@@ -316,7 +287,7 @@ static async Task<SortedDictionary<string, object?>> CertifyGenericArtifactAcqui
         runtimeRoot,
         "downloads",
         "generic-artifact-cert",
-        "Render-Dock-1.0.2-Windows-x64.update.zip");
+        "Render-Dock-1.0.3-Windows-x64.update.zip");
 
     var method = typeof(PrivilegedUpdateCenterProvider)
         .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
@@ -686,7 +657,7 @@ static async Task<SortedDictionary<string, object?>> DiagnoseProviderAcquisition
 static async Task<SortedDictionary<string, object?>> DiagnoseImmutableReleaseAsync()
 {
     const string metadataUrl =
-        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.2/Render-Dock-1.0.2-Windows-x64.update.json";
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3-preproduction-e2e/Render-Dock-1.0.3-Windows-x64.update.json";
 
     var metadataTransfer = await DownloadBytesWithHopsAsync(
         new Uri(metadataUrl, UriKind.Absolute),
@@ -704,14 +675,14 @@ static async Task<SortedDictionary<string, object?>> DiagnoseImmutableReleaseAsy
         ?? throw new InvalidDataException("Release metadata SHA-256 is missing."))
         .ToLowerInvariant();
 
-    if (fileName != "Render-Dock-1.0.2-Windows-x64.update.zip")
+    if (fileName != "Render-Dock-1.0.3-Windows-x64.update.zip")
     {
         throw new InvalidDataException(
             $"Release metadata selected unexpected file '{fileName}'.");
     }
 
     var packageUrl = new Uri(
-        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.2/" +
+        "https://github.com/jan2xo/BKE_RENDER_DOCK/releases/download/v1.0.3-preproduction-e2e/" +
         fileName,
         UriKind.Absolute);
     var packageTransfer = await DownloadHashWithHopsAsync(
