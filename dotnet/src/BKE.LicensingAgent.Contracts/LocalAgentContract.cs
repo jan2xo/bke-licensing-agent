@@ -31,6 +31,7 @@ public static class LocalAgentContract
     public const string AccountSessionStartPath = "/v1/account-session/start";
     public const string AccountSessionStatusPath = "/v1/account-session/status";
     public const string AccountSessionLogoutPath = "/v1/account-session/logout";
+    public const string AccountPasswordChangePath = "/v1/account/password-change";
     public const string SoftwareCatalogPath = "/v1/software/catalog";
     public const string SoftwareInstallPath = "/v1/software/install";
     public const string SoftwareUpdatePath = "/v1/software/update";
@@ -56,6 +57,8 @@ public static class LocalAgentContract
     public const int PlatformAuthorityContractVersion = 1;
     public const string AccountSessionCapabilityId = "bke.account-session";
     public const int AccountSessionContractVersion = 1;
+    public const string AccountPasswordChangeCapabilityId = "bke.account-password-change";
+    public const int AccountPasswordChangeContractVersion = 1;
     public const string SoftwareCatalogCapabilityId = "bke.software-catalog";
     public const int SoftwareCatalogContractVersion = 1;
     public const string SoftwareInstallCapabilityId = "bke.software-install";
