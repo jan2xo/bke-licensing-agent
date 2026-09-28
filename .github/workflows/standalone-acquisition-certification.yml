@@ -107,7 +107,7 @@ jobs:
           Copy-Item certification/utm/Install-RenderDock-UtmTargetTrust.ps1 $bundle
           Copy-Item certification/utm/Remove-RenderDock-UtmTargetTrust.ps1 $bundle
 
-          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release --no-build -- generate-disposable-target-policy --output-dir "$x64" --product-id "bke-render-dock" --platform "windows" --architecture "x86_64" --install-root 'C:\Program Files\BKE Digital Solutions\Render Dock' --entry-point 'RENDER DOCK.exe' --target-key-id "remote-acquisition-render-dock-x64-v1" --policy-id "remote-acquisition-render-dock-x64-v1" --revision "1"
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release --no-build -- generate-disposable-target-policy --output-dir "$x64" --product-id "bke-render-dock" --platform "windows" --architecture "x86_64" --install-root 'C:\Program Files\BKE Digital Solutions\Render Dock' --entry-point 'RENDER DOCK.exe' --target-key-id "utm-render-dock-x64-target-v1" --policy-id "utm-render-dock-windows-x64-v1" --revision "1"
           if ($LASTEXITCODE -ne 0) { throw "Disposable Render Dock target policy generation failed." }
 
           powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $bundle "Install-RenderDock-UtmTargetTrust.ps1") -Architecture x64
