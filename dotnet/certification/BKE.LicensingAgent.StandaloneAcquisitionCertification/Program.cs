@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Reflection;
 using System.Text.Json;
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Infrastructure;
@@ -121,6 +122,29 @@ try
         evidence["provision_retryable"] = result.Retryable;
         try
         {
+            evidence["provider_acquisition_diagnostic"] =
+                await DiagnoseProviderAcquisitionAsync(
+                    provider,
+                    runtimeRoot);
+        }
+        catch (Exception providerDiagnosticException)
+        {
+            var root = providerDiagnosticException.GetBaseException();
+            evidence["provider_acquisition_diagnostic_error_type"] =
+                root.GetType().FullName;
+            evidence["provider_acquisition_diagnostic_error"] =
+                root.Message;
+            if (root is HttpRequestException httpException)
+            {
+                evidence["provider_acquisition_http_status"] =
+                    httpException.StatusCode is null
+                        ? null
+                        : (int)httpException.StatusCode.Value;
+            }
+        }
+
+        try
+        {
             evidence["release_diagnostic"] =
                 await DiagnoseImmutableReleaseAsync();
         }
@@ -229,6 +253,139 @@ catch (Exception exception)
     WriteEvidence(outputPath, evidence);
     Console.Error.WriteLine(exception);
     return 1;
+}
+
+static async Task<SortedDictionary<string, object?>> DiagnoseProviderAcquisitionAsync(
+    PrivilegedUpdateCenterProvider provider,
+    string runtimeRoot)
+{
+    const BindingFlags PrivateInstance =
+        BindingFlags.Instance | BindingFlags.NonPublic;
+
+    object Invoke(string methodName, params object?[] arguments)
+    {
+        var methods = typeof(PrivilegedUpdateCenterProvider)
+            .GetMethods(PrivateInstance)
+            .Where(method => method.Name == methodName)
+            .ToArray();
+        var method = methods.SingleOrDefault(candidate =>
+            candidate.GetParameters().Length == arguments.Length)
+            ?? throw new MissingMethodException(
+                typeof(PrivilegedUpdateCenterProvider).FullName,
+                methodName);
+        return method.Invoke(provider, arguments)
+            ?? throw new InvalidOperationException(
+                $"Private provider method {methodName} returned null.");
+    }
+
+    static object RequiredProperty(object instance, string propertyName)
+    {
+        var property = instance.GetType().GetProperty(
+            propertyName,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new MissingMemberException(
+                instance.GetType().FullName,
+                propertyName);
+        return property.GetValue(instance)
+            ?? throw new InvalidDataException(
+                $"Provider diagnostic property {propertyName} was null.");
+    }
+
+    static async Task<object> AwaitResultAsync(object taskObject)
+    {
+        if (taskObject is not Task task)
+        {
+            throw new InvalidDataException(
+                "Provider diagnostic invocation did not return a Task.");
+        }
+        await task;
+        return taskObject.GetType()
+            .GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)!
+            .GetValue(taskObject)
+            ?? throw new InvalidDataException(
+                "Provider diagnostic Task returned null.");
+    }
+
+    var config = Invoke("LoadPrivilegedConfig");
+    var target = Invoke(
+        "ResolveTargetPolicyForProvision",
+        ProductId,
+        "windows",
+        "x64",
+        config);
+
+    var authorization = new StandaloneProvisionAuthorization(
+        ProductId,
+        Version,
+        Repository,
+        Tag);
+    var package = await AwaitResultAsync(
+        Invoke(
+            "ResolveGitHubReleasePackageAsync",
+            authorization,
+            "x64",
+            target,
+            CancellationToken.None));
+
+    var fileName = (string)RequiredProperty(package, "FileName");
+    var size = (long)RequiredProperty(package, "Size");
+    var sha256 = (string)RequiredProperty(package, "Sha256");
+    var downloadUrl = (string)RequiredProperty(package, "DownloadUrl");
+
+    var destination = Path.Combine(
+        runtimeRoot,
+        "downloads",
+        "provider-diagnostic",
+        fileName);
+
+    var result = new SortedDictionary<string, object?>(
+        StringComparer.Ordinal)
+    {
+        ["file_name"] = fileName,
+        ["size"] = size,
+        ["sha256"] = sha256,
+        ["download_host"] = new Uri(downloadUrl).Host,
+        ["destination"] = destination,
+    };
+
+    try
+    {
+        var acquisitionTask = Invoke(
+            "AcquireGitHubAssetAsync",
+            downloadUrl,
+            destination,
+            size,
+            sha256,
+            CancellationToken.None);
+        await (Task)acquisitionTask;
+
+        var acquiredPath = (string)(
+            acquisitionTask.GetType()
+                .GetProperty("Result", BindingFlags.Instance | BindingFlags.Public)!
+                .GetValue(acquisitionTask)
+            ?? throw new InvalidDataException(
+                "Provider diagnostic acquisition returned null."));
+        var info = new FileInfo(acquiredPath);
+        result["status"] = "PASS";
+        result["acquired_bytes"] = info.Length;
+        result["acquired_sha256"] = Sha256File(acquiredPath);
+    }
+    catch (Exception exception)
+    {
+        var root = exception.GetBaseException();
+        result["status"] = "FAILED";
+        result["error_type"] = root.GetType().FullName;
+        result["error"] = root.Message;
+        if (root is HttpRequestException httpException)
+        {
+            result["http_status"] =
+                httpException.StatusCode is null
+                    ? null
+                    : (int)httpException.StatusCode.Value;
+        }
+    }
+
+    return result;
 }
 
 static async Task<SortedDictionary<string, object?>> DiagnoseImmutableReleaseAsync()
