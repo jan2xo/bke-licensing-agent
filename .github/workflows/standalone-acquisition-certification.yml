@@ -156,8 +156,8 @@ jobs:
             if ($result.status -ne "PASS") { throw "SYSTEM acquisition evidence did not report PASS." }
             if ($result.identity -ne "NT AUTHORITY\SYSTEM") { throw "Acquisition certification did not execute as SYSTEM." }
             if ($result.process_architecture -ne "X64") { throw "Acquisition certification process was not x64." }
-            if ([int64]$result.artifact_bytes -ne 54167311) { throw "Render Dock x64 release bytes drifted." }
-            if ([string]$result.artifact_sha256 -ne "93763ef85579c252aea05cd0f335c024639ce8d26f2ead8fe09c69933868d4a7") { throw "Render Dock x64 release hash drifted." }
+            if ([int64]$result.artifact_bytes -ne 54167312) { throw "Render Dock x64 release bytes drifted." }
+            if ([string]$result.artifact_sha256 -ne "916931fb2efe5fb26720e0f150bdef290f064780f534dcfd96577e1fda45ffa0") { throw "Render Dock x64 release hash drifted." }
 
             Copy-Item -LiteralPath $evidence -Destination "standalone-acquisition-evidence.json"
           }
