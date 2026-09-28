@@ -43,7 +43,8 @@ for workflow in \
   dotnet-production-release-preflight.yml \
   dotnet-production-signing.yml \
   dotnet-signed-self-update.yml \
-  utm-disposable-target-trust.yml
+  utm-disposable-target-trust.yml \
+  standalone-acquisition-certification.yml
 do
   path=".github/workflows/$workflow"
   if grep -Eq '^[[:space:]]*pull_request:[[:space:]]*$' "$path"; then
@@ -68,7 +69,8 @@ for workflow in \
   dotnet-broken-update-rollback.yml \
   dotnet-production-installer.yml \
   dotnet-production-release-preflight.yml \
-  dotnet-signed-self-update.yml
+  dotnet-signed-self-update.yml \
+  standalone-acquisition-certification.yml
 do
   grep -q 'workflow_call:' ".github/workflows/$workflow"
 done
