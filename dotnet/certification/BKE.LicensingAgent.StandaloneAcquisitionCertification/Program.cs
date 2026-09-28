@@ -114,9 +114,9 @@ try
 
     Require(
         result.Status == "STARTED" &&
-        result.State == "provision_started" &&
+        result.Reason == "provision_started" &&
         !result.Retryable,
-        $"Provisioning did not start: status={result.Status}, state={result.State}, retryable={result.Retryable}");
+        $"Provisioning did not start: status={result.Status}, reason={result.Reason}, retryable={result.Retryable}");
 
     var inventory = new SqliteProductInventory(dataRoot);
     LocalInstalledProduct? installed = null;
@@ -189,7 +189,7 @@ try
     evidence["process_architecture"] = RuntimeInformation.ProcessArchitecture.ToString();
     evidence["os_architecture"] = RuntimeInformation.OSArchitecture.ToString();
     evidence["provision_status"] = result.Status;
-    evidence["provision_state"] = result.State;
+    evidence["provision_reason"] = result.Reason;
     evidence["runtime_root"] = runtimeRoot;
     evidence["helper_executable"] = helperExecutable;
     evidence["installed_entry_point"] = entryPointPath;
