@@ -492,6 +492,7 @@ Require(
     MethodNames<IAccountOrganizationService>().SetEquals([
         "GetAsync",
         "CreateAsync",
+        "UpdateProfileAsync",
     ]),
     "account organization service port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");

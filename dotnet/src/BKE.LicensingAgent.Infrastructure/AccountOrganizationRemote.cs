@@ -15,6 +15,8 @@ public sealed class AccountOrganizationRemote :
         "/api/agent-sessions/account/organization";
     private const string CreateEndpoint =
         "/api/agent-sessions/account/organization/create";
+    private const string ProfileEndpoint =
+        "/api/agent-sessions/account/organization/profile";
 
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
@@ -362,6 +364,160 @@ public sealed class AccountOrganizationRemote :
             DisplayName:
                 RequiredBoundedString(account, "display_name", 120),
             SwitchRequired: true);
+    }
+
+    public async Task<RemoteAccountOrganizationProfileUpdateResult>
+        UpdateProfileAsync(
+            string accessToken,
+            bool updateOrganizationProfile,
+            string? displayName,
+            string? legalName,
+            string? registrationNumber,
+            bool updateBillingProfile,
+            string? billingEmail,
+            string? taxId,
+            CancellationToken cancellationToken)
+    {
+        var organizationValid =
+            !updateOrganizationProfile
+                ? displayName is null &&
+                  legalName is null &&
+                  registrationNumber is null
+                : ValidBounded(displayName, 2, 120) &&
+                  ValidBounded(legalName, 2, 180) &&
+                  (registrationNumber is null ||
+                   ValidOptionalBounded(registrationNumber, 80));
+
+        var billingValid =
+            !updateBillingProfile
+                ? billingEmail is null && taxId is null
+                : ValidBounded(billingEmail, 3, 320) &&
+                  (taxId is null ||
+                   ValidOptionalBounded(taxId, 80));
+
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192 ||
+            (!updateOrganizationProfile && !updateBillingProfile) ||
+            !organizationValid ||
+            !billingValid)
+        {
+            return new RemoteAccountOrganizationProfileUpdateResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        var payload = new Dictionary<string, object?>();
+        if (updateOrganizationProfile)
+        {
+            payload["display_name"] = displayName!.Trim();
+            payload["legal_name"] = legalName!.Trim();
+            payload["registration_number"] =
+                string.IsNullOrWhiteSpace(registrationNumber)
+                    ? null
+                    : registrationNumber.Trim();
+        }
+        if (updateBillingProfile)
+        {
+            payload["billing_email"] = billingEmail!.Trim();
+            payload["tax_id"] =
+                string.IsNullOrWhiteSpace(taxId)
+                    ? null
+                    : taxId.Trim();
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch,
+            new Uri(_platformBaseUri, ProfileEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json");
+
+        // Profile mutation is deliberately single-attempt. A transport
+        // failure after Digital Solutions commits the update is ambiguous,
+        // so automatic replay is forbidden.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization profile authority redirected.");
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new RemoteAccountOrganizationProfileUpdateResult(
+                "profile_unavailable",
+                ErrorCode: "ORGANIZATION_PROFILE_UPDATE_UNAVAILABLE",
+                Retryable: true);
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_PROFILE_UPDATE_UNAVAILABLE";
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization profile authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "ACCOUNT_NOT_ORGANIZATION" => "not_organization",
+                "ACCOUNT_ROLE_FORBIDDEN" => "account_forbidden",
+                "RATE_LIMITED" => "rate_limited",
+                _ => "profile_unavailable",
+            };
+            return new RemoteAccountOrganizationProfileUpdateResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        if (RequiredString(root, "status") != "updated")
+        {
+            throw new InvalidDataException(
+                "Organization profile update response drifted.");
+        }
+        if (root.TryGetProperty("account_id", out _) ||
+            root.TryGetProperty("user_id", out _) ||
+            root.TryGetProperty("owner_id", out _) ||
+            root.TryGetProperty("member_id", out _) ||
+            root.TryGetProperty("invitation_id", out _))
+        {
+            throw new InvalidDataException(
+                "Organization profile update response exposed authority identifiers.");
+        }
+
+        return new RemoteAccountOrganizationProfileUpdateResult(
+            "updated");
     }
 
     private static bool ValidBounded(

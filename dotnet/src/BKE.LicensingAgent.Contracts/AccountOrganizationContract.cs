@@ -13,6 +13,16 @@ public sealed record AccountOrganizationCreateRequest(
     [property: JsonPropertyName("registration_number"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RegistrationNumber,
     [property: JsonPropertyName("tax_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TaxId);
 
+public sealed record AccountOrganizationProfileUpdateRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("update_organization_profile")] bool UpdateOrganizationProfile,
+    [property: JsonPropertyName("display_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DisplayName,
+    [property: JsonPropertyName("legal_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LegalName,
+    [property: JsonPropertyName("registration_number")] string? RegistrationNumber,
+    [property: JsonPropertyName("update_billing_profile")] bool UpdateBillingProfile,
+    [property: JsonPropertyName("billing_email"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? BillingEmail,
+    [property: JsonPropertyName("tax_id")] string? TaxId);
+
 public sealed record AccountOrganizationAccount(
     [property: JsonPropertyName("display_name")] string DisplayName,
     [property: JsonPropertyName("lifecycle_state")] string LifecycleState,
@@ -64,6 +74,12 @@ public sealed record AccountOrganizationCreateResponse(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("display_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DisplayName,
     [property: JsonPropertyName("switch_required")] bool SwitchRequired,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
+public sealed record AccountOrganizationProfileUpdateResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
 
 public sealed record AccountOrganizationError(

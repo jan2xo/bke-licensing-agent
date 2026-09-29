@@ -22,7 +22,9 @@ static class AccountOrganizationCertification
             LocalAgentContract.AccountOrganizationOverviewPath ==
                 "/v1/account/organization" &&
             LocalAgentContract.AccountOrganizationCreatePath ==
-                "/v1/account/organization/create",
+                "/v1/account/organization/create" &&
+            LocalAgentContract.AccountOrganizationProfileUpdatePath ==
+                "/v1/account/organization/profile",
             "account organization contract drifted");
 
         Require(
@@ -44,11 +46,27 @@ static class AccountOrganizationCertification
                     "TaxId"
                 ]),
             "account organization create request drifted");
+        Require(
+            typeof(AccountOrganizationProfileUpdateRequest)
+                .GetProperties()
+                .Select(property => property.Name)
+                .SequenceEqual([
+                    "CorrelationId",
+                    "UpdateOrganizationProfile",
+                    "DisplayName",
+                    "LegalName",
+                    "RegistrationNumber",
+                    "UpdateBillingProfile",
+                    "BillingEmail",
+                    "TaxId"
+                ]),
+            "account organization profile update request drifted");
 
         foreach (var type in new[]
         {
             typeof(AccountOrganizationOverviewResponse),
             typeof(AccountOrganizationCreateResponse),
+            typeof(AccountOrganizationProfileUpdateResponse),
             typeof(AccountOrganizationAccount),
             typeof(AccountOrganizationMember),
             typeof(AccountOrganizationInvitation),
@@ -108,6 +126,9 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             host.Contains(
                 "app.MapPost(LocalAgentContract.AccountOrganizationCreatePath",
+                StringComparison.Ordinal) &&
+            host.Contains(
+                "app.MapPost(LocalAgentContract.AccountOrganizationProfileUpdatePath",
                 StringComparison.Ordinal),
             "Agent organization Host wiring drifted");
 
@@ -126,6 +147,12 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "/api/agent-sessions/account/organization/create",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "/api/agent-sessions/account/organization/profile",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "HttpMethod.Patch",
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "single-attempt",
@@ -247,6 +274,41 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal),
             "Agent organization create response leaked session/account identifiers");
 
+        var profileResult = await service.UpdateProfileAsync(
+            new AccountOrganizationProfileUpdateRequest(
+                "organization-profile-cert",
+                true,
+                "Updated Organization",
+                "Updated Organization Legal",
+                null,
+                true,
+                "billing-updated@example.test",
+                null),
+            CancellationToken.None);
+        Require(
+            profileResult.Status == "UPDATED" &&
+            profileResult.Error is null &&
+            remote.ProfileUpdateCalls == 1 &&
+            remote.LastAccessToken == "organization-access-secret" &&
+            remote.LastUpdateOrganizationProfile &&
+            remote.LastUpdateBillingProfile &&
+            remote.LastRegistrationNumber is null &&
+            remote.LastTaxId is null,
+            "Agent organization profile update did not preserve field groups or session custody");
+        var profileWire =
+            System.Text.Json.JsonSerializer.Serialize(profileResult);
+        Require(
+            !profileWire.Contains(
+                "organization-access-secret",
+                StringComparison.Ordinal) &&
+            !profileWire.Contains(
+                "organization-refresh-secret",
+                StringComparison.Ordinal) &&
+            !profileWire.Contains(
+                "org-account",
+                StringComparison.Ordinal),
+            "Agent organization profile update response leaked session/account identifiers");
+
         var personal = new AccountOrganizationService(
             new OrganizationAuthenticatedSessionService(account),
             OrganizationStore.Active(account),
@@ -317,6 +379,56 @@ static class AccountOrganizationCertification
             createUnknownResult.Error?.Retryable == false,
             "Agent organization create ambiguity was replayable or destroyed session custody");
 
+        var profileDeniedStore = OrganizationStore.Active(account);
+        var profileDenied = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            profileDeniedStore,
+            new FakeOrganizationRemote(
+                ready,
+                profileResult:
+                    new RemoteAccountOrganizationProfileUpdateResult(
+                        "account_forbidden",
+                        "ACCOUNT_ROLE_FORBIDDEN")));
+        var profileDeniedResult = await profileDenied.UpdateProfileAsync(
+            new AccountOrganizationProfileUpdateRequest(
+                "organization-profile-denied-cert",
+                false,
+                null,
+                null,
+                null,
+                true,
+                "billing-denied@example.test",
+                null),
+            CancellationToken.None);
+        Require(
+            profileDeniedResult.Status == "ACCOUNT_FORBIDDEN" &&
+            profileDeniedStore.State is ActiveAccountSessionState,
+            "Agent organization profile role denial destroyed valid session custody");
+
+        var profileUnknownStore = OrganizationStore.Active(account);
+        var profileUnknown = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            profileUnknownStore,
+            new ThrowingOrganizationRemote(
+                new HttpRequestException(
+                    "certified organization profile ambiguity")));
+        var profileUnknownResult = await profileUnknown.UpdateProfileAsync(
+            new AccountOrganizationProfileUpdateRequest(
+                "organization-profile-unknown-cert",
+                true,
+                "Ambiguous Organization",
+                "Ambiguous Organization Legal",
+                "REG-AMBIGUOUS",
+                false,
+                null,
+                null),
+            CancellationToken.None);
+        Require(
+            profileUnknownResult.Status == "OUTCOME_UNKNOWN" &&
+            profileUnknownStore.State is ActiveAccountSessionState &&
+            profileUnknownResult.Error?.Retryable == false,
+            "Agent organization profile ambiguity was replayable or destroyed session custody");
+
         var signedOutRemote = new FakeOrganizationRemote(ready);
         var signedOut = new AccountOrganizationService(
             new OrganizationSignedOutSessionService(),
@@ -330,6 +442,22 @@ static class AccountOrganizationCertification
             signedOutResult.Status == "AUTH_REQUIRED" &&
             signedOutRemote.Calls == 0,
             "Agent organization authority was called without authenticated session custody");
+
+        var signedOutProfile = await signedOut.UpdateProfileAsync(
+            new AccountOrganizationProfileUpdateRequest(
+                "organization-profile-auth-cert",
+                true,
+                "Signed Out Organization",
+                "Signed Out Organization Legal",
+                null,
+                false,
+                null,
+                null),
+            CancellationToken.None);
+        Require(
+            signedOutProfile.Status == "AUTH_REQUIRED" &&
+            signedOutRemote.ProfileUpdateCalls == 0,
+            "Agent organization profile authority was called without authenticated session custody");
     }
 
     private static async Task CertifyRemoteTransportAsync()
@@ -451,6 +579,63 @@ static class AccountOrganizationCertification
                 createHandler.SawPost &&
                 createHandler.BodyExcludedAuthorityIds,
                 "Agent organization create transport drifted");
+        }
+
+        var organizationProfileHandler =
+            new OrganizationProfileTransportHandler(
+                expectOrganizationFields: true,
+                expectBillingFields: false);
+        using (var client = new HttpClient(organizationProfileHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.UpdateProfileAsync(
+                token,
+                true,
+                "Updated Organization",
+                "Updated Organization Legal",
+                null,
+                false,
+                null,
+                null,
+                CancellationToken.None);
+            Require(
+                result.Status == "updated" &&
+                organizationProfileHandler.RequestCount == 1 &&
+                organizationProfileHandler.SawBearer &&
+                organizationProfileHandler.SawProtocol &&
+                organizationProfileHandler.SawPatch &&
+                organizationProfileHandler.BodyMatchedFieldGroups &&
+                organizationProfileHandler.BodyExcludedAuthorityIds,
+                "Agent organization-profile organization-field transport drifted");
+        }
+
+        var billingProfileHandler =
+            new OrganizationProfileTransportHandler(
+                expectOrganizationFields: false,
+                expectBillingFields: true);
+        using (var client = new HttpClient(billingProfileHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.UpdateProfileAsync(
+                token,
+                false,
+                null,
+                null,
+                null,
+                true,
+                "billing-updated@example.test",
+                null,
+                CancellationToken.None);
+            Require(
+                result.Status == "updated" &&
+                billingProfileHandler.RequestCount == 1 &&
+                billingProfileHandler.BodyMatchedFieldGroups &&
+                billingProfileHandler.BodyExcludedAuthorityIds,
+                "Agent organization-profile billing-field transport drifted");
         }
 
         var redirect = new OrganizationTransportHandler(
@@ -591,12 +776,18 @@ sealed class OrganizationSignedOutSessionService : IAccountSessionService
 
 sealed class FakeOrganizationRemote(
     RemoteAccountOrganizationResult result,
-    RemoteAccountOrganizationCreateResult? createResult = null) :
+    RemoteAccountOrganizationCreateResult? createResult = null,
+    RemoteAccountOrganizationProfileUpdateResult? profileResult = null) :
     IAccountOrganizationRemote
 {
     public int Calls { get; private set; }
     public int CreateCalls { get; private set; }
+    public int ProfileUpdateCalls { get; private set; }
     public string? LastAccessToken { get; private set; }
+    public bool LastUpdateOrganizationProfile { get; private set; }
+    public bool LastUpdateBillingProfile { get; private set; }
+    public string? LastRegistrationNumber { get; private set; }
+    public string? LastTaxId { get; private set; }
 
     public Task<RemoteAccountOrganizationResult> GetAsync(
         string accessToken,
@@ -627,6 +818,30 @@ sealed class FakeOrganizationRemote(
                 displayName,
                 true));
     }
+
+    public Task<RemoteAccountOrganizationProfileUpdateResult> UpdateProfileAsync(
+        string accessToken,
+        bool updateOrganizationProfile,
+        string? displayName,
+        string? legalName,
+        string? registrationNumber,
+        bool updateBillingProfile,
+        string? billingEmail,
+        string? taxId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ProfileUpdateCalls++;
+        LastAccessToken = accessToken;
+        LastUpdateOrganizationProfile = updateOrganizationProfile;
+        LastUpdateBillingProfile = updateBillingProfile;
+        LastRegistrationNumber = registrationNumber;
+        LastTaxId = taxId;
+        return Task.FromResult(
+            profileResult ??
+            new RemoteAccountOrganizationProfileUpdateResult(
+                "updated"));
+    }
 }
 
 sealed class ThrowingOrganizationRemote(
@@ -646,6 +861,19 @@ sealed class ThrowingOrganizationRemote(
         string? taxId,
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationCreateResult>(error);
+
+    public Task<RemoteAccountOrganizationProfileUpdateResult> UpdateProfileAsync(
+        string accessToken,
+        bool updateOrganizationProfile,
+        string? displayName,
+        string? legalName,
+        string? registrationNumber,
+        bool updateBillingProfile,
+        string? billingEmail,
+        string? taxId,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationProfileUpdateResult>(
+            error);
 }
 
 sealed class OrganizationTransportHandler(
@@ -760,6 +988,107 @@ sealed class OrganizationCreateTransportHandler(
                 "x-bke-account-session-version",
                 AccountSessionRemote.ProtocolVersion);
         }
+        return response;
+    }
+}
+
+
+sealed class OrganizationProfileTransportHandler(
+    bool expectOrganizationFields,
+    bool expectBillingFields) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPatch { get; private set; }
+    public bool BodyMatchedFieldGroups { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPatch =
+            request.Method == HttpMethod.Patch &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/profile";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        using var document =
+            System.Text.Json.JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        var hasDisplay = root.TryGetProperty(
+            "display_name",
+            out _);
+        var hasLegal = root.TryGetProperty(
+            "legal_name",
+            out _);
+        var hasRegistration = root.TryGetProperty(
+            "registration_number",
+            out var registration);
+        var hasBilling = root.TryGetProperty(
+            "billing_email",
+            out _);
+        var hasTax = root.TryGetProperty(
+            "tax_id",
+            out var tax);
+
+        BodyMatchedFieldGroups =
+            hasDisplay == expectOrganizationFields &&
+            hasLegal == expectOrganizationFields &&
+            hasRegistration == expectOrganizationFields &&
+            hasBilling == expectBillingFields &&
+            hasTax == expectBillingFields &&
+            (!expectOrganizationFields ||
+                registration.ValueKind ==
+                    System.Text.Json.JsonValueKind.Null) &&
+            (!expectBillingFields ||
+                tax.ValueKind ==
+                    System.Text.Json.JsonValueKind.Null);
+
+        BodyExcludedAuthorityIds =
+            !body.Contains(
+                "account_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "user_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "owner_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "member_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "invitation_id",
+                StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """{"status":"updated"}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
         return response;
     }
 }
