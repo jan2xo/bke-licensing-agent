@@ -42,6 +42,18 @@ var hostSource = File.ReadAllText(
         "src",
         "BKE.LicensingAgent.Host",
         "Program.cs"));
+var accountMfaRemoteSource = File.ReadAllText(
+    Path.Combine(
+        "dotnet",
+        "src",
+        "BKE.LicensingAgent.Infrastructure",
+        "AccountMfaRemote.cs"));
+var accountMfaServiceSource = File.ReadAllText(
+    Path.Combine(
+        "dotnet",
+        "src",
+        "BKE.LicensingAgent.Application",
+        "AccountMfaService.cs"));
 
 
 Require(
@@ -124,6 +136,62 @@ Require(
         "runtimeEnvironment.EffectivePlatformBaseUrl",
         StringComparison.Ordinal),
     "Agent Host no longer serves the startup-resolved platform authority over loopback.");
+
+foreach (var route in new[]
+{
+    "AccountMfaStatusPath",
+    "AccountMfaEnrollStartPath",
+    "AccountMfaEnrollCompletePath",
+    "AccountMfaChallengePath",
+    "AccountMfaDisablePath",
+    "AccountMfaRecoveryRegeneratePath",
+})
+{
+    Require(
+        hostSource.Contains(
+            $"app.MapPost(LocalAgentContract.{route}",
+            StringComparison.Ordinal),
+        $"Agent Host is missing account MFA loopback route {route}.");
+}
+Require(
+    hostSource.Contains("AddSingleton<IAccountMfaService>", StringComparison.Ordinal) &&
+    hostSource.Contains("AddSingleton<IAccountMfaRemote>", StringComparison.Ordinal),
+    "Agent Host account MFA mediation DI drifted.");
+
+foreach (var endpoint in new[]
+{
+    "/api/agent-sessions/account/mfa",
+    "/api/agent-sessions/account/mfa/enroll/start",
+    "/api/agent-sessions/account/mfa/enroll/complete",
+    "/api/agent-sessions/account/mfa/challenge",
+    "/api/agent-sessions/account/mfa/disable",
+    "/api/agent-sessions/account/mfa/recovery/regenerate",
+})
+{
+    Require(
+        accountMfaRemoteSource.Contains(endpoint, StringComparison.Ordinal),
+        $"Agent account MFA remote endpoint drifted: {endpoint}.");
+}
+Require(
+    accountMfaRemoteSource.Contains(
+        "new AuthenticationHeaderValue(\"Bearer\", accessToken)",
+        StringComparison.Ordinal) &&
+    accountMfaRemoteSource.Contains(
+        "\"x-bke-account-session-version\"",
+        StringComparison.Ordinal),
+    "Agent account MFA remote lost bearer/protocol mediation.");
+Require(
+    accountMfaRemoteSource.Contains(
+        "MFA challenge/mutation calls are deliberately single-attempt",
+        StringComparison.Ordinal) &&
+    !accountMfaRemoteSource.Contains(
+        "for (var attempt",
+        StringComparison.Ordinal),
+    "Agent account MFA mutations became retryable.");
+Require(
+    !accountMfaRemoteSource.Contains("Console.", StringComparison.Ordinal) &&
+    !accountMfaServiceSource.Contains("Console.", StringComparison.Ordinal),
+    "Agent account MFA mediation introduced secret-capable logging.");
 
 Require(
     privilegedUpdateCenterSource.Contains(
@@ -357,6 +425,15 @@ Require(JsonName<AccountPasswordChangeRequest>(nameof(AccountPasswordChangeReque
 Require(JsonName<AccountPasswordChangeRequest>(nameof(AccountPasswordChangeRequest.CurrentPassword)) == "current_password", "password-change current_password wire name mismatch");
 Require(JsonName<AccountPasswordChangeRequest>(nameof(AccountPasswordChangeRequest.NewPassword)) == "new_password", "password-change new_password wire name mismatch");
 Require(JsonName<AccountPasswordChangeResponse>(nameof(AccountPasswordChangeResponse.ReauthenticationRequired)) == "reauthentication_required", "password-change reauthentication_required wire name mismatch");
+Require(JsonName<AccountMfaStatusRequest>(nameof(AccountMfaStatusRequest.CorrelationId)) == "correlation_id", "account MFA status correlation_id wire name mismatch");
+Require(JsonName<AccountMfaStatusResponse>(nameof(AccountMfaStatusResponse.EnrollmentPending)) == "enrollment_pending", "account MFA enrollment_pending wire name mismatch");
+Require(JsonName<AccountMfaStatusResponse>(nameof(AccountMfaStatusResponse.RecoveryCodesRemaining)) == "recovery_codes_remaining", "account MFA recovery count wire name mismatch");
+Require(JsonName<AccountMfaEnrollStartRequest>(nameof(AccountMfaEnrollStartRequest.CurrentPassword)) == "current_password", "account MFA enrollment current_password wire name mismatch");
+Require(JsonName<AccountMfaEnrollCompleteRequest>(nameof(AccountMfaEnrollCompleteRequest.ChallengeToken)) == "challenge_token", "account MFA enrollment challenge_token wire name mismatch");
+Require(JsonName<AccountMfaEnrollCompleteRequest>(nameof(AccountMfaEnrollCompleteRequest.Code)) == "code", "account MFA enrollment code wire name mismatch");
+Require(JsonName<AccountMfaChallengeResponse>(nameof(AccountMfaChallengeResponse.MfaReference)) == "mfa_reference", "account MFA reference wire name mismatch");
+Require(JsonName<AccountMfaMutationResponse>(nameof(AccountMfaMutationResponse.ReauthenticationRequired)) == "reauthentication_required", "account MFA reauthentication wire name mismatch");
+Require(JsonName<AccountMfaMutationResponse>(nameof(AccountMfaMutationResponse.RecoveryCodes)) == "recovery_codes", "account MFA recovery_codes wire name mismatch");
 Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.CorrelationId)) == "correlation_id", "claim-code redemption correlation_id wire name mismatch");
 Require(JsonName<ClaimCodeRedeemRequest>(nameof(ClaimCodeRedeemRequest.Code)) == "code", "claim-code redemption code wire name mismatch");
 Require(JsonName<StoreCatalogRequest>(nameof(StoreCatalogRequest.CorrelationId)) == "correlation_id", "Store catalog correlation_id wire name mismatch");
@@ -395,6 +472,16 @@ Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsyn
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<IAccountPasswordChangeService>().SetEquals(["ChangeAsync"]), "account password-change port drifted");
+Require(
+    MethodNames<IAccountMfaService>().SetEquals([
+        "StatusAsync",
+        "EnrollStartAsync",
+        "EnrollCompleteAsync",
+        "ChallengeAsync",
+        "DisableAsync",
+        "RegenerateRecoveryAsync",
+    ]),
+    "account MFA service port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
@@ -413,6 +500,7 @@ CertifyNotificationSchemaUpgrade();
 await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
 await CertifyAccountPasswordChangeBoundary();
+await CertifyAccountMfaBoundary();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
@@ -437,6 +525,7 @@ Console.WriteLine($"Routes certified: {contractRoutes.Count}");
 Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVersion}");
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Account password-change transient-secret, no-retry, and fail-closed boundary certified");
+Console.WriteLine("Account MFA session-custody, transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
@@ -1424,6 +1513,207 @@ static async Task CertifyAccountPasswordChangeBoundary()
     Require(
         unavailableHandler.RequestCount == 1,
         "password-change provider-unavailable mutation was retried");
+}
+
+static async Task CertifyAccountMfaBoundary()
+{
+    const string currentPassword = "Mfa-Current-Password-123";
+    const string challengeToken = "mfa-challenge-token-abcdefghijklmnopqrstuvwxyz";
+    const string code = "654321";
+    var account = new AccountSessionAccount(
+        "user-mfa",
+        "mfa-owner@example.com",
+        "account-mfa",
+        "INDIVIDUAL",
+        "MFA Owner");
+
+    static async Task<FakeAccountSessionStore> ActiveStore(
+        AccountSessionAccount account)
+    {
+        var store = new FakeAccountSessionStore();
+        await store.WriteAsync(
+            new ActiveAccountSessionState(
+                "mfa-access-secret",
+                "mfa-refresh-secret",
+                "mfa-session",
+                DateTimeOffset.UtcNow.AddMinutes(15),
+                DateTimeOffset.UtcNow.AddDays(30),
+                account),
+            CancellationToken.None);
+        return store;
+    }
+
+    var statusStore = await ActiveStore(account);
+    var statusRemote = new FakeAccountMfaRemote(
+        new RemoteAccountMfaResult(
+            "ready",
+            Enabled: true,
+            EnrollmentPending: false,
+            RecoveryCodesRemaining: 7));
+    var statusService = new AccountMfaService(
+        new FakeAuthenticatedAccountSessionService(account),
+        statusStore,
+        statusRemote);
+    var status = await statusService.StatusAsync(
+        new AccountMfaStatusRequest("cert-mfa-status"),
+        CancellationToken.None);
+    Require(status.Status == "READY" && status.Enabled,
+        "account MFA status did not preserve enabled state");
+    Require(status.RecoveryCodesRemaining == 7,
+        "account MFA recovery-code count drifted");
+    Require(statusRemote.CallCount == 1 &&
+            statusRemote.AccessToken == "mfa-access-secret",
+        "account MFA status did not use Agent-owned session custody");
+    Require(statusStore.State is ActiveAccountSessionState,
+        "read-only account MFA status destroyed Agent session custody");
+
+    var challengeStore = await ActiveStore(account);
+    var challengeRemote = new FakeAccountMfaRemote(
+        new RemoteAccountMfaResult(
+            "challenge_issued",
+            ChallengeToken: challengeToken,
+            ExpiresAt: "2026-09-29T09:00:00.0000000+00:00",
+            EmailSent: true,
+            MfaReference: "ABC123"));
+    var challengeService = new AccountMfaService(
+        new FakeAuthenticatedAccountSessionService(account),
+        challengeStore,
+        challengeRemote);
+    var challenge = await challengeService.ChallengeAsync(
+        new AccountMfaProofChallengeRequest(
+            "cert-mfa-challenge",
+            currentPassword),
+        CancellationToken.None);
+    Require(challenge.Status == "CHALLENGE_ISSUED" &&
+            challenge.ChallengeToken == challengeToken,
+        "account MFA proof challenge drifted");
+    Require(challengeRemote.CurrentPassword == currentPassword,
+        "account MFA current password did not remain transient through mediation");
+    Require(challengeStore.State is ActiveAccountSessionState,
+        "account MFA challenge destroyed Agent session custody");
+
+    var successStore = await ActiveStore(account);
+    var successRemote = new FakeAccountMfaRemote(
+        new RemoteAccountMfaResult(
+            "completed",
+            ReauthenticationRequired: true,
+            RecoveryCodes: ["RECOVERY-ONE", "RECOVERY-TWO"]));
+    var successService = new AccountMfaService(
+        new FakeAuthenticatedAccountSessionService(account),
+        successStore,
+        successRemote);
+    var success = await successService.EnrollCompleteAsync(
+        new AccountMfaEnrollCompleteRequest(
+            "cert-mfa-enable",
+            currentPassword,
+            challengeToken,
+            code),
+        CancellationToken.None);
+    Require(success.Status == "MFA_ENABLED" &&
+            success.ReauthenticationRequired,
+        "successful MFA enable did not require reauthentication");
+    Require(successStore.State is null,
+        "successful MFA enable retained durable Agent session custody");
+    Require(successRemote.CallCount == 1 &&
+            successRemote.AccessToken == "mfa-access-secret" &&
+            successRemote.CurrentPassword == currentPassword &&
+            successRemote.ChallengeToken == challengeToken &&
+            successRemote.Code == code,
+        "account MFA mutation widened or replayed transient authority");
+
+    var successWire = JsonSerializer.Serialize(success);
+    Require(!successWire.Contains(currentPassword, StringComparison.Ordinal),
+        "account MFA response leaked current password");
+    Require(!successWire.Contains(code, StringComparison.Ordinal),
+        "account MFA response leaked verification code");
+    Require(!successWire.Contains("mfa-access-secret", StringComparison.Ordinal),
+        "account MFA response leaked Agent access token");
+    Require(!successWire.Contains("mfa-refresh-secret", StringComparison.Ordinal),
+        "account MFA response leaked Agent refresh token");
+
+    foreach (var rejection in new[] { "invalid_credentials", "invalid_mfa_code" })
+    {
+        var rejectedStore = await ActiveStore(account);
+        var rejectedRemote = new FakeAccountMfaRemote(
+            new RemoteAccountMfaResult(
+                rejection,
+                ErrorCode: rejection == "invalid_credentials"
+                    ? "INVALID_CREDENTIALS"
+                    : "INVALID_MFA_CODE"));
+        var rejectedService = new AccountMfaService(
+            new FakeAuthenticatedAccountSessionService(account),
+            rejectedStore,
+            rejectedRemote);
+        var rejected = await rejectedService.DisableAsync(
+            new AccountMfaMutationRequest(
+                "cert-mfa-rejected-" + rejection,
+                currentPassword,
+                challengeToken,
+                code),
+            CancellationToken.None);
+
+        Require(!rejected.ReauthenticationRequired,
+            $"explicit {rejection} unexpectedly forced reauthentication");
+        Require(rejectedStore.State is ActiveAccountSessionState,
+            $"explicit {rejection} destroyed a still-valid Agent session");
+        Require(rejectedRemote.CallCount == 1,
+            $"explicit {rejection} was replayed");
+    }
+
+    var ambiguousStore = await ActiveStore(account);
+    var ambiguousRemote = new FakeAccountMfaRemote(
+        null,
+        new HttpRequestException("certified ambiguous MFA mutation"));
+    var ambiguousService = new AccountMfaService(
+        new FakeAuthenticatedAccountSessionService(account),
+        ambiguousStore,
+        ambiguousRemote);
+    var ambiguous = await ambiguousService.RegenerateRecoveryAsync(
+        new AccountMfaMutationRequest(
+            "cert-mfa-ambiguous",
+            currentPassword,
+            challengeToken,
+            code),
+        CancellationToken.None);
+    Require(ambiguous.Status == "REAUTHENTICATION_REQUIRED" &&
+            ambiguous.ReauthenticationRequired,
+        "ambiguous MFA mutation did not fail closed");
+    Require(ambiguousStore.State is null,
+        "ambiguous MFA mutation retained durable Agent session custody");
+    Require(ambiguousRemote.CallCount == 1,
+        "ambiguous MFA mutation was replayed");
+
+    var challengeFailureStore = await ActiveStore(account);
+    var challengeFailureRemote = new FakeAccountMfaRemote(
+        null,
+        new HttpRequestException("certified read/challenge outage"));
+    var challengeFailureService = new AccountMfaService(
+        new FakeAuthenticatedAccountSessionService(account),
+        challengeFailureStore,
+        challengeFailureRemote);
+    var challengeFailure = await challengeFailureService.ChallengeAsync(
+        new AccountMfaProofChallengeRequest(
+            "cert-mfa-challenge-failure",
+            currentPassword),
+        CancellationToken.None);
+    Require(challengeFailure.Status == "FAILED",
+        "account MFA challenge transport failure was not surfaced");
+    Require(challengeFailureStore.State is ActiveAccountSessionState,
+        "non-mutating MFA challenge failure destroyed Agent session custody");
+
+    var unauthenticatedRemote = new FakeAccountMfaRemote(
+        new RemoteAccountMfaResult("ready", Enabled: true));
+    var unauthenticatedService = new AccountMfaService(
+        new FakeUnauthenticatedAccountSessionService(),
+        await ActiveStore(account),
+        unauthenticatedRemote);
+    var unauthenticated = await unauthenticatedService.StatusAsync(
+        new AccountMfaStatusRequest("cert-mfa-auth"),
+        CancellationToken.None);
+    Require(unauthenticated.Status == "AUTH_REQUIRED",
+        "account MFA status did not require authentication");
+    Require(unauthenticatedRemote.CallCount == 0,
+        "account MFA called Digital Solutions without authenticated Agent custody");
 }
 
 static async Task CertifyClaimCodeRedemptionBoundary()
@@ -3324,6 +3614,92 @@ sealed class FakeUnauthenticatedAccountSessionService : IAccountSessionService
         throw new NotSupportedException();
 }
 
+
+sealed class FakeAccountMfaRemote : IAccountMfaRemote
+{
+    private readonly RemoteAccountMfaResult? _result;
+    private readonly Exception? _exception;
+
+    public FakeAccountMfaRemote(
+        RemoteAccountMfaResult? result,
+        Exception? exception = null)
+    {
+        _result = result;
+        _exception = exception;
+    }
+
+    public int CallCount { get; private set; }
+    public string? Operation { get; private set; }
+    public string? AccessToken { get; private set; }
+    public string? CurrentPassword { get; private set; }
+    public string? ChallengeToken { get; private set; }
+    public string? Code { get; private set; }
+
+    public Task<RemoteAccountMfaResult> StatusAsync(
+        string accessToken,
+        CancellationToken cancellationToken) =>
+        Invoke("status", accessToken, null, null, null);
+
+    public Task<RemoteAccountMfaResult> EnrollStartAsync(
+        string accessToken,
+        string currentPassword,
+        CancellationToken cancellationToken) =>
+        Invoke("enroll-start", accessToken, currentPassword, null, null);
+
+    public Task<RemoteAccountMfaResult> EnrollCompleteAsync(
+        string accessToken,
+        string currentPassword,
+        string challengeToken,
+        string code,
+        CancellationToken cancellationToken) =>
+        Invoke("enroll-complete", accessToken, currentPassword, challengeToken, code);
+
+    public Task<RemoteAccountMfaResult> ChallengeAsync(
+        string accessToken,
+        string currentPassword,
+        CancellationToken cancellationToken) =>
+        Invoke("challenge", accessToken, currentPassword, null, null);
+
+    public Task<RemoteAccountMfaResult> DisableAsync(
+        string accessToken,
+        string currentPassword,
+        string challengeToken,
+        string code,
+        CancellationToken cancellationToken) =>
+        Invoke("disable", accessToken, currentPassword, challengeToken, code);
+
+    public Task<RemoteAccountMfaResult> RegenerateRecoveryAsync(
+        string accessToken,
+        string currentPassword,
+        string challengeToken,
+        string code,
+        CancellationToken cancellationToken) =>
+        Invoke("recovery", accessToken, currentPassword, challengeToken, code);
+
+    private Task<RemoteAccountMfaResult> Invoke(
+        string operation,
+        string accessToken,
+        string? currentPassword,
+        string? challengeToken,
+        string? code)
+    {
+        CallCount += 1;
+        Operation = operation;
+        AccessToken = accessToken;
+        CurrentPassword = currentPassword;
+        ChallengeToken = challengeToken;
+        Code = code;
+
+        if (_exception is not null)
+        {
+            return Task.FromException<RemoteAccountMfaResult>(_exception);
+        }
+
+        return Task.FromResult(
+            _result ?? throw new InvalidOperationException(
+                "Fake account MFA remote requires a result or exception."));
+    }
+}
 
 sealed class FakeAccountPasswordChangeRemote : IAccountPasswordChangeRemote
 {
