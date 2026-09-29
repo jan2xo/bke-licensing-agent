@@ -707,6 +707,23 @@ app.MapPost(LocalAgentContract.AccountOrganizationCreatePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountOrganizationProfileUpdatePath, async (
+    AccountOrganizationProfileUpdateRequest request,
+    IAccountOrganizationService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidOrganizationProfileUpdate(request))
+    {
+        return AccountOrganizationProfileUpdateInvalidRequest();
+    }
+
+    var response = await service.UpdateProfileAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     ClaimCodeRedeemRequest request,
     IClaimCodeRedemptionService service,
@@ -937,6 +954,34 @@ static bool ValidOrganizationEmail(string? value) =>
         parsed.Address,
         value.Trim(),
         StringComparison.OrdinalIgnoreCase);
+
+static bool ValidOrganizationProfileUpdate(
+    AccountOrganizationProfileUpdateRequest request)
+{
+    if (!request.UpdateOrganizationProfile &&
+        !request.UpdateBillingProfile)
+    {
+        return false;
+    }
+
+    var organizationValid = request.UpdateOrganizationProfile
+        ? ValidOrganizationText(request.DisplayName, 2, 120) &&
+          ValidOrganizationText(request.LegalName, 2, 180) &&
+          ValidOptionalOrganizationText(
+              request.RegistrationNumber,
+              80)
+        : request.DisplayName is null &&
+          request.LegalName is null &&
+          request.RegistrationNumber is null;
+
+    var billingValid = request.UpdateBillingProfile
+        ? ValidOrganizationEmail(request.BillingEmail) &&
+          ValidOptionalOrganizationText(request.TaxId, 80)
+        : request.BillingEmail is null &&
+          request.TaxId is null;
+
+    return organizationValid && billingValid;
+}
 
 static bool ValidPrivacyRequestType(string? requestType) =>
     !string.IsNullOrWhiteSpace(requestType) &&
@@ -1199,6 +1244,17 @@ static IResult AccountOrganizationCreateInvalidRequest() =>
         new AccountOrganizationError(
             "INVALID_REQUEST",
             "The organization creation request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountOrganizationProfileUpdateInvalidRequest() =>
+    Results.Json(new AccountOrganizationProfileUpdateResponse(
+        LocalAgentContract.AccountOrganizationCapabilityId,
+        LocalAgentContract.AccountOrganizationContractVersion,
+        "INVALID_INPUT",
+        new AccountOrganizationError(
+            "INVALID_REQUEST",
+            "The organization profile update request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
