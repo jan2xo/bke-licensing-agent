@@ -488,6 +488,11 @@ Require(
         "CreateAsync",
     ]),
     "account privacy service port drifted");
+Require(
+    MethodNames<IAccountOrganizationService>().SetEquals([
+        "GetAsync",
+    ]),
+    "account organization service port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
@@ -508,6 +513,7 @@ await CertifyAccountSessionStateMachine();
 await CertifyAccountPasswordChangeBoundary();
 await CertifyAccountMfaBoundary();
 await AccountPrivacyCertification.RunAsync();
+await AccountOrganizationCertification.RunAsync();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
@@ -534,6 +540,7 @@ Console.WriteLine("Account-session device authorization state machine certified"
 Console.WriteLine("Account password-change transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account MFA session-custody, transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account privacy session-custody, selected-account, no-retry create, and secret boundary certified");
+Console.WriteLine("Account organization read-only session-custody, role-filter, and identifier boundary certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");

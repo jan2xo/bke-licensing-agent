@@ -1,0 +1,56 @@
+using System.Text.Json.Serialization;
+
+namespace BKE.LicensingAgent.Contracts;
+
+public sealed record AccountOrganizationOverviewRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId);
+
+public sealed record AccountOrganizationAccount(
+    [property: JsonPropertyName("display_name")] string DisplayName,
+    [property: JsonPropertyName("lifecycle_state")] string LifecycleState,
+    [property: JsonPropertyName("role")] string Role);
+
+public sealed record AccountOrganizationPermissions(
+    [property: JsonPropertyName("manage_members")] bool ManageMembers,
+    [property: JsonPropertyName("view_billing")] bool ViewBilling,
+    [property: JsonPropertyName("view_licenses")] bool ViewLicenses);
+
+public sealed record AccountOrganizationProfile(
+    [property: JsonPropertyName("legal_name")] string LegalName,
+    [property: JsonPropertyName("registration_number"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RegistrationNumber);
+
+public sealed record AccountOrganizationCounts(
+    [property: JsonPropertyName("licenses"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Licenses,
+    [property: JsonPropertyName("subscriptions"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Subscriptions,
+    [property: JsonPropertyName("orders"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Orders);
+
+public sealed record AccountOrganizationMember(
+    [property: JsonPropertyName("email")] string Email,
+    [property: JsonPropertyName("name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
+    [property: JsonPropertyName("role")] string Role);
+
+public sealed record AccountOrganizationInvitation(
+    [property: JsonPropertyName("email")] string Email,
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("expires_at")] string ExpiresAt,
+    [property: JsonPropertyName("created_at")] string CreatedAt);
+
+public sealed record AccountOrganizationOverviewResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("account"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationAccount? Account,
+    [property: JsonPropertyName("permissions"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationPermissions? Permissions,
+    [property: JsonPropertyName("organization"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationProfile? Organization,
+    [property: JsonPropertyName("billing_email"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? BillingEmail,
+    [property: JsonPropertyName("tax_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TaxId,
+    [property: JsonPropertyName("counts"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationCounts? Counts,
+    [property: JsonPropertyName("members")] IReadOnlyList<AccountOrganizationMember> Members,
+    [property: JsonPropertyName("invitations")] IReadOnlyList<AccountOrganizationInvitation> Invitations,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
+public sealed record AccountOrganizationError(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("retryable")] bool Retryable);
