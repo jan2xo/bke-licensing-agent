@@ -16,6 +16,17 @@ public interface IAccountOrganizationRemote
         string? registrationNumber,
         string? taxId,
         CancellationToken cancellationToken);
+
+    Task<RemoteAccountOrganizationProfileUpdateResult> UpdateProfileAsync(
+        string accessToken,
+        bool updateOrganizationProfile,
+        string? displayName,
+        string? legalName,
+        string? registrationNumber,
+        bool updateBillingProfile,
+        string? billingEmail,
+        string? taxId,
+        CancellationToken cancellationToken);
 }
 
 public interface IAccountOrganizationService
@@ -27,12 +38,21 @@ public interface IAccountOrganizationService
     Task<AccountOrganizationCreateResponse> CreateAsync(
         AccountOrganizationCreateRequest request,
         CancellationToken cancellationToken);
+
+    Task<AccountOrganizationProfileUpdateResponse> UpdateProfileAsync(
+        AccountOrganizationProfileUpdateRequest request,
+        CancellationToken cancellationToken);
 }
 
 public sealed record RemoteAccountOrganizationCreateResult(
     string Status,
     string? DisplayName = null,
     bool SwitchRequired = false,
+    string? ErrorCode = null,
+    bool Retryable = false);
+
+public sealed record RemoteAccountOrganizationProfileUpdateResult(
+    string Status,
     string? ErrorCode = null,
     bool Retryable = false);
 
@@ -236,6 +256,96 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
     }
 
 
+    public async Task<AccountOrganizationProfileUpdateResponse> UpdateProfileAsync(
+        AccountOrganizationProfileUpdateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return ProfileUpdateResponse(
+                "AUTH_REQUIRED",
+                Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before updating organization details.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.UpdateProfileAsync(
+                active.AccessToken,
+                request.UpdateOrganizationProfile,
+                request.DisplayName,
+                request.LegalName,
+                request.RegistrationNumber,
+                request.UpdateBillingProfile,
+                request.BillingEmail,
+                request.TaxId,
+                cancellationToken);
+
+            if (result.Status == "updated")
+            {
+                return ProfileUpdateResponse("UPDATED");
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "not_organization" => "NOT_ORGANIZATION",
+                "account_forbidden" => "ACCOUNT_FORBIDDEN",
+                _ => "FAILED",
+            };
+
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The organization profile update was not accepted.",
+                "not_organization" =>
+                    "The selected BKE account is not an Organization account.",
+                "account_forbidden" =>
+                    "The selected BKE account role cannot update these organization fields.",
+                "rate_limited" =>
+                    "Organization profile updates are temporarily rate limited.",
+                _ =>
+                    "BKE organization profile update is temporarily unavailable.",
+            };
+
+            return ProfileUpdateResponse(
+                status,
+                Error(
+                    result.ErrorCode ??
+                        "ORGANIZATION_PROFILE_UPDATE_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return ProfileUpdateResponse(
+                "AUTH_REQUIRED",
+                Error(
+                    "SESSION_INVALID",
+                    "The BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            return ProfileUpdateResponse(
+                "OUTCOME_UNKNOWN",
+                Error(
+                    "ORGANIZATION_PROFILE_UPDATE_OUTCOME_UNKNOWN",
+                    "The organization profile update result could not be confirmed. Refresh organization details before deciding whether to submit another update.",
+                    false));
+        }
+    }
+
+
     private async Task<ActiveAccountSessionState?> ActiveAsync(
         string correlationId,
         CancellationToken cancellationToken)
@@ -288,6 +398,15 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             status,
             displayName,
             switchRequired,
+            error);
+
+    private static AccountOrganizationProfileUpdateResponse ProfileUpdateResponse(
+        string status,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
             error);
 
     private static AccountOrganizationError Error(
