@@ -115,6 +115,13 @@ builder.Services.AddSingleton<IAccountPasswordChangeService>(services => new Acc
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountPasswordChangeRemote>()));
+builder.Services.AddSingleton<AccountMfaRemote>();
+builder.Services.AddSingleton<IAccountMfaRemote>(services =>
+    services.GetRequiredService<AccountMfaRemote>());
+builder.Services.AddSingleton<IAccountMfaService>(services => new AccountMfaService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountMfaRemote>()));
 builder.Services.AddSingleton<StoreCatalogRemote>();
 builder.Services.AddSingleton<IStoreCatalogRemote>(services =>
     services.GetRequiredService<StoreCatalogRemote>());
@@ -527,6 +534,101 @@ app.MapPost(LocalAgentContract.AccountPasswordChangePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountMfaStatusPath, async (
+    AccountMfaStatusRequest request,
+    IAccountMfaService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountMfaStatusInvalidRequest();
+    }
+
+    var response = await service.StatusAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountMfaEnrollStartPath, async (
+    AccountMfaEnrollStartRequest request,
+    IAccountMfaService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPasswordMaterial(request.CurrentPassword))
+    {
+        return AccountMfaChallengeInvalidRequest();
+    }
+
+    var response = await service.EnrollStartAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountMfaEnrollCompletePath, async (
+    AccountMfaEnrollCompleteRequest request,
+    IAccountMfaService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPasswordMaterial(request.CurrentPassword) ||
+        !ValidMfaChallengeToken(request.ChallengeToken) ||
+        !ValidMfaCode(request.Code))
+    {
+        return AccountMfaMutationInvalidRequest();
+    }
+
+    var response = await service.EnrollCompleteAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountMfaChallengePath, async (
+    AccountMfaProofChallengeRequest request,
+    IAccountMfaService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPasswordMaterial(request.CurrentPassword))
+    {
+        return AccountMfaChallengeInvalidRequest();
+    }
+
+    var response = await service.ChallengeAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountMfaDisablePath, async (
+    AccountMfaMutationRequest request,
+    IAccountMfaService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPasswordMaterial(request.CurrentPassword) ||
+        !ValidMfaChallengeToken(request.ChallengeToken) ||
+        !ValidMfaCode(request.Code))
+    {
+        return AccountMfaMutationInvalidRequest();
+    }
+
+    var response = await service.DisableAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountMfaRecoveryRegeneratePath, async (
+    AccountMfaMutationRequest request,
+    IAccountMfaService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPasswordMaterial(request.CurrentPassword) ||
+        !ValidMfaChallengeToken(request.ChallengeToken) ||
+        !ValidMfaCode(request.Code))
+    {
+        return AccountMfaMutationInvalidRequest();
+    }
+
+    var response = await service.RegenerateRecoveryAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     ClaimCodeRedeemRequest request,
     IClaimCodeRedemptionService service,
@@ -723,6 +825,16 @@ static bool ValidAccountSessionCorrelationId(string? correlationId) =>
 static bool ValidPasswordMaterial(string? password) =>
     !string.IsNullOrEmpty(password) && password.Length <= 128;
 
+static bool ValidMfaChallengeToken(string? token) =>
+    !string.IsNullOrWhiteSpace(token) &&
+    token.Length is >= 16 and <= 512 &&
+    token.All(character => character >= 32);
+
+static bool ValidMfaCode(string? code) =>
+    !string.IsNullOrWhiteSpace(code) &&
+    code.Length is >= 6 and <= 32 &&
+    code.All(character => character >= 32);
+
 static bool ValidClaimCode(string? code)
 {
     if (string.IsNullOrWhiteSpace(code))
@@ -868,6 +980,49 @@ static IResult AccountPasswordChangeInvalidRequest() =>
         new AccountPasswordChangeError(
             "INVALID_REQUEST",
             "The password-change request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountMfaStatusInvalidRequest() =>
+    Results.Json(new AccountMfaStatusResponse(
+        LocalAgentContract.AccountMfaCapabilityId,
+        LocalAgentContract.AccountMfaContractVersion,
+        "INVALID_INPUT",
+        false,
+        false,
+        0,
+        new AccountMfaError(
+            "INVALID_REQUEST",
+            "The account MFA status request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountMfaChallengeInvalidRequest() =>
+    Results.Json(new AccountMfaChallengeResponse(
+        LocalAgentContract.AccountMfaCapabilityId,
+        LocalAgentContract.AccountMfaContractVersion,
+        "INVALID_INPUT",
+        null,
+        null,
+        false,
+        null,
+        new AccountMfaError(
+            "INVALID_REQUEST",
+            "The account MFA challenge request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountMfaMutationInvalidRequest() =>
+    Results.Json(new AccountMfaMutationResponse(
+        LocalAgentContract.AccountMfaCapabilityId,
+        LocalAgentContract.AccountMfaContractVersion,
+        "INVALID_INPUT",
+        false,
+        null,
+        null,
+        new AccountMfaError(
+            "INVALID_REQUEST",
+            "The account MFA mutation request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
