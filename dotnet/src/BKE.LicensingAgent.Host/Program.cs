@@ -122,6 +122,13 @@ builder.Services.AddSingleton<IAccountMfaService>(services => new AccountMfaServ
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountMfaRemote>()));
+builder.Services.AddSingleton<AccountPrivacyRemote>();
+builder.Services.AddSingleton<IAccountPrivacyRemote>(services =>
+    services.GetRequiredService<AccountPrivacyRemote>());
+builder.Services.AddSingleton<IAccountPrivacyService>(services => new AccountPrivacyService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountPrivacyRemote>()));
 builder.Services.AddSingleton<StoreCatalogRemote>();
 builder.Services.AddSingleton<IStoreCatalogRemote>(services =>
     services.GetRequiredService<StoreCatalogRemote>());
@@ -629,6 +636,37 @@ app.MapPost(LocalAgentContract.AccountMfaRecoveryRegeneratePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountPrivacyListPath, async (
+    AccountPrivacyListRequest request,
+    IAccountPrivacyService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        request.Limit is < 1 or > 100)
+    {
+        return AccountPrivacyListInvalidRequest();
+    }
+
+    var response = await service.ListAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountPrivacyCreatePath, async (
+    AccountPrivacyCreateRequest request,
+    IAccountPrivacyService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPrivacyRequestType(request.RequestType) ||
+        !ValidPrivacySummary(request.Summary))
+    {
+        return AccountPrivacyCreateInvalidRequest();
+    }
+
+    var response = await service.CreateAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     ClaimCodeRedeemRequest request,
     IClaimCodeRedemptionService service,
@@ -835,6 +873,20 @@ static bool ValidMfaCode(string? code) =>
     code.Length is >= 6 and <= 32 &&
     code.All(character => character >= 32);
 
+static bool ValidPrivacyRequestType(string? requestType) =>
+    !string.IsNullOrWhiteSpace(requestType) &&
+    requestType.Length is >= 3 and <= 64 &&
+    requestType.All(character =>
+        character is >= 'A' and <= 'Z' ||
+        character == '_');
+
+static bool ValidPrivacySummary(string? summary) =>
+    !string.IsNullOrWhiteSpace(summary) &&
+    summary.Trim().Length is >= 10 and <= 2_000 &&
+    summary.All(character =>
+        character >= 32 ||
+        character is '\r' or '\n' or '\t');
+
 static bool ValidClaimCode(string? code)
 {
     if (string.IsNullOrWhiteSpace(code))
@@ -1023,6 +1075,33 @@ static IResult AccountMfaMutationInvalidRequest() =>
         new AccountMfaError(
             "INVALID_REQUEST",
             "The account MFA mutation request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountPrivacyListInvalidRequest() =>
+    Results.Json(new AccountPrivacyListResponse(
+        LocalAgentContract.AccountPrivacyCapabilityId,
+        LocalAgentContract.AccountPrivacyContractVersion,
+        "INVALID_INPUT",
+        Array.Empty<string>(),
+        Array.Empty<AccountPrivacyItem>(),
+        new AccountPrivacyError(
+            "INVALID_REQUEST",
+            "The account privacy list request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountPrivacyCreateInvalidRequest() =>
+    Results.Json(new AccountPrivacyCreateResponse(
+        LocalAgentContract.AccountPrivacyCapabilityId,
+        LocalAgentContract.AccountPrivacyContractVersion,
+        "INVALID_INPUT",
+        null,
+        null,
+        null,
+        new AccountPrivacyError(
+            "INVALID_REQUEST",
+            "The account privacy create request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 

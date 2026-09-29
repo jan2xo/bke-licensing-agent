@@ -482,6 +482,12 @@ Require(
         "RegenerateRecoveryAsync",
     ]),
     "account MFA service port drifted");
+Require(
+    MethodNames<IAccountPrivacyService>().SetEquals([
+        "ListAsync",
+        "CreateAsync",
+    ]),
+    "account privacy service port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
@@ -501,6 +507,7 @@ await CertifyAuthenticatedAccountNotificationSync();
 await CertifyAccountSessionStateMachine();
 await CertifyAccountPasswordChangeBoundary();
 await CertifyAccountMfaBoundary();
+await AccountPrivacyCertification.RunAsync();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
@@ -526,6 +533,7 @@ Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVe
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Account password-change transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account MFA session-custody, transient-secret, no-retry, and fail-closed boundary certified");
+Console.WriteLine("Account privacy session-custody, selected-account, no-retry create, and secret boundary certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");

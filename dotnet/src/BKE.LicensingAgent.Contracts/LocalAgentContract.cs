@@ -38,6 +38,8 @@ public static class LocalAgentContract
     public const string AccountMfaChallengePath = "/v1/account/mfa/challenge";
     public const string AccountMfaDisablePath = "/v1/account/mfa/disable";
     public const string AccountMfaRecoveryRegeneratePath = "/v1/account/mfa/recovery/regenerate";
+    public const string AccountPrivacyListPath = "/v1/account/privacy/requests/list";
+    public const string AccountPrivacyCreatePath = "/v1/account/privacy/requests/create";
     public const string SoftwareCatalogPath = "/v1/software/catalog";
     public const string SoftwareInstallPath = "/v1/software/install";
     public const string SoftwareUpdatePath = "/v1/software/update";
@@ -67,6 +69,8 @@ public static class LocalAgentContract
     public const int AccountPasswordChangeContractVersion = 1;
     public const string AccountMfaCapabilityId = "bke.account-mfa";
     public const int AccountMfaContractVersion = 1;
+    public const string AccountPrivacyCapabilityId = "bke.account-privacy";
+    public const int AccountPrivacyContractVersion = 1;
     public const string SoftwareCatalogCapabilityId = "bke.software-catalog";
     public const int SoftwareCatalogContractVersion = 1;
     public const string SoftwareInstallCapabilityId = "bke.software-install";
