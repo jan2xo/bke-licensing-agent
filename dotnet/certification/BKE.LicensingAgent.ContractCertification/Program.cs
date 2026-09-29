@@ -174,10 +174,10 @@ foreach (var endpoint in new[]
 }
 Require(
     accountMfaRemoteSource.Contains(
-        "new AuthenticationHeaderValue("Bearer", accessToken)",
+        "new AuthenticationHeaderValue(\"Bearer\", accessToken)",
         StringComparison.Ordinal) &&
     accountMfaRemoteSource.Contains(
-        ""x-bke-account-session-version"",
+        "\"x-bke-account-session-version\"",
         StringComparison.Ordinal),
     "Agent account MFA remote lost bearer/protocol mediation.");
 Require(
