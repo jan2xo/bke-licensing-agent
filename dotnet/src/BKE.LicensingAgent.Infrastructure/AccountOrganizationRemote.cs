@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using BKE.LicensingAgent.Application;
 using BKE.LicensingAgent.Contracts;
@@ -12,6 +13,8 @@ public sealed class AccountOrganizationRemote :
 {
     private const string Endpoint =
         "/api/agent-sessions/account/organization";
+    private const string CreateEndpoint =
+        "/api/agent-sessions/account/organization/create";
 
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
@@ -221,6 +224,160 @@ public sealed class AccountOrganizationRemote :
             Members: members,
             Invitations: invitations);
     }
+
+    public async Task<RemoteAccountOrganizationCreateResult> CreateAsync(
+        string accessToken,
+        string displayName,
+        string legalName,
+        string billingEmail,
+        string? registrationNumber,
+        string? taxId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192 ||
+            !ValidBounded(displayName, 2, 120) ||
+            !ValidBounded(legalName, 2, 180) ||
+            !ValidBounded(billingEmail, 3, 320) ||
+            (registrationNumber is not null &&
+                !ValidOptionalBounded(registrationNumber, 80)) ||
+            (taxId is not null &&
+                !ValidOptionalBounded(taxId, 80)))
+        {
+            return new RemoteAccountOrganizationCreateResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_platformBaseUri, CreateEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new
+            {
+                display_name = displayName,
+                legal_name = legalName,
+                billing_email = billingEmail,
+                registration_number = registrationNumber,
+                tax_id = taxId,
+            }),
+            Encoding.UTF8,
+            "application/json");
+
+        // Organization creation is deliberately single-attempt.
+        // Replaying an ambiguous POST can create a duplicate organization.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization creation authority redirected.");
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new RemoteAccountOrganizationCreateResult(
+                "organization_unavailable",
+                ErrorCode: "ORGANIZATION_CREATE_UNAVAILABLE",
+                Retryable: true);
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_CREATE_UNAVAILABLE";
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization creation authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "EMAIL_NOT_VERIFIED" => "email_not_verified",
+                "LEGAL_REACCEPTANCE_REQUIRED" =>
+                    "legal_reacceptance_required",
+                "RATE_LIMITED" => "rate_limited",
+                "LEGAL_DOCUMENTS_UNAVAILABLE" =>
+                    "legal_documents_unavailable",
+                _ => "organization_unavailable",
+            };
+            return new RemoteAccountOrganizationCreateResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        if (RequiredString(root, "status") != "created" ||
+            !RequiredBoolean(root, "switch_required"))
+        {
+            throw new InvalidDataException(
+                "Organization creation response drifted.");
+        }
+        if (root.TryGetProperty("account_id", out _) ||
+            root.TryGetProperty("user_id", out _) ||
+            root.TryGetProperty("owner_id", out _))
+        {
+            throw new InvalidDataException(
+                "Organization creation response exposed authority identifiers.");
+        }
+
+        var account = RequiredObject(root, "account");
+        if (RequiredString(account, "type") != "ORGANIZATION" ||
+            account.TryGetProperty("id", out _) ||
+            account.TryGetProperty("account_id", out _) ||
+            account.TryGetProperty("owner_id", out _))
+        {
+            throw new InvalidDataException(
+                "Organization creation account response drifted.");
+        }
+
+        return new RemoteAccountOrganizationCreateResult(
+            "created",
+            DisplayName:
+                RequiredBoundedString(account, "display_name", 120),
+            SwitchRequired: true);
+    }
+
+    private static bool ValidBounded(
+        string? value,
+        int minimum,
+        int maximum) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Trim().Length >= minimum &&
+        value.Trim().Length <= maximum &&
+        value.All(character => character >= 32);
+
+    private static bool ValidOptionalBounded(
+        string value,
+        int maximum) =>
+        value.Trim().Length <= maximum &&
+        value.All(character => character >= 32);
 
     private static IReadOnlyList<AccountOrganizationMember> RequiredMembers(
         JsonElement root,
