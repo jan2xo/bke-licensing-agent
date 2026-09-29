@@ -97,10 +97,10 @@ static class AccountOrganizationCertification
                 "/api/agent-sessions/account/organization",
                 StringComparison.Ordinal) &&
             remote.Contains(
-                "new AuthenticationHeaderValue("Bearer", accessToken)",
+                "new AuthenticationHeaderValue(\"Bearer\", accessToken)",
                 StringComparison.Ordinal) &&
             remote.Contains(
-                ""x-bke-account-session-version"",
+                "\"x-bke-account-session-version\"",
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "AllowAutoRedirect = false",
