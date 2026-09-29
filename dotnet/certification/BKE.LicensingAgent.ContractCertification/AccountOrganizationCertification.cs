@@ -20,7 +20,9 @@ static class AccountOrganizationCertification
                 "bke.account-organization" &&
             LocalAgentContract.AccountOrganizationContractVersion == 1 &&
             LocalAgentContract.AccountOrganizationOverviewPath ==
-                "/v1/account/organization",
+                "/v1/account/organization" &&
+            LocalAgentContract.AccountOrganizationCreatePath ==
+                "/v1/account/organization/create",
             "account organization contract drifted");
 
         Require(
@@ -29,10 +31,24 @@ static class AccountOrganizationCertification
                 .Select(property => property.Name)
                 .SequenceEqual(["CorrelationId"]),
             "account organization request widened");
+        Require(
+            typeof(AccountOrganizationCreateRequest)
+                .GetProperties()
+                .Select(property => property.Name)
+                .SequenceEqual([
+                    "CorrelationId",
+                    "DisplayName",
+                    "LegalName",
+                    "BillingEmail",
+                    "RegistrationNumber",
+                    "TaxId"
+                ]),
+            "account organization create request drifted");
 
         foreach (var type in new[]
         {
             typeof(AccountOrganizationOverviewResponse),
+            typeof(AccountOrganizationCreateResponse),
             typeof(AccountOrganizationAccount),
             typeof(AccountOrganizationMember),
             typeof(AccountOrganizationInvitation),
@@ -89,6 +105,9 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             host.Contains(
                 "AddSingleton<IAccountOrganizationService>",
+                StringComparison.Ordinal) &&
+            host.Contains(
+                "app.MapPost(LocalAgentContract.AccountOrganizationCreatePath",
                 StringComparison.Ordinal),
             "Agent organization Host wiring drifted");
 
@@ -104,6 +123,15 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "AllowAutoRedirect = false",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "/api/agent-sessions/account/organization/create",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "single-attempt",
+                StringComparison.Ordinal) &&
+            service.Contains(
+                "\"OUTCOME_UNKNOWN\"",
                 StringComparison.Ordinal),
             "Agent organization bearer/protocol/redirect mediation drifted");
 
@@ -189,6 +217,36 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal),
             "Agent organization response leaked cloud/session account identifiers");
 
+        var createResult = await service.CreateAsync(
+            new AccountOrganizationCreateRequest(
+                "organization-create-cert",
+                "Created Organization",
+                "Created Organization Legal",
+                "billing-created@example.test",
+                "REG-CREATE",
+                "TAX-CREATE"),
+            CancellationToken.None);
+        Require(
+            createResult.Status == "CREATED" &&
+            createResult.DisplayName == "Created Organization" &&
+            createResult.SwitchRequired &&
+            remote.CreateCalls == 1 &&
+            remote.LastAccessToken == "organization-access-secret",
+            "Agent organization creation did not use session custody correctly");
+        var createWire =
+            System.Text.Json.JsonSerializer.Serialize(createResult);
+        Require(
+            !createWire.Contains(
+                "organization-access-secret",
+                StringComparison.Ordinal) &&
+            !createWire.Contains(
+                "organization-refresh-secret",
+                StringComparison.Ordinal) &&
+            !createWire.Contains(
+                "org-account",
+                StringComparison.Ordinal),
+            "Agent organization create response leaked session/account identifiers");
+
         var personal = new AccountOrganizationService(
             new OrganizationAuthenticatedSessionService(account),
             OrganizationStore.Active(account),
@@ -236,6 +294,28 @@ static class AccountOrganizationCertification
             outageResult.Status == "FAILED" &&
             outageStore.State is ActiveAccountSessionState,
             "read-only organization failure destroyed a valid Agent session");
+
+        var createUnknownStore = OrganizationStore.Active(account);
+        var createUnknown = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            createUnknownStore,
+            new ThrowingOrganizationRemote(
+                new HttpRequestException(
+                    "certified organization create ambiguity")));
+        var createUnknownResult = await createUnknown.CreateAsync(
+            new AccountOrganizationCreateRequest(
+                "organization-create-unknown-cert",
+                "Unknown Organization",
+                "Unknown Organization Legal",
+                "unknown@example.test",
+                null,
+                null),
+            CancellationToken.None);
+        Require(
+            createUnknownResult.Status == "OUTCOME_UNKNOWN" &&
+            createUnknownStore.State is ActiveAccountSessionState &&
+            createUnknownResult.Error?.Retryable == false,
+            "Agent organization create ambiguity was replayable or destroyed session custody");
 
         var signedOutRemote = new FakeOrganizationRemote(ready);
         var signedOut = new AccountOrganizationService(
@@ -334,6 +414,43 @@ static class AccountOrganizationCertification
             Require(
                 result.Status == "not_organization",
                 "Agent organization remote lost personal-account no-op response");
+        }
+
+        var createHandler = new OrganizationCreateTransportHandler(
+            HttpStatusCode.Created,
+            """
+            {
+              "status":"created",
+              "switch_required":true,
+              "account":{
+                "type":"ORGANIZATION",
+                "display_name":"Created Organization"
+              }
+            }
+            """);
+        using (var client = new HttpClient(createHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.CreateAsync(
+                token,
+                "Created Organization",
+                "Created Organization Legal",
+                "billing-created@example.test",
+                "REG-CREATE",
+                "TAX-CREATE",
+                CancellationToken.None);
+            Require(
+                result.Status == "created" &&
+                result.DisplayName == "Created Organization" &&
+                result.SwitchRequired &&
+                createHandler.RequestCount == 1 &&
+                createHandler.SawBearer &&
+                createHandler.SawProtocol &&
+                createHandler.SawPost &&
+                createHandler.BodyExcludedAuthorityIds,
+                "Agent organization create transport drifted");
         }
 
         var redirect = new OrganizationTransportHandler(
@@ -473,9 +590,12 @@ sealed class OrganizationSignedOutSessionService : IAccountSessionService
 }
 
 sealed class FakeOrganizationRemote(
-    RemoteAccountOrganizationResult result) : IAccountOrganizationRemote
+    RemoteAccountOrganizationResult result,
+    RemoteAccountOrganizationCreateResult? createResult = null) :
+    IAccountOrganizationRemote
 {
     public int Calls { get; private set; }
+    public int CreateCalls { get; private set; }
     public string? LastAccessToken { get; private set; }
 
     public Task<RemoteAccountOrganizationResult> GetAsync(
@@ -487,6 +607,26 @@ sealed class FakeOrganizationRemote(
         LastAccessToken = accessToken;
         return Task.FromResult(result);
     }
+
+    public Task<RemoteAccountOrganizationCreateResult> CreateAsync(
+        string accessToken,
+        string displayName,
+        string legalName,
+        string billingEmail,
+        string? registrationNumber,
+        string? taxId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CreateCalls++;
+        LastAccessToken = accessToken;
+        return Task.FromResult(
+            createResult ??
+            new RemoteAccountOrganizationCreateResult(
+                "created",
+                displayName,
+                true));
+    }
 }
 
 sealed class ThrowingOrganizationRemote(
@@ -496,6 +636,16 @@ sealed class ThrowingOrganizationRemote(
         string accessToken,
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationResult>(error);
+
+    public Task<RemoteAccountOrganizationCreateResult> CreateAsync(
+        string accessToken,
+        string displayName,
+        string legalName,
+        string billingEmail,
+        string? registrationNumber,
+        string? taxId,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationCreateResult>(error);
 }
 
 sealed class OrganizationTransportHandler(
@@ -544,5 +694,72 @@ sealed class OrganizationTransportHandler(
                 AccountSessionRemote.ProtocolVersion);
         }
         return Task.FromResult(response);
+    }
+}
+
+
+sealed class OrganizationCreateTransportHandler(
+    HttpStatusCode statusCode,
+    string json) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPost { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPost =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/create";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        BodyExcludedAuthorityIds =
+            body.Contains(
+                "\"display_name\":\"Created Organization\"",
+                StringComparison.Ordinal) &&
+            !body.Contains(
+                "account_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "user_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "owner_id",
+                StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        if ((int)statusCode is not (>= 300 and <= 399))
+        {
+            response.Headers.TryAddWithoutValidation(
+                "x-bke-account-session-version",
+                AccountSessionRemote.ProtocolVersion);
+        }
+        return response;
     }
 }
