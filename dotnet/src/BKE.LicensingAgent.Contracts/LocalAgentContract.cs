@@ -41,6 +41,7 @@ public static class LocalAgentContract
     public const string AccountPrivacyListPath = "/v1/account/privacy/requests/list";
     public const string AccountPrivacyCreatePath = "/v1/account/privacy/requests/create";
     public const string AccountOrganizationOverviewPath = "/v1/account/organization";
+    public const string AccountOrganizationCreatePath = "/v1/account/organization/create";
     public const string SoftwareCatalogPath = "/v1/software/catalog";
     public const string SoftwareInstallPath = "/v1/software/install";
     public const string SoftwareUpdatePath = "/v1/software/update";
