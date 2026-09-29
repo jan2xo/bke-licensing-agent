@@ -129,6 +129,13 @@ builder.Services.AddSingleton<IAccountPrivacyService>(services => new AccountPri
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountPrivacyRemote>()));
+builder.Services.AddSingleton<AccountOrganizationRemote>();
+builder.Services.AddSingleton<IAccountOrganizationRemote>(services =>
+    services.GetRequiredService<AccountOrganizationRemote>());
+builder.Services.AddSingleton<IAccountOrganizationService>(services => new AccountOrganizationService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountOrganizationRemote>()));
 builder.Services.AddSingleton<StoreCatalogRemote>();
 builder.Services.AddSingleton<IStoreCatalogRemote>(services =>
     services.GetRequiredService<StoreCatalogRemote>());
@@ -667,6 +674,20 @@ app.MapPost(LocalAgentContract.AccountPrivacyCreatePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountOrganizationOverviewPath, async (
+    AccountOrganizationOverviewRequest request,
+    IAccountOrganizationService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountOrganizationInvalidRequest();
+    }
+
+    var response = await service.GetAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     ClaimCodeRedeemRequest request,
     IClaimCodeRedemptionService service,
@@ -1102,6 +1123,25 @@ static IResult AccountPrivacyCreateInvalidRequest() =>
         new AccountPrivacyError(
             "INVALID_REQUEST",
             "The account privacy create request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountOrganizationInvalidRequest() =>
+    Results.Json(new AccountOrganizationOverviewResponse(
+        LocalAgentContract.AccountOrganizationCapabilityId,
+        LocalAgentContract.AccountOrganizationContractVersion,
+        "INVALID_INPUT",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Array.Empty<AccountOrganizationMember>(),
+        Array.Empty<AccountOrganizationInvitation>(),
+        new AccountOrganizationError(
+            "INVALID_REQUEST",
+            "The account organization request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
