@@ -7,6 +7,15 @@ public interface IAccountOrganizationRemote
     Task<RemoteAccountOrganizationResult> GetAsync(
         string accessToken,
         CancellationToken cancellationToken);
+
+    Task<RemoteAccountOrganizationCreateResult> CreateAsync(
+        string accessToken,
+        string displayName,
+        string legalName,
+        string billingEmail,
+        string? registrationNumber,
+        string? taxId,
+        CancellationToken cancellationToken);
 }
 
 public interface IAccountOrganizationService
@@ -14,7 +23,18 @@ public interface IAccountOrganizationService
     Task<AccountOrganizationOverviewResponse> GetAsync(
         AccountOrganizationOverviewRequest request,
         CancellationToken cancellationToken);
+
+    Task<AccountOrganizationCreateResponse> CreateAsync(
+        AccountOrganizationCreateRequest request,
+        CancellationToken cancellationToken);
 }
+
+public sealed record RemoteAccountOrganizationCreateResult(
+    string Status,
+    string? DisplayName = null,
+    bool SwitchRequired = false,
+    string? ErrorCode = null,
+    bool Retryable = false);
 
 public sealed record RemoteAccountOrganizationResult(
     string Status,
@@ -124,6 +144,98 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
         }
     }
 
+    public async Task<AccountOrganizationCreateResponse> CreateAsync(
+        AccountOrganizationCreateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return CreateResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before creating an organization.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.CreateAsync(
+                active.AccessToken,
+                request.DisplayName,
+                request.LegalName,
+                request.BillingEmail,
+                request.RegistrationNumber,
+                request.TaxId,
+                cancellationToken);
+
+            if (result.Status == "created" &&
+                !string.IsNullOrWhiteSpace(result.DisplayName) &&
+                result.SwitchRequired)
+            {
+                return CreateResponse(
+                    "CREATED",
+                    result.DisplayName,
+                    true);
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "email_not_verified" => "EMAIL_NOT_VERIFIED",
+                "legal_reacceptance_required" =>
+                    "LEGAL_REACCEPTANCE_REQUIRED",
+                _ => "FAILED",
+            };
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The organization details were not accepted.",
+                "email_not_verified" =>
+                    "Verify your BKE email before creating an organization.",
+                "legal_reacceptance_required" =>
+                    "Accept the current BKE Legal documents before creating an organization.",
+                "rate_limited" =>
+                    "Organization creation is temporarily rate limited.",
+                _ =>
+                    "BKE organization creation is temporarily unavailable.",
+            };
+
+            return CreateResponse(
+                status,
+                error: Error(
+                    result.ErrorCode ?? "ORGANIZATION_CREATE_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return CreateResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "SESSION_INVALID",
+                    "The BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            return CreateResponse(
+                "OUTCOME_UNKNOWN",
+                error: Error(
+                    "ORGANIZATION_CREATE_OUTCOME_UNKNOWN",
+                    "The organization creation result could not be confirmed. Switch accounts and check the available BKE accounts before retrying.",
+                    false));
+        }
+    }
+
+
     private async Task<ActiveAccountSessionState?> ActiveAsync(
         string correlationId,
         CancellationToken cancellationToken)
@@ -163,6 +275,19 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             counts,
             members ?? Array.Empty<AccountOrganizationMember>(),
             invitations ?? Array.Empty<AccountOrganizationInvitation>(),
+            error);
+
+    private static AccountOrganizationCreateResponse CreateResponse(
+        string status,
+        string? displayName = null,
+        bool switchRequired = false,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
+            displayName,
+            switchRequired,
             error);
 
     private static AccountOrganizationError Error(
