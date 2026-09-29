@@ -5,6 +5,14 @@ namespace BKE.LicensingAgent.Contracts;
 public sealed record AccountOrganizationOverviewRequest(
     [property: JsonPropertyName("correlation_id")] string CorrelationId);
 
+public sealed record AccountOrganizationCreateRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("display_name")] string DisplayName,
+    [property: JsonPropertyName("legal_name")] string LegalName,
+    [property: JsonPropertyName("billing_email")] string BillingEmail,
+    [property: JsonPropertyName("registration_number"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RegistrationNumber,
+    [property: JsonPropertyName("tax_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TaxId);
+
 public sealed record AccountOrganizationAccount(
     [property: JsonPropertyName("display_name")] string DisplayName,
     [property: JsonPropertyName("lifecycle_state")] string LifecycleState,
@@ -48,6 +56,14 @@ public sealed record AccountOrganizationOverviewResponse(
     [property: JsonPropertyName("counts"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationCounts? Counts,
     [property: JsonPropertyName("members")] IReadOnlyList<AccountOrganizationMember> Members,
     [property: JsonPropertyName("invitations")] IReadOnlyList<AccountOrganizationInvitation> Invitations,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
+public sealed record AccountOrganizationCreateResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("display_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DisplayName,
+    [property: JsonPropertyName("switch_required")] bool SwitchRequired,
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
 
 public sealed record AccountOrganizationError(
