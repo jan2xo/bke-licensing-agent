@@ -57,7 +57,8 @@ public sealed record AccountOrganizationCounts(
 public sealed record AccountOrganizationMember(
     [property: JsonPropertyName("email")] string Email,
     [property: JsonPropertyName("name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name,
-    [property: JsonPropertyName("role")] string Role);
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("management_handle")] string ManagementHandle);
 
 public sealed record AccountOrganizationInvitation(
     [property: JsonPropertyName("email")] string Email,
@@ -90,6 +91,18 @@ public sealed record AccountOrganizationCreateResponse(
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
 
 public sealed record AccountOrganizationProfileUpdateResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
+public sealed record AccountOrganizationMemberManageRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("management_handle")] string ManagementHandle,
+    [property: JsonPropertyName("role"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role);
+
+public sealed record AccountOrganizationMemberManageResponse(
     [property: JsonPropertyName("capability_id")] string CapabilityId,
     [property: JsonPropertyName("contract_version")] int ContractVersion,
     [property: JsonPropertyName("status")] string Status,
