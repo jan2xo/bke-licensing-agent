@@ -129,6 +129,13 @@ builder.Services.AddSingleton<IAccountPrivacyService>(services => new AccountPri
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountPrivacyRemote>()));
+builder.Services.AddSingleton<AccountPurchasesRemote>();
+builder.Services.AddSingleton<IAccountPurchasesRemote>(services =>
+    services.GetRequiredService<AccountPurchasesRemote>());
+builder.Services.AddSingleton<IAccountPurchasesService>(services => new AccountPurchasesService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountPurchasesRemote>()));
 builder.Services.AddSingleton<AccountOrganizationRemote>();
 builder.Services.AddSingleton<IAccountOrganizationRemote>(services =>
     services.GetRequiredService<AccountOrganizationRemote>());
@@ -671,6 +678,20 @@ app.MapPost(LocalAgentContract.AccountPrivacyCreatePath, async (
     }
 
     var response = await service.CreateAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountPurchasesPath, async (
+    AccountPurchasesRequest request,
+    IAccountPurchasesService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountPurchasesInvalidRequest();
+    }
+
+    var response = await service.GetAsync(request, cancellationToken);
     return Results.Json(response, statusCode: 200);
 });
 
@@ -1355,6 +1376,22 @@ static IResult AccountPrivacyCreateInvalidRequest() =>
         new AccountPrivacyError(
             "INVALID_REQUEST",
             "The account privacy create request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountPurchasesInvalidRequest() =>
+    Results.Json(new AccountPurchasesResponse(
+        LocalAgentContract.AccountPurchasesCapabilityId,
+        LocalAgentContract.AccountPurchasesContractVersion,
+        "INVALID_INPUT",
+        null,
+        null,
+        Array.Empty<AccountPurchasesLicense>(),
+        Array.Empty<AccountPurchasesSubscription>(),
+        Array.Empty<AccountPurchasesOrder>(),
+        new AccountPurchasesError(
+            "INVALID_REQUEST",
+            "The account purchases request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
