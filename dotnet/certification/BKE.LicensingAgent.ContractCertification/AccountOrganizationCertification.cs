@@ -539,6 +539,75 @@ static class AccountOrganizationCertification
             lastOwnerStore.State is ActiveAccountSessionState,
             "Agent member management weakened last-owner protection or destroyed valid session custody");
 
+
+        var leaveStore = OrganizationStore.Active(account);
+        var leaveRemote = new FakeOrganizationRemote(
+            ready,
+            leaveResult:
+                new RemoteAccountOrganizationLeaveResult(
+                    "left",
+                    ReauthenticationRequired: true));
+        var leave = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            leaveStore,
+            leaveRemote);
+        var leaveResult = await leave.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-leave-cert"),
+            CancellationToken.None);
+        Require(
+            leaveResult.Status == "LEFT" &&
+            leaveResult.ReauthenticationRequired &&
+            leaveResult.Error is null &&
+            leaveRemote.LeaveCalls == 1 &&
+            leaveRemote.LastAccessToken ==
+                "organization-access-secret" &&
+            leaveStore.State is null,
+            "Agent organization leave did not clear selected-account session custody");
+
+        var ownerLeaveStore = OrganizationStore.Active(account);
+        var ownerLeave = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            ownerLeaveStore,
+            new FakeOrganizationRemote(
+                ready,
+                leaveResult:
+                    new RemoteAccountOrganizationLeaveResult(
+                        "owner_cannot_leave",
+                        ErrorCode: "OWNER_CANNOT_LEAVE")));
+        var ownerLeaveResult = await ownerLeave.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-owner-leave-cert"),
+            CancellationToken.None);
+        Require(
+            ownerLeaveResult.Status == "OWNER_CANNOT_LEAVE" &&
+            !ownerLeaveResult.ReauthenticationRequired &&
+            ownerLeaveResult.Error?.Code ==
+                "OWNER_CANNOT_LEAVE" &&
+            ownerLeaveStore.State is ActiveAccountSessionState,
+            "Agent organization owner-leave denial destroyed valid session custody");
+
+        var missingLeaveStore = OrganizationStore.Active(account);
+        var missingLeave = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            missingLeaveStore,
+            new FakeOrganizationRemote(
+                ready,
+                leaveResult:
+                    new RemoteAccountOrganizationLeaveResult(
+                        "member_not_found",
+                        ErrorCode: "MEMBER_NOT_FOUND")));
+        var missingLeaveResult = await missingLeave.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-missing-leave-cert"),
+            CancellationToken.None);
+        Require(
+            missingLeaveResult.Status == "MEMBER_NOT_FOUND" &&
+            missingLeaveResult.ReauthenticationRequired &&
+            missingLeaveResult.Error?.Code == "MEMBER_NOT_FOUND" &&
+            missingLeaveStore.State is null,
+            "Agent stale organization membership did not clear selected-account session custody");
+
         var personal = new AccountOrganizationService(
             new OrganizationAuthenticatedSessionService(account),
             OrganizationStore.Active(account),
@@ -766,6 +835,25 @@ static class AccountOrganizationCertification
             memberManageUnknownStore.State is ActiveAccountSessionState,
             "Agent member-management ambiguity became replayable or destroyed session custody");
 
+
+        var leaveUnknownStore = OrganizationStore.Active(account);
+        var leaveUnknown = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            leaveUnknownStore,
+            new ThrowingOrganizationRemote(
+                new HttpRequestException(
+                    "certified organization leave ambiguity")));
+        var leaveUnknownResult = await leaveUnknown.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-leave-unknown-cert"),
+            CancellationToken.None);
+        Require(
+            leaveUnknownResult.Status == "OUTCOME_UNKNOWN" &&
+            leaveUnknownResult.ReauthenticationRequired &&
+            leaveUnknownResult.Error?.Retryable == false &&
+            leaveUnknownStore.State is null,
+            "Agent organization leave ambiguity remained replayable or retained unsafe selected-account custody");
+
         var signedOutRemote = new FakeOrganizationRemote(ready);
         var signedOut = new AccountOrganizationService(
             new OrganizationSignedOutSessionService(),
@@ -833,6 +921,17 @@ static class AccountOrganizationCertification
             signedOutMemberManage.Status == "AUTH_REQUIRED" &&
             signedOutRemote.MemberManageCalls == 0,
             "Agent organization member authority was called without session custody");
+
+
+        var signedOutLeave = await signedOut.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-leave-auth-cert"),
+            CancellationToken.None);
+        Require(
+            signedOutLeave.Status == "AUTH_REQUIRED" &&
+            signedOutLeave.ReauthenticationRequired &&
+            signedOutRemote.LeaveCalls == 0,
+            "Agent organization leave authority was called without session custody");
     }
 
     private static async Task CertifyRemoteTransportAsync()
