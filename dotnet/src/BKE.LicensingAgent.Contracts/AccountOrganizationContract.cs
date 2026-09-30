@@ -64,7 +64,8 @@ public sealed record AccountOrganizationInvitation(
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("expires_at")] string ExpiresAt,
-    [property: JsonPropertyName("created_at")] string CreatedAt);
+    [property: JsonPropertyName("created_at")] string CreatedAt,
+    [property: JsonPropertyName("management_handle")] string ManagementHandle);
 
 public sealed record AccountOrganizationOverviewResponse(
     [property: JsonPropertyName("capability_id")] string CapabilityId,
@@ -92,6 +93,19 @@ public sealed record AccountOrganizationProfileUpdateResponse(
     [property: JsonPropertyName("capability_id")] string CapabilityId,
     [property: JsonPropertyName("contract_version")] int ContractVersion,
     [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
+public sealed record AccountOrganizationInvitationManageRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("management_handle")] string ManagementHandle);
+
+public sealed record AccountOrganizationInvitationManageResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("invitation"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationInvitationIssued? Invitation,
+    [property: JsonPropertyName("invitation_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InvitationCode,
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
 
 public sealed record AccountOrganizationInvitationCreateResponse(

@@ -33,6 +33,12 @@ public interface IAccountOrganizationRemote
         string email,
         string role,
         CancellationToken cancellationToken);
+
+    Task<RemoteAccountOrganizationInvitationManageResult> ManageInvitationAsync(
+        string accessToken,
+        string action,
+        string managementHandle,
+        CancellationToken cancellationToken);
 }
 
 public interface IAccountOrganizationService
@@ -52,6 +58,10 @@ public interface IAccountOrganizationService
     Task<AccountOrganizationInvitationCreateResponse> CreateInvitationAsync(
         AccountOrganizationInvitationCreateRequest request,
         CancellationToken cancellationToken);
+
+    Task<AccountOrganizationInvitationManageResponse> ManageInvitationAsync(
+        AccountOrganizationInvitationManageRequest request,
+        CancellationToken cancellationToken);
 }
 
 public sealed record RemoteAccountOrganizationCreateResult(
@@ -67,6 +77,13 @@ public sealed record RemoteAccountOrganizationProfileUpdateResult(
     bool Retryable = false);
 
 public sealed record RemoteAccountOrganizationInvitationCreateResult(
+    string Status,
+    AccountOrganizationInvitationIssued? Invitation = null,
+    string? InvitationCode = null,
+    string? ErrorCode = null,
+    bool Retryable = false);
+
+public sealed record RemoteAccountOrganizationInvitationManageResult(
     string Status,
     AccountOrganizationInvitationIssued? Invitation = null,
     string? InvitationCode = null,
@@ -456,6 +473,114 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
     }
 
 
+    public async Task<AccountOrganizationInvitationManageResponse> ManageInvitationAsync(
+        AccountOrganizationInvitationManageRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return InvitationManageResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before managing organization invitations.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.ManageInvitationAsync(
+                active.AccessToken,
+                request.Action,
+                request.ManagementHandle,
+                cancellationToken);
+
+            if (result.Status == "resent" &&
+                result.Invitation is not null &&
+                !string.IsNullOrWhiteSpace(result.InvitationCode))
+            {
+                return InvitationManageResponse(
+                    "RESENT",
+                    result.Invitation,
+                    result.InvitationCode);
+            }
+
+            if (result.Status == "revoked" &&
+                result.Invitation is not null &&
+                result.InvitationCode is null)
+            {
+                return InvitationManageResponse(
+                    "REVOKED",
+                    result.Invitation);
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "not_organization" => "NOT_ORGANIZATION",
+                "account_forbidden" => "ACCOUNT_FORBIDDEN",
+                "invitation_not_found" => "INVITATION_NOT_FOUND",
+                "invitation_not_pending" => "INVITATION_NOT_PENDING",
+                "invitation_expired" => "INVITATION_EXPIRED",
+                _ => "FAILED",
+            };
+
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The organization invitation management request was not accepted.",
+                "not_organization" =>
+                    "The selected BKE account is not an Organization account.",
+                "account_forbidden" =>
+                    "The selected BKE account role cannot manage organization invitations.",
+                "invitation_not_found" =>
+                    "The selected invitation is no longer available. Refresh organization details.",
+                "invitation_not_pending" =>
+                    "The selected invitation is no longer pending. Refresh organization details.",
+                "invitation_expired" =>
+                    "The selected invitation has expired. Refresh organization details.",
+                "rate_limited" =>
+                    "Organization invitation management is temporarily rate limited.",
+                _ =>
+                    "BKE organization invitation management is temporarily unavailable.",
+            };
+
+            return InvitationManageResponse(
+                status,
+                error: Error(
+                    result.ErrorCode ??
+                        "ORGANIZATION_INVITATION_MANAGEMENT_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return InvitationManageResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "SESSION_INVALID",
+                    "The BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            return InvitationManageResponse(
+                "OUTCOME_UNKNOWN",
+                error: Error(
+                    "ORGANIZATION_INVITATION_MANAGEMENT_OUTCOME_UNKNOWN",
+                    "The invitation management result could not be confirmed. Refresh organization details before deciding whether to resend or revoke again.",
+                    false));
+        }
+    }
+
+
     private async Task<ActiveAccountSessionState?> ActiveAsync(
         string correlationId,
         CancellationToken cancellationToken)
@@ -520,6 +645,19 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             error);
 
     private static AccountOrganizationInvitationCreateResponse InvitationCreateResponse(
+        string status,
+        AccountOrganizationInvitationIssued? invitation = null,
+        string? invitationCode = null,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
+            invitation,
+            invitationCode,
+            error);
+
+    private static AccountOrganizationInvitationManageResponse InvitationManageResponse(
         string status,
         AccountOrganizationInvitationIssued? invitation = null,
         string? invitationCode = null,

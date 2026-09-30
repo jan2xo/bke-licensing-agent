@@ -19,6 +19,8 @@ public sealed class AccountOrganizationRemote :
         "/api/agent-sessions/account/organization/profile";
     private const string InvitationCreateEndpoint =
         "/api/agent-sessions/account/organization/invitations/create";
+    private const string InvitationManageEndpoint =
+        "/api/agent-sessions/account/organization/invitations/manage";
 
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
@@ -702,6 +704,187 @@ public sealed class AccountOrganizationRemote :
             invitationCode);
     }
 
+    public async Task<RemoteAccountOrganizationInvitationManageResult>
+        ManageInvitationAsync(
+            string accessToken,
+            string action,
+            string managementHandle,
+            CancellationToken cancellationToken)
+    {
+        var actionValue = action switch
+        {
+            "RESEND" => "resend",
+            "REVOKE" => "revoke",
+            _ => null,
+        };
+        var handleValid =
+            !string.IsNullOrWhiteSpace(managementHandle) &&
+            System.Text.RegularExpressions.Regex.IsMatch(
+                managementHandle,
+                "^bke-org-invite-v1_[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192 ||
+            actionValue is null ||
+            !handleValid)
+        {
+            return new RemoteAccountOrganizationInvitationManageResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_platformBaseUri, InvitationManageEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new
+            {
+                action = actionValue,
+                management_handle = managementHandle,
+            }),
+            Encoding.UTF8,
+            "application/json");
+
+        // Resend/revoke are deliberately single-attempt. A transport
+        // failure after Digital Solutions commits either mutation is
+        // ambiguous, and automatic replay can rotate or repeat state.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization invitation management authority redirected.");
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_INVITATION_MANAGEMENT_UNAVAILABLE";
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization invitation management authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "ACCOUNT_NOT_ORGANIZATION" => "not_organization",
+                "ACCOUNT_ROLE_FORBIDDEN" => "account_forbidden",
+                "INVITATION_NOT_FOUND" => "invitation_not_found",
+                "INVITATION_NOT_PENDING" => "invitation_not_pending",
+                "INVITATION_EXPIRED" => "invitation_expired",
+                "RATE_LIMITED" => "rate_limited",
+                _ => "management_unavailable",
+            };
+
+            return new RemoteAccountOrganizationInvitationManageResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        var statusValue = RequiredString(root, "status");
+        if (statusValue is not ("resent" or "revoked") ||
+            !root.TryGetProperty("invitation", out var invitation) ||
+            invitation.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException(
+                "Organization invitation management response drifted.");
+        }
+
+        var invitedEmail = RequiredBoundedString(
+            invitation,
+            "email",
+            320);
+        if (!System.Net.Mail.MailAddress.TryCreate(
+                invitedEmail,
+                out var parsedInvitedEmail) ||
+            !string.Equals(
+                parsedInvitedEmail.Address,
+                invitedEmail,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "Organization invitation management email drifted.");
+        }
+
+        var issued = new AccountOrganizationInvitationIssued(
+            invitedEmail,
+            RequiredRole(invitation, "role"),
+            RequiredUppercaseToken(
+                invitation,
+                "status",
+                32),
+            RequiredTimestamp(invitation, "expires_at"),
+            RequiredTimestamp(invitation, "created_at"));
+
+        var invitationCode = OptionalString(
+            root,
+            "invitation_code");
+        if (statusValue == "resent")
+        {
+            if (string.IsNullOrWhiteSpace(invitationCode) ||
+                invitationCode.Length is < 8 or > 1024 ||
+                invitationCode.Any(character => character < 32))
+            {
+                throw new InvalidDataException(
+                    "Organization invitation resend code drifted.");
+            }
+        }
+        else if (invitationCode is not null)
+        {
+            throw new InvalidDataException(
+                "Organization invitation revoke exposed a delivery secret.");
+        }
+
+        if (root.TryGetProperty("account_id", out _) ||
+            root.TryGetProperty("user_id", out _) ||
+            root.TryGetProperty("owner_id", out _) ||
+            root.TryGetProperty("invitation_id", out _) ||
+            root.TryGetProperty("token_hash", out _) ||
+            invitation.TryGetProperty("account_id", out _) ||
+            invitation.TryGetProperty("user_id", out _) ||
+            invitation.TryGetProperty("owner_id", out _) ||
+            invitation.TryGetProperty("id", out _) ||
+            invitation.TryGetProperty("token_hash", out _))
+        {
+            throw new InvalidDataException(
+                "Organization invitation management response exposed authority identifiers.");
+        }
+
+        return new RemoteAccountOrganizationInvitationManageResult(
+            statusValue,
+            issued,
+            invitationCode);
+    }
+
     private static bool ValidBounded(
         string? value,
         int minimum,
@@ -776,7 +959,10 @@ public sealed class AccountOrganizationRemote :
                     RequiredRole(item, "role"),
                     RequiredUppercaseToken(item, "status", 32),
                     RequiredTimestamp(item, "expires_at"),
-                    RequiredTimestamp(item, "created_at"));
+                    RequiredTimestamp(item, "created_at"),
+                    RequiredInvitationManagementHandle(
+                        item,
+                        "management_handle"));
             })
             .ToArray();
 
@@ -796,6 +982,22 @@ public sealed class AccountOrganizationRemote :
             value.ValueKind != JsonValueKind.Object)
         {
             throw new InvalidDataException($"Invalid {name}.");
+        }
+        return value;
+    }
+
+    private static string RequiredInvitationManagementHandle(
+        JsonElement root,
+        string name)
+    {
+        var value = RequiredString(root, name);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+            value,
+            "^bke-org-invite-v1_[0-9a-f]{64}$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException(
+                $"Invalid {name}.");
         }
         return value;
     }
