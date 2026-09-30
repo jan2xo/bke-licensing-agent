@@ -39,6 +39,13 @@ public interface IAccountOrganizationRemote
         string action,
         string managementHandle,
         CancellationToken cancellationToken);
+
+    Task<RemoteAccountOrganizationMemberManageResult> ManageMemberAsync(
+        string accessToken,
+        string action,
+        string managementHandle,
+        string? role,
+        CancellationToken cancellationToken);
 }
 
 public interface IAccountOrganizationService
@@ -61,6 +68,10 @@ public interface IAccountOrganizationService
 
     Task<AccountOrganizationInvitationManageResponse> ManageInvitationAsync(
         AccountOrganizationInvitationManageRequest request,
+        CancellationToken cancellationToken);
+
+    Task<AccountOrganizationMemberManageResponse> ManageMemberAsync(
+        AccountOrganizationMemberManageRequest request,
         CancellationToken cancellationToken);
 }
 
@@ -87,6 +98,11 @@ public sealed record RemoteAccountOrganizationInvitationManageResult(
     string Status,
     AccountOrganizationInvitationIssued? Invitation = null,
     string? InvitationCode = null,
+    string? ErrorCode = null,
+    bool Retryable = false);
+
+public sealed record RemoteAccountOrganizationMemberManageResult(
+    string Status,
     string? ErrorCode = null,
     bool Retryable = false);
 
@@ -581,6 +597,109 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
     }
 
 
+    public async Task<AccountOrganizationMemberManageResponse> ManageMemberAsync(
+        AccountOrganizationMemberManageRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return MemberManageResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before managing organization members.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.ManageMemberAsync(
+                active.AccessToken,
+                request.Action,
+                request.ManagementHandle,
+                request.Role,
+                cancellationToken);
+
+            if (result.Status == "updated")
+            {
+                return MemberManageResponse("UPDATED");
+            }
+
+            if (result.Status == "removed")
+            {
+                return MemberManageResponse("REMOVED");
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "not_organization" => "NOT_ORGANIZATION",
+                "account_forbidden" => "ACCOUNT_FORBIDDEN",
+                "member_not_found" => "MEMBER_NOT_FOUND",
+                "last_owner_required" => "LAST_OWNER_REQUIRED",
+                "closed_account" => "CLOSED_ACCOUNT",
+                "suspended_account" => "SUSPENDED_ACCOUNT",
+                _ => "FAILED",
+            };
+
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The organization member management request was not accepted.",
+                "not_organization" =>
+                    "The selected BKE account is not an Organization account.",
+                "account_forbidden" =>
+                    "The selected BKE account role cannot manage organization members.",
+                "member_not_found" =>
+                    "The selected member is no longer available. Refresh organization details.",
+                "last_owner_required" =>
+                    "The last Organization owner cannot be demoted or removed.",
+                "closed_account" =>
+                    "The selected Organization is closed.",
+                "suspended_account" =>
+                    "The selected Organization is suspended.",
+                "rate_limited" =>
+                    "Organization member management is temporarily rate limited.",
+                _ =>
+                    "BKE organization member management is temporarily unavailable.",
+            };
+
+            return MemberManageResponse(
+                status,
+                error: Error(
+                    result.ErrorCode ??
+                        "ORGANIZATION_MEMBER_MANAGEMENT_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return MemberManageResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "SESSION_INVALID",
+                    "The BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            return MemberManageResponse(
+                "OUTCOME_UNKNOWN",
+                error: Error(
+                    "ORGANIZATION_MEMBER_MANAGEMENT_OUTCOME_UNKNOWN",
+                    "The member management result could not be confirmed. Refresh organization details before changing or removing the member again.",
+                    false));
+        }
+    }
+
+
     private async Task<ActiveAccountSessionState?> ActiveAsync(
         string correlationId,
         CancellationToken cancellationToken)
@@ -668,6 +787,15 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             status,
             invitation,
             invitationCode,
+            error);
+
+    private static AccountOrganizationMemberManageResponse MemberManageResponse(
+        string status,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
             error);
 
     private static AccountOrganizationError Error(
