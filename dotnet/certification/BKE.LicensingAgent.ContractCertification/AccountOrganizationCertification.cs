@@ -1310,7 +1310,8 @@ sealed class FakeOrganizationRemote(
     RemoteAccountOrganizationCreateResult? createResult = null,
     RemoteAccountOrganizationProfileUpdateResult? profileResult = null,
     RemoteAccountOrganizationInvitationCreateResult? invitationResult = null,
-    RemoteAccountOrganizationMemberManageResult? memberManageResult = null) :
+    RemoteAccountOrganizationMemberManageResult? memberManageResult = null,
+    RemoteAccountOrganizationLeaveResult? leaveResult = null) :
     IAccountOrganizationRemote
 {
     public int Calls { get; private set; }
@@ -1319,6 +1320,7 @@ sealed class FakeOrganizationRemote(
     public int InvitationCreateCalls { get; private set; }
     public int InvitationManageCalls { get; private set; }
     public int MemberManageCalls { get; private set; }
+    public int LeaveCalls { get; private set; }
     public string? LastAccessToken { get; private set; }
     public bool LastUpdateOrganizationProfile { get; private set; }
     public bool LastUpdateBillingProfile { get; private set; }
@@ -1454,6 +1456,20 @@ sealed class FakeOrganizationRemote(
             new RemoteAccountOrganizationMemberManageResult(
                 action == "REMOVE" ? "removed" : "updated"));
     }
+
+    public Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        LeaveCalls++;
+        LastAccessToken = accessToken;
+        return Task.FromResult(
+            leaveResult ??
+            new RemoteAccountOrganizationLeaveResult(
+                "left",
+                ReauthenticationRequired: true));
+    }
 }
 
 
@@ -1512,6 +1528,12 @@ sealed class ThrowingOrganizationRemote(
         string? role,
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationMemberManageResult>(
+            error);
+
+    public Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
+        string accessToken,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationLeaveResult>(
             error);
 }
 
