@@ -950,6 +950,7 @@ static class AccountOrganizationCertification
               },
               "permissions":{
                 "manage_members":true,
+                "leave_organization":false,
                 "view_billing":true,
                 "view_licenses":true
               },
@@ -995,6 +996,7 @@ static class AccountOrganizationCertification
             Require(
                 result.Status == "ready" &&
                 result.Account?.Role == "OWNER" &&
+                result.Permissions?.LeaveOrganization == false &&
                 result.Members?.Count == 1 &&
                 result.Members[0].ManagementHandle ==
                     "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
@@ -1266,6 +1268,63 @@ static class AccountOrganizationCertification
                 removeMemberHandler.BodyMatchedIntent &&
                 removeMemberHandler.BodyExcludedAuthorityIds,
                 "Agent member removal transport drifted");
+        }
+
+
+        var leaveHandler = new OrganizationLeaveTransportHandler(
+            HttpStatusCode.OK,
+            """{"status":"left","reauthentication_required":true}""");
+        using (var client = new HttpClient(leaveHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.LeaveAsync(
+                token,
+                CancellationToken.None);
+            Require(
+                result.Status == "left" &&
+                result.ReauthenticationRequired &&
+                leaveHandler.RequestCount == 1 &&
+                leaveHandler.SawBearer &&
+                leaveHandler.SawProtocol &&
+                leaveHandler.SawPost &&
+                leaveHandler.BodyWasEmptyObject &&
+                leaveHandler.BodyExcludedAuthorityIds,
+                "Agent organization leave transport widened self-only intent or lost session mediation");
+        }
+
+        var ownerLeaveHandler = new OrganizationLeaveTransportHandler(
+            HttpStatusCode.Conflict,
+            """{"error":"OWNER_CANNOT_LEAVE"}""");
+        using (var client = new HttpClient(ownerLeaveHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.LeaveAsync(
+                token,
+                CancellationToken.None);
+            Require(
+                result.Status == "owner_cannot_leave" &&
+                result.ErrorCode == "OWNER_CANNOT_LEAVE" &&
+                !result.ReauthenticationRequired,
+                "Agent organization leave lost Digital Solutions owner protection");
+        }
+
+        var driftedLeaveHandler = new OrganizationLeaveTransportHandler(
+            HttpStatusCode.OK,
+            """{"status":"left","reauthentication_required":true,"account_id":"forbidden"}""");
+        using (var client = new HttpClient(driftedLeaveHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.LeaveAsync(
+                    token,
+                    CancellationToken.None),
+                "Agent organization leave accepted authority identifiers in the success response");
         }
 
         var redirect = new OrganizationTransportHandler(
@@ -2065,6 +2124,66 @@ sealed class OrganizationMemberManageTransportHandler(
                 action == "remove"
                     ? """{"status":"removed"}"""
                     : """{"status":"updated"}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
+    }
+}
+
+
+sealed class OrganizationLeaveTransportHandler(
+    HttpStatusCode statusCode,
+    string json) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPost { get; private set; }
+    public bool BodyWasEmptyObject { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPost =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/leave";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        BodyWasEmptyObject = body.Trim() == "{}";
+        BodyExcludedAuthorityIds =
+            !body.Contains("account_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("user_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("member_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("membership_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("owner_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("management_handle", StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
                 Encoding.UTF8,
                 "application/json"),
         };
