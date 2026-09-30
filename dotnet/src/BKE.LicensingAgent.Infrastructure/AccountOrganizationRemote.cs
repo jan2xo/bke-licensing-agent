@@ -21,6 +21,8 @@ public sealed class AccountOrganizationRemote :
         "/api/agent-sessions/account/organization/invitations/create";
     private const string InvitationManageEndpoint =
         "/api/agent-sessions/account/organization/invitations/manage";
+    private const string MemberManageEndpoint =
+        "/api/agent-sessions/account/organization/members/manage";
 
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
@@ -885,6 +887,139 @@ public sealed class AccountOrganizationRemote :
             invitationCode);
     }
 
+    public async Task<RemoteAccountOrganizationMemberManageResult>
+        ManageMemberAsync(
+            string accessToken,
+            string action,
+            string managementHandle,
+            string? role,
+            CancellationToken cancellationToken)
+    {
+        var actionValue = action switch
+        {
+            "UPDATE_ROLE" => "update_role",
+            "REMOVE" => "remove",
+            _ => null,
+        };
+        var handleValid =
+            !string.IsNullOrWhiteSpace(managementHandle) &&
+            System.Text.RegularExpressions.Regex.IsMatch(
+                managementHandle,
+                "^bke-org-member-v1_[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        var roleValid =
+            action == "UPDATE_ROLE"
+                ? role is "OWNER" or "BILLING" or
+                    "LICENSE_MANAGER" or "MEMBER"
+                : role is null;
+
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192 ||
+            actionValue is null ||
+            !handleValid ||
+            !roleValid)
+        {
+            return new RemoteAccountOrganizationMemberManageResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["action"] = actionValue,
+            ["management_handle"] = managementHandle,
+        };
+        if (action == "UPDATE_ROLE")
+        {
+            payload["role"] = role;
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_platformBaseUri, MemberManageEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json");
+
+        // Member role/removal mutations are deliberately single-attempt.
+        // Transport ambiguity after Digital Solutions commits must never
+        // be converted into an automatic replay.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization member management authority redirected.");
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_MEMBER_MANAGEMENT_UNAVAILABLE";
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization member management authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "ACCOUNT_NOT_ORGANIZATION" => "not_organization",
+                "ACCOUNT_ROLE_FORBIDDEN" => "account_forbidden",
+                "MEMBER_NOT_FOUND" => "member_not_found",
+                "LAST_OWNER_REQUIRED" => "last_owner_required",
+                "CLOSED_ACCOUNT" => "closed_account",
+                "SUSPENDED_ACCOUNT" => "suspended_account",
+                "RATE_LIMITED" => "rate_limited",
+                _ => "management_unavailable",
+            };
+
+            return new RemoteAccountOrganizationMemberManageResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        var statusValue = RequiredString(root, "status");
+        if (statusValue is not ("updated" or "removed") ||
+            root.EnumerateObject().Any(
+                property => property.Name != "status"))
+        {
+            throw new InvalidDataException(
+                "Organization member management response drifted.");
+        }
+
+        return new RemoteAccountOrganizationMemberManageResult(
+            statusValue);
+    }
+
     private static bool ValidBounded(
         string? value,
         int minimum,
@@ -922,7 +1057,10 @@ public sealed class AccountOrganizationRemote :
                 return new AccountOrganizationMember(
                     RequiredBoundedString(item, "email", 320),
                     OptionalBoundedString(item, "name", 160),
-                    RequiredRole(item, "role"));
+                    RequiredRole(item, "role"),
+                    RequiredMemberManagementHandle(
+                        item,
+                        "management_handle"));
             })
             .ToArray();
 
@@ -982,6 +1120,22 @@ public sealed class AccountOrganizationRemote :
             value.ValueKind != JsonValueKind.Object)
         {
             throw new InvalidDataException($"Invalid {name}.");
+        }
+        return value;
+    }
+
+    private static string RequiredMemberManagementHandle(
+        JsonElement root,
+        string name)
+    {
+        var value = RequiredString(root, name);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+            value,
+            "^bke-org-member-v1_[0-9a-f]{64}$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException(
+                $"Invalid {name}.");
         }
         return value;
     }
