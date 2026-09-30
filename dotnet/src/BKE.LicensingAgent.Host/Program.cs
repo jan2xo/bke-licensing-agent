@@ -778,6 +778,24 @@ app.MapPost(LocalAgentContract.AccountOrganizationMemberManagePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountOrganizationOwnershipTransferPath, async (
+    AccountOrganizationOwnershipTransferRequest request,
+    IAccountOrganizationService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidOrganizationMemberManagementHandle(
+            request.ManagementHandle))
+    {
+        return AccountOrganizationOwnershipTransferInvalidRequest();
+    }
+
+    var response = await service.TransferOwnershipAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountOrganizationLeavePath, async (
     AccountOrganizationLeaveRequest request,
     IAccountOrganizationService service,
@@ -1395,6 +1413,18 @@ static IResult AccountOrganizationMemberManageInvalidRequest() =>
         new AccountOrganizationError(
             "INVALID_REQUEST",
             "The organization member management request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountOrganizationOwnershipTransferInvalidRequest() =>
+    Results.Json(new AccountOrganizationOwnershipTransferResponse(
+        LocalAgentContract.AccountOrganizationCapabilityId,
+        LocalAgentContract.AccountOrganizationContractVersion,
+        "INVALID_INPUT",
+        false,
+        new AccountOrganizationError(
+            "INVALID_REQUEST",
+            "The Organization ownership transfer request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
