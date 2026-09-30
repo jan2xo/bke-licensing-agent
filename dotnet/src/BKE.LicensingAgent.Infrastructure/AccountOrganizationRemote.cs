@@ -19,6 +19,8 @@ public sealed class AccountOrganizationRemote :
         "/api/agent-sessions/account/organization/profile";
     private const string InvitationCreateEndpoint =
         "/api/agent-sessions/account/organization/invitations/create";
+    private const string InvitationAcceptEndpoint =
+        "/api/agent-sessions/account/organization/invitations/accept";
     private const string InvitationManageEndpoint =
         "/api/agent-sessions/account/organization/invitations/manage";
     private const string MemberManageEndpoint =
@@ -715,6 +717,136 @@ public sealed class AccountOrganizationRemote :
                 createdAt),
             invitationCode);
     }
+
+    public async Task<RemoteAccountOrganizationInvitationAcceptResult>
+        AcceptInvitationAsync(
+            string accessToken,
+            string invitationCode,
+            CancellationToken cancellationToken)
+    {
+        var normalizedCode = invitationCode?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192 ||
+            normalizedCode.Length is < 20 or > 512 ||
+            normalizedCode.Any(character => character < 32))
+        {
+            return new RemoteAccountOrganizationInvitationAcceptResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_platformBaseUri, InvitationAcceptEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new
+            {
+                invitation_code = normalizedCode,
+            }),
+            Encoding.UTF8,
+            "application/json");
+
+        // Invitation acceptance is a one-time membership mutation.
+        // Never automatically replay after an ambiguous transport result.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization invitation acceptance authority redirected.");
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound &&
+            !response.Headers.Contains(
+                "x-bke-account-session-version"))
+        {
+            return new RemoteAccountOrganizationInvitationAcceptResult(
+                "acceptance_unavailable",
+                ErrorCode:
+                    "ORGANIZATION_INVITATION_ACCEPTANCE_UNAVAILABLE",
+                Retryable: true);
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_INVITATION_ACCEPTANCE_UNAVAILABLE";
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization invitation acceptance authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "INVITATION_NOT_FOUND" => "invitation_not_found",
+                "INVITATION_EMAIL_MISMATCH" =>
+                    "invitation_email_mismatch",
+                "INVITATION_EXPIRED" => "invitation_expired",
+                "INVITATION_NOT_PENDING" =>
+                    "invitation_not_pending",
+                "SUSPENDED_ACCOUNT" => "suspended_account",
+                "CLOSED_ACCOUNT" => "closed_account",
+                "MEMBER_ALREADY_EXISTS" => "conflict",
+                "RATE_LIMITED" => "rate_limited",
+                _ => "acceptance_unavailable",
+            };
+
+            return new RemoteAccountOrganizationInvitationAcceptResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        var statusValue = RequiredString(root, "status");
+        var role = RequiredRole(root, "role");
+        var switchRequired =
+            RequiredBoolean(root, "switch_required");
+
+        if (statusValue != "accepted" ||
+            !switchRequired ||
+            root.EnumerateObject().Any(
+                property =>
+                    property.Name != "status" &&
+                    property.Name != "role" &&
+                    property.Name != "switch_required"))
+        {
+            throw new InvalidDataException(
+                "Organization invitation acceptance response drifted.");
+        }
+
+        return new RemoteAccountOrganizationInvitationAcceptResult(
+            "accepted",
+            role,
+            SwitchRequired: true);
+    }
+
 
     public async Task<RemoteAccountOrganizationInvitationManageResult>
         ManageInvitationAsync(

@@ -44,6 +44,7 @@ public static class LocalAgentContract
     public const string AccountOrganizationCreatePath = "/v1/account/organization/create";
     public const string AccountOrganizationProfileUpdatePath = "/v1/account/organization/profile";
     public const string AccountOrganizationInvitationCreatePath = "/v1/account/organization/invitations/create";
+    public const string AccountOrganizationInvitationAcceptPath = "/v1/account/organization/invitations/accept";
     public const string AccountOrganizationInvitationManagePath = "/v1/account/organization/invitations/manage";
     public const string AccountOrganizationMemberManagePath = "/v1/account/organization/members/manage";
     public const string AccountOrganizationOwnershipTransferPath = "/v1/account/organization/ownership/transfer";

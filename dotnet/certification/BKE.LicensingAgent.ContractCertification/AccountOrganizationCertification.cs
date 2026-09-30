@@ -474,6 +474,60 @@ static class AccountOrganizationCertification
                 StringComparison.OrdinalIgnoreCase),
             "Agent organization invitation leaked session/authority identifiers or lost its one-time delivery secret");
 
+        var acceptanceResult = await service.AcceptInvitationAsync(
+            new AccountOrganizationInvitationAcceptRequest(
+                "organization-invitation-accept-cert",
+                "organization-invitation-code-recipient-cert"),
+            CancellationToken.None);
+        Require(
+            acceptanceResult.Status == "ACCEPTED" &&
+            acceptanceResult.Role == "MEMBER" &&
+            acceptanceResult.SwitchRequired &&
+            acceptanceResult.Error is null &&
+            remote.InvitationAcceptCalls == 1 &&
+            remote.LastAccessToken == "organization-access-secret" &&
+            remote.LastInvitationAcceptCode ==
+                "organization-invitation-code-recipient-cert",
+            "Agent invitation acceptance did not preserve durable session custody, transient code intent, or explicit account switching");
+        var acceptanceWire =
+            System.Text.Json.JsonSerializer.Serialize(
+                acceptanceResult);
+        Require(
+            !acceptanceWire.Contains(
+                "organization-invitation-code-recipient-cert",
+                StringComparison.Ordinal) &&
+            !acceptanceWire.Contains(
+                "organization-access-secret",
+                StringComparison.Ordinal) &&
+            !acceptanceWire.Contains(
+                "organization-refresh-secret",
+                StringComparison.Ordinal) &&
+            !acceptanceWire.Contains(
+                "org-account",
+                StringComparison.Ordinal),
+            "Agent invitation acceptance response leaked transient code, session secrets, or account authority");
+
+        var acceptanceUnknownStore =
+            OrganizationStore.Active(account);
+        var acceptanceUnknown =
+            new AccountOrganizationService(
+                new OrganizationAuthenticatedSessionService(account),
+                acceptanceUnknownStore,
+                new ThrowingOrganizationRemote(
+                    new HttpRequestException(
+                        "certified invitation acceptance ambiguity")));
+        var acceptanceUnknownResult =
+            await acceptanceUnknown.AcceptInvitationAsync(
+                new AccountOrganizationInvitationAcceptRequest(
+                    "organization-invitation-accept-unknown-cert",
+                    "organization-invitation-code-ambiguous-cert"),
+                CancellationToken.None);
+        Require(
+            acceptanceUnknownResult.Status == "OUTCOME_UNKNOWN" &&
+            acceptanceUnknownResult.Error?.Retryable == false &&
+            acceptanceUnknownStore.State is ActiveAccountSessionState,
+            "Ambiguous invitation acceptance became replayable or destroyed the still-valid selected account session");
+
         var resendResult = await service.ManageInvitationAsync(
             new AccountOrganizationInvitationManageRequest(
                 "organization-invitation-resend-cert",
@@ -1275,6 +1329,50 @@ static class AccountOrganizationCertification
                 "Agent organization invitation accepted a cloud invitation identifier");
         }
 
+        var invitationAcceptHandler =
+            new OrganizationInvitationAcceptTransportHandler(
+                HttpStatusCode.Created,
+                """{"status":"accepted","role":"LICENSE_MANAGER","switch_required":true}""");
+        using (var client = new HttpClient(invitationAcceptHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.AcceptInvitationAsync(
+                token,
+                "organization-invitation-code-recipient-cert",
+                CancellationToken.None);
+            Require(
+                result.Status == "accepted" &&
+                result.Role == "LICENSE_MANAGER" &&
+                result.SwitchRequired &&
+                invitationAcceptHandler.RequestCount == 1 &&
+                invitationAcceptHandler.SawBearer &&
+                invitationAcceptHandler.SawProtocol &&
+                invitationAcceptHandler.SawPost &&
+                invitationAcceptHandler.BodyMatchedIntent &&
+                invitationAcceptHandler.BodyExcludedAuthorityIds,
+                "Agent organization invitation acceptance transport widened recipient/destination authority or lost session mediation");
+        }
+
+        var driftedInvitationAcceptHandler =
+            new OrganizationInvitationAcceptTransportHandler(
+                HttpStatusCode.Created,
+                """{"status":"accepted","role":"MEMBER","switch_required":true,"account_id":"forbidden"}""");
+        using (var client = new HttpClient(
+            driftedInvitationAcceptHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.AcceptInvitationAsync(
+                    token,
+                    "organization-invitation-code-recipient-cert",
+                    CancellationToken.None),
+                "Agent invitation acceptance accepted authority identifiers in the success response");
+        }
+
         var manageResendHandler =
             new OrganizationInvitationManageTransportHandler(
                 "resend",
@@ -1630,6 +1728,7 @@ sealed class FakeOrganizationRemote(
     RemoteAccountOrganizationCreateResult? createResult = null,
     RemoteAccountOrganizationProfileUpdateResult? profileResult = null,
     RemoteAccountOrganizationInvitationCreateResult? invitationResult = null,
+    RemoteAccountOrganizationInvitationAcceptResult? invitationAcceptResult = null,
     RemoteAccountOrganizationMemberManageResult? memberManageResult = null,
     RemoteAccountOrganizationOwnershipTransferResult? ownershipTransferResult = null,
     RemoteAccountOrganizationLeaveResult? leaveResult = null) :
@@ -1639,6 +1738,7 @@ sealed class FakeOrganizationRemote(
     public int CreateCalls { get; private set; }
     public int ProfileUpdateCalls { get; private set; }
     public int InvitationCreateCalls { get; private set; }
+    public int InvitationAcceptCalls { get; private set; }
     public int InvitationManageCalls { get; private set; }
     public int MemberManageCalls { get; private set; }
     public int OwnershipTransferCalls { get; private set; }
@@ -1650,6 +1750,7 @@ sealed class FakeOrganizationRemote(
     public string? LastTaxId { get; private set; }
     public string? LastInvitationEmail { get; private set; }
     public string? LastInvitationRole { get; private set; }
+    public string? LastInvitationAcceptCode { get; private set; }
     public string? LastInvitationManageAction { get; private set; }
     public string? LastInvitationManagementHandle { get; private set; }
     public string? LastMemberManageAction { get; private set; }
@@ -1733,6 +1834,23 @@ sealed class FakeOrganizationRemote(
                     "2026-10-07T00:00:00.000Z",
                     "2026-09-30T00:00:00.000Z"),
                 "organization-invitation-code-cert"));
+    }
+
+    public Task<RemoteAccountOrganizationInvitationAcceptResult> AcceptInvitationAsync(
+        string accessToken,
+        string invitationCode,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        InvitationAcceptCalls++;
+        LastAccessToken = accessToken;
+        LastInvitationAcceptCode = invitationCode;
+        return Task.FromResult(
+            invitationAcceptResult ??
+            new RemoteAccountOrganizationInvitationAcceptResult(
+                "accepted",
+                "MEMBER",
+                SwitchRequired: true));
     }
 
     public Task<RemoteAccountOrganizationInvitationManageResult> ManageInvitationAsync(
@@ -1850,6 +1968,13 @@ sealed class ThrowingOrganizationRemote(
         string role,
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationInvitationCreateResult>(
+            error);
+
+    public Task<RemoteAccountOrganizationInvitationAcceptResult> AcceptInvitationAsync(
+        string accessToken,
+        string invitationCode,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationInvitationAcceptResult>(
             error);
 
     public Task<RemoteAccountOrganizationInvitationManageResult> ManageInvitationAsync(
@@ -2185,6 +2310,73 @@ sealed class OrganizationInvitationTransportHandler :
                   "invitation_code":"organization-invitation-code-cert"
                 }
                 """,
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
+    }
+}
+
+
+sealed class OrganizationInvitationAcceptTransportHandler(
+    HttpStatusCode statusCode,
+    string json) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPost { get; private set; }
+    public bool BodyMatchedIntent { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPost =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/invitations/accept";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        using var document =
+            System.Text.Json.JsonDocument.Parse(body);
+        var root = document.RootElement;
+        BodyMatchedIntent =
+            root.EnumerateObject().Count() == 1 &&
+            root.GetProperty("invitation_code").GetString() ==
+                "organization-invitation-code-recipient-cert";
+        BodyExcludedAuthorityIds =
+            !body.Contains("account_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("user_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("member_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("membership_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("owner_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("email", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("role", StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
                 Encoding.UTF8,
                 "application/json"),
         };

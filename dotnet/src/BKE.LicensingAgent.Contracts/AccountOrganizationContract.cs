@@ -28,6 +28,18 @@ public sealed record AccountOrganizationInvitationCreateRequest(
     [property: JsonPropertyName("email")] string Email,
     [property: JsonPropertyName("role")] string Role);
 
+public sealed record AccountOrganizationInvitationAcceptRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("invitation_code")] string InvitationCode);
+
+public sealed record AccountOrganizationInvitationAcceptResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("role"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Role,
+    [property: JsonPropertyName("switch_required")] bool SwitchRequired,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
 public sealed record AccountOrganizationInvitationIssued(
     [property: JsonPropertyName("email")] string Email,
     [property: JsonPropertyName("role")] string Role,
