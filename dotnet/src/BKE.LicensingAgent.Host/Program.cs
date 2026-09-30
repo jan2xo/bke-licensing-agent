@@ -742,6 +742,23 @@ app.MapPost(LocalAgentContract.AccountOrganizationInvitationCreatePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountOrganizationInvitationAcceptPath, async (
+    AccountOrganizationInvitationAcceptRequest request,
+    IAccountOrganizationService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidOrganizationInvitationCode(request.InvitationCode))
+    {
+        return AccountOrganizationInvitationAcceptInvalidRequest();
+    }
+
+    var response = await service.AcceptInvitationAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountOrganizationInvitationManagePath, async (
     AccountOrganizationInvitationManageRequest request,
     IAccountOrganizationService service,
@@ -1045,6 +1062,11 @@ static bool ValidOrganizationEmail(string? value) =>
 
 static bool ValidOrganizationMemberRole(string? role) =>
     role is "OWNER" or "BILLING" or "LICENSE_MANAGER" or "MEMBER";
+
+static bool ValidOrganizationInvitationCode(string? code) =>
+    !string.IsNullOrWhiteSpace(code) &&
+    code.Trim().Length is >= 20 and <= 512 &&
+    code.All(character => character >= 32);
 
 static bool ValidOrganizationInvitationAction(string? action) =>
     action is "RESEND" or "REVOKE";
@@ -1389,6 +1411,19 @@ static IResult AccountOrganizationInvitationCreateInvalidRequest() =>
         new AccountOrganizationError(
             "INVALID_REQUEST",
             "The organization invitation request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountOrganizationInvitationAcceptInvalidRequest() =>
+    Results.Json(new AccountOrganizationInvitationAcceptResponse(
+        LocalAgentContract.AccountOrganizationCapabilityId,
+        LocalAgentContract.AccountOrganizationContractVersion,
+        "INVALID_INPUT",
+        null,
+        false,
+        new AccountOrganizationError(
+            "INVALID_REQUEST",
+            "The organization invitation acceptance request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
