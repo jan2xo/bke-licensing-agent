@@ -30,7 +30,9 @@ static class AccountOrganizationCertification
             LocalAgentContract.AccountOrganizationInvitationManagePath ==
                 "/v1/account/organization/invitations/manage" &&
             LocalAgentContract.AccountOrganizationMemberManagePath ==
-                "/v1/account/organization/members/manage",
+                "/v1/account/organization/members/manage" &&
+            LocalAgentContract.AccountOrganizationLeavePath ==
+                "/v1/account/organization/leave",
             "account organization contract drifted");
 
         Require(
@@ -98,6 +100,12 @@ static class AccountOrganizationCertification
                     "Role"
                 ]),
             "account organization member management request widened");
+        Require(
+            typeof(AccountOrganizationLeaveRequest)
+                .GetProperties()
+                .Select(property => property.Name)
+                .SequenceEqual(["CorrelationId"]),
+            "account organization leave request widened");
 
         foreach (var type in new[]
         {
@@ -107,6 +115,7 @@ static class AccountOrganizationCertification
             typeof(AccountOrganizationInvitationCreateResponse),
             typeof(AccountOrganizationInvitationManageResponse),
             typeof(AccountOrganizationMemberManageResponse),
+            typeof(AccountOrganizationLeaveResponse),
             typeof(AccountOrganizationInvitationIssued),
             typeof(AccountOrganizationAccount),
             typeof(AccountOrganizationMember),
@@ -185,6 +194,9 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             host.Contains(
                 "app.MapPost(LocalAgentContract.AccountOrganizationMemberManagePath",
+                StringComparison.Ordinal) &&
+            host.Contains(
+                "app.MapPost(LocalAgentContract.AccountOrganizationLeavePath",
                 StringComparison.Ordinal),
             "Agent organization Host wiring drifted");
 
@@ -215,6 +227,12 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "/api/agent-sessions/account/organization/members/manage",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "/api/agent-sessions/account/organization/leave",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "Organization self-leave is deliberately single-attempt",
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "Member role/removal mutations are deliberately single-attempt",
@@ -262,6 +280,7 @@ static class AccountOrganizationCertification
                 "OWNER"),
             Permissions: new AccountOrganizationPermissions(
                 true,
+                false,
                 true,
                 true),
             Organization: new AccountOrganizationProfile(
@@ -301,6 +320,7 @@ static class AccountOrganizationCertification
         Require(
             result.Status == "READY" &&
             result.Account?.Role == "OWNER" &&
+            result.Permissions?.LeaveOrganization == false &&
             result.Members.Count == 1 &&
             result.Members[0].ManagementHandle ==
                 "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
