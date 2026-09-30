@@ -34,6 +34,11 @@ public interface IAccountOrganizationRemote
         string role,
         CancellationToken cancellationToken);
 
+    Task<RemoteAccountOrganizationInvitationAcceptResult> AcceptInvitationAsync(
+        string accessToken,
+        string invitationCode,
+        CancellationToken cancellationToken);
+
     Task<RemoteAccountOrganizationInvitationManageResult> ManageInvitationAsync(
         string accessToken,
         string action,
@@ -75,6 +80,10 @@ public interface IAccountOrganizationService
         AccountOrganizationInvitationCreateRequest request,
         CancellationToken cancellationToken);
 
+    Task<AccountOrganizationInvitationAcceptResponse> AcceptInvitationAsync(
+        AccountOrganizationInvitationAcceptRequest request,
+        CancellationToken cancellationToken);
+
     Task<AccountOrganizationInvitationManageResponse> ManageInvitationAsync(
         AccountOrganizationInvitationManageRequest request,
         CancellationToken cancellationToken);
@@ -108,6 +117,13 @@ public sealed record RemoteAccountOrganizationInvitationCreateResult(
     string Status,
     AccountOrganizationInvitationIssued? Invitation = null,
     string? InvitationCode = null,
+    string? ErrorCode = null,
+    bool Retryable = false);
+
+public sealed record RemoteAccountOrganizationInvitationAcceptResult(
+    string Status,
+    string? Role = null,
+    bool SwitchRequired = false,
     string? ErrorCode = null,
     bool Retryable = false);
 
@@ -513,6 +529,114 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
                 error: Error(
                     "ORGANIZATION_INVITATION_OUTCOME_UNKNOWN",
                     "The invitation result could not be confirmed. Refresh organization details before deciding whether to issue another invitation.",
+                    false));
+        }
+    }
+
+
+    public async Task<AccountOrganizationInvitationAcceptResponse> AcceptInvitationAsync(
+        AccountOrganizationInvitationAcceptRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return InvitationAcceptResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before accepting an organization invitation.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.AcceptInvitationAsync(
+                active.AccessToken,
+                request.InvitationCode,
+                cancellationToken);
+
+            if (result.Status == "accepted" &&
+                result.Role is
+                    ("OWNER" or "BILLING" or
+                     "LICENSE_MANAGER" or "MEMBER") &&
+                result.SwitchRequired)
+            {
+                return InvitationAcceptResponse(
+                    "ACCEPTED",
+                    result.Role,
+                    switchRequired: true);
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "invitation_not_found" => "INVITATION_NOT_FOUND",
+                "invitation_email_mismatch" =>
+                    "INVITATION_EMAIL_MISMATCH",
+                "invitation_expired" => "INVITATION_EXPIRED",
+                "invitation_not_pending" =>
+                    "INVITATION_NOT_PENDING",
+                "suspended_account" => "SUSPENDED_ACCOUNT",
+                "closed_account" => "CLOSED_ACCOUNT",
+                "conflict" => "CONFLICT",
+                _ => "FAILED",
+            };
+
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The organization invitation code was not accepted.",
+                "invitation_not_found" =>
+                    "The organization invitation was not found.",
+                "invitation_email_mismatch" =>
+                    "This invitation belongs to a different BKE email address.",
+                "invitation_expired" =>
+                    "The organization invitation has expired.",
+                "invitation_not_pending" =>
+                    "The organization invitation is no longer pending.",
+                "suspended_account" =>
+                    "The invited Organization is suspended.",
+                "closed_account" =>
+                    "The invited Organization is closed.",
+                "conflict" =>
+                    "The organization invitation cannot be accepted in the current membership state.",
+                "rate_limited" =>
+                    "Organization invitation acceptance is temporarily rate limited.",
+                _ =>
+                    "BKE organization invitation acceptance is temporarily unavailable.",
+            };
+
+            return InvitationAcceptResponse(
+                status,
+                error: Error(
+                    result.ErrorCode ??
+                        "ORGANIZATION_INVITATION_ACCEPTANCE_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return InvitationAcceptResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "SESSION_INVALID",
+                    "The BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            return InvitationAcceptResponse(
+                "OUTCOME_UNKNOWN",
+                error: Error(
+                    "ORGANIZATION_INVITATION_ACCEPTANCE_OUTCOME_UNKNOWN",
+                    "The invitation acceptance result could not be confirmed. Use Switch BKE account to check whether the Organization is now available before entering the code again.",
                     false));
         }
     }
@@ -1011,6 +1135,19 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             status,
             invitation,
             invitationCode,
+            error);
+
+    private static AccountOrganizationInvitationAcceptResponse InvitationAcceptResponse(
+        string status,
+        string? role = null,
+        bool switchRequired = false,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
+            role,
+            switchRequired,
             error);
 
     private static AccountOrganizationInvitationManageResponse InvitationManageResponse(
