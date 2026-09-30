@@ -41,6 +41,8 @@ public static class LocalAgentContract
     public const string AccountPrivacyListPath = "/v1/account/privacy/requests/list";
     public const string AccountPrivacyCreatePath = "/v1/account/privacy/requests/create";
     public const string AccountPurchasesPath = "/v1/account/purchases";
+    public const string AccountLicenseSeatsPath = "/v1/account/license-seats";
+    public const string AccountLicenseSeatsManagePath = "/v1/account/license-seats/manage";
     public const string AccountOrganizationOverviewPath = "/v1/account/organization";
     public const string AccountOrganizationCreatePath = "/v1/account/organization/create";
     public const string AccountOrganizationProfileUpdatePath = "/v1/account/organization/profile";
@@ -83,6 +85,8 @@ public static class LocalAgentContract
     public const int AccountPrivacyContractVersion = 1;
     public const string AccountPurchasesCapabilityId = "bke.account-purchases";
     public const int AccountPurchasesContractVersion = 1;
+    public const string AccountLicenseSeatsCapabilityId = "bke.account-license-seats";
+    public const int AccountLicenseSeatsContractVersion = 1;
     public const string AccountOrganizationCapabilityId = "bke.account-organization";
     public const int AccountOrganizationContractVersion = 1;
     public const string SoftwareCatalogCapabilityId = "bke.software-catalog";

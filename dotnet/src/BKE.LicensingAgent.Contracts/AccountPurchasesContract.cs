@@ -14,7 +14,8 @@ public sealed record AccountPurchasesAccount(
 public sealed record AccountPurchasesPermissions(
     [property: JsonPropertyName("view_orders")] bool ViewOrders,
     [property: JsonPropertyName("view_subscriptions")] bool ViewSubscriptions,
-    [property: JsonPropertyName("view_all_licenses")] bool ViewAllLicenses);
+    [property: JsonPropertyName("view_all_licenses")] bool ViewAllLicenses,
+    [property: JsonPropertyName("manage_license_seats")] bool ManageLicenseSeats);
 
 public sealed record AccountPurchasesLicense(
     [property: JsonPropertyName("product_name")] string ProductName,
@@ -24,7 +25,10 @@ public sealed record AccountPurchasesLicense(
     [property: JsonPropertyName("key_last_four")] string KeyLastFour,
     [property: JsonPropertyName("expires_at"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExpiresAt,
     [property: JsonPropertyName("max_devices")] int MaxDevices,
-    [property: JsonPropertyName("active_devices")] int ActiveDevices);
+    [property: JsonPropertyName("active_devices")] int ActiveDevices,
+    [property: JsonPropertyName("max_seats")] int MaxSeats,
+    [property: JsonPropertyName("assigned_seats")] int AssignedSeats,
+    [property: JsonPropertyName("seat_management_handle"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SeatManagementHandle);
 
 public sealed record AccountPurchasesSubscription(
     [property: JsonPropertyName("product_name")] string ProductName,

@@ -489,6 +489,12 @@ Require(
     ]),
     "account privacy service port drifted");
 Require(
+    MethodNames<IAccountLicenseSeatsService>().SetEquals([
+        "GetAsync",
+        "ManageAsync",
+    ]),
+    "account license seat service port drifted");
+Require(
     MethodNames<IAccountOrganizationService>().SetEquals([
         "GetAsync",
         "CreateAsync",
@@ -522,6 +528,7 @@ await CertifyAccountPasswordChangeBoundary();
 await CertifyAccountMfaBoundary();
 await AccountPrivacyCertification.RunAsync();
 await AccountPurchasesCertification.RunAsync();
+await AccountLicenseSeatsCertification.RunAsync();
 await AccountOrganizationCertification.RunAsync();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
@@ -549,6 +556,8 @@ Console.WriteLine("Account-session device authorization state machine certified"
 Console.WriteLine("Account password-change transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account MFA session-custody, transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account privacy session-custody, selected-account, no-retry create, and secret boundary certified");
+Console.WriteLine("Account purchases role-filtered read and additive seat-management metadata boundary certified");
+Console.WriteLine("Account license-seat read/mutation session-custody, opaque-handle, single-attempt, refresh-after-ambiguity, and identifier boundary certified");
 Console.WriteLine("Account organization read/profile/invitation issuance/acceptance/member-management/ownership-transfer/self-leave session-custody, opaque-handle, role-filter, single-attempt, transient-secret, reauthentication, and identifier boundary certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");

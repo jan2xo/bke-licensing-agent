@@ -159,7 +159,10 @@ public sealed class AccountPurchasesRemote :
                 "view_subscriptions"),
             RequiredBoolean(
                 permissionsRoot,
-                "view_all_licenses"));
+                "view_all_licenses"),
+            RequiredBoolean(
+                permissionsRoot,
+                "manage_license_seats"));
 
         var licenses = RequiredLicenses(root);
         var subscriptions = RequiredSubscriptions(root);
@@ -259,6 +262,20 @@ public sealed class AccountPurchasesRemote :
                         "Active devices exceed licensed capacity.");
                 }
 
+                var maxSeats =
+                    RequiredNonNegativeInt(
+                        item,
+                        "max_seats");
+                var assignedSeats =
+                    RequiredNonNegativeInt(
+                        item,
+                        "assigned_seats");
+                if (assignedSeats > maxSeats)
+                {
+                    throw new InvalidDataException(
+                        "Assigned seats exceed licensed capacity.");
+                }
+
                 return new AccountPurchasesLicense(
                     RequiredBoundedString(
                         item,
@@ -278,7 +295,12 @@ public sealed class AccountPurchasesRemote :
                         item,
                         "expires_at"),
                     maxDevices,
-                    activeDevices);
+                    activeDevices,
+                    maxSeats,
+                    assignedSeats,
+                    OptionalLicenseSeatManagementHandle(
+                        item,
+                        "seat_management_handle"));
             })
             .ToArray();
 
@@ -624,6 +646,28 @@ public sealed class AccountPurchasesRemote :
             ? value.GetString()
             : throw new InvalidDataException(
                 $"Invalid {name}.");
+    }
+
+    private static string? OptionalLicenseSeatManagementHandle(
+        JsonElement root,
+        string name)
+    {
+        var value = OptionalString(root, name);
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                value,
+                "^bke-license-seat-v1_[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException(
+                $"Invalid {name}.");
+        }
+
+        return value;
     }
 
     private static bool RequiredBoolean(
