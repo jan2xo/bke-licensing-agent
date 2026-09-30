@@ -30,7 +30,9 @@ static class AccountOrganizationCertification
             LocalAgentContract.AccountOrganizationInvitationManagePath ==
                 "/v1/account/organization/invitations/manage" &&
             LocalAgentContract.AccountOrganizationMemberManagePath ==
-                "/v1/account/organization/members/manage",
+                "/v1/account/organization/members/manage" &&
+            LocalAgentContract.AccountOrganizationLeavePath ==
+                "/v1/account/organization/leave",
             "account organization contract drifted");
 
         Require(
@@ -98,6 +100,12 @@ static class AccountOrganizationCertification
                     "Role"
                 ]),
             "account organization member management request widened");
+        Require(
+            typeof(AccountOrganizationLeaveRequest)
+                .GetProperties()
+                .Select(property => property.Name)
+                .SequenceEqual(["CorrelationId"]),
+            "account organization leave request widened");
 
         foreach (var type in new[]
         {
@@ -107,6 +115,7 @@ static class AccountOrganizationCertification
             typeof(AccountOrganizationInvitationCreateResponse),
             typeof(AccountOrganizationInvitationManageResponse),
             typeof(AccountOrganizationMemberManageResponse),
+            typeof(AccountOrganizationLeaveResponse),
             typeof(AccountOrganizationInvitationIssued),
             typeof(AccountOrganizationAccount),
             typeof(AccountOrganizationMember),
@@ -185,6 +194,9 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             host.Contains(
                 "app.MapPost(LocalAgentContract.AccountOrganizationMemberManagePath",
+                StringComparison.Ordinal) &&
+            host.Contains(
+                "app.MapPost(LocalAgentContract.AccountOrganizationLeavePath",
                 StringComparison.Ordinal),
             "Agent organization Host wiring drifted");
 
@@ -215,6 +227,12 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "/api/agent-sessions/account/organization/members/manage",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "/api/agent-sessions/account/organization/leave",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "Organization self-leave is deliberately single-attempt",
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "Member role/removal mutations are deliberately single-attempt",
@@ -262,6 +280,7 @@ static class AccountOrganizationCertification
                 "OWNER"),
             Permissions: new AccountOrganizationPermissions(
                 true,
+                false,
                 true,
                 true),
             Organization: new AccountOrganizationProfile(
@@ -301,6 +320,7 @@ static class AccountOrganizationCertification
         Require(
             result.Status == "READY" &&
             result.Account?.Role == "OWNER" &&
+            result.Permissions?.LeaveOrganization == false &&
             result.Members.Count == 1 &&
             result.Members[0].ManagementHandle ==
                 "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
@@ -518,6 +538,75 @@ static class AccountOrganizationCertification
             lastOwnerResult.Error?.Code == "LAST_OWNER_REQUIRED" &&
             lastOwnerStore.State is ActiveAccountSessionState,
             "Agent member management weakened last-owner protection or destroyed valid session custody");
+
+
+        var leaveStore = OrganizationStore.Active(account);
+        var leaveRemote = new FakeOrganizationRemote(
+            ready,
+            leaveResult:
+                new RemoteAccountOrganizationLeaveResult(
+                    "left",
+                    ReauthenticationRequired: true));
+        var leave = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            leaveStore,
+            leaveRemote);
+        var leaveResult = await leave.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-leave-cert"),
+            CancellationToken.None);
+        Require(
+            leaveResult.Status == "LEFT" &&
+            leaveResult.ReauthenticationRequired &&
+            leaveResult.Error is null &&
+            leaveRemote.LeaveCalls == 1 &&
+            leaveRemote.LastAccessToken ==
+                "organization-access-secret" &&
+            leaveStore.State is null,
+            "Agent organization leave did not clear selected-account session custody");
+
+        var ownerLeaveStore = OrganizationStore.Active(account);
+        var ownerLeave = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            ownerLeaveStore,
+            new FakeOrganizationRemote(
+                ready,
+                leaveResult:
+                    new RemoteAccountOrganizationLeaveResult(
+                        "owner_cannot_leave",
+                        ErrorCode: "OWNER_CANNOT_LEAVE")));
+        var ownerLeaveResult = await ownerLeave.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-owner-leave-cert"),
+            CancellationToken.None);
+        Require(
+            ownerLeaveResult.Status == "OWNER_CANNOT_LEAVE" &&
+            !ownerLeaveResult.ReauthenticationRequired &&
+            ownerLeaveResult.Error?.Code ==
+                "OWNER_CANNOT_LEAVE" &&
+            ownerLeaveStore.State is ActiveAccountSessionState,
+            "Agent organization owner-leave denial destroyed valid session custody");
+
+        var missingLeaveStore = OrganizationStore.Active(account);
+        var missingLeave = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            missingLeaveStore,
+            new FakeOrganizationRemote(
+                ready,
+                leaveResult:
+                    new RemoteAccountOrganizationLeaveResult(
+                        "member_not_found",
+                        ErrorCode: "MEMBER_NOT_FOUND")));
+        var missingLeaveResult = await missingLeave.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-missing-leave-cert"),
+            CancellationToken.None);
+        Require(
+            missingLeaveResult.Status == "MEMBER_NOT_FOUND" &&
+            missingLeaveResult.ReauthenticationRequired &&
+            missingLeaveResult.Error?.Code == "MEMBER_NOT_FOUND" &&
+            missingLeaveStore.State is null,
+            "Agent stale organization membership did not clear selected-account session custody");
 
         var personal = new AccountOrganizationService(
             new OrganizationAuthenticatedSessionService(account),
@@ -746,6 +835,25 @@ static class AccountOrganizationCertification
             memberManageUnknownStore.State is ActiveAccountSessionState,
             "Agent member-management ambiguity became replayable or destroyed session custody");
 
+
+        var leaveUnknownStore = OrganizationStore.Active(account);
+        var leaveUnknown = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            leaveUnknownStore,
+            new ThrowingOrganizationRemote(
+                new HttpRequestException(
+                    "certified organization leave ambiguity")));
+        var leaveUnknownResult = await leaveUnknown.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-leave-unknown-cert"),
+            CancellationToken.None);
+        Require(
+            leaveUnknownResult.Status == "OUTCOME_UNKNOWN" &&
+            leaveUnknownResult.ReauthenticationRequired &&
+            leaveUnknownResult.Error?.Retryable == false &&
+            leaveUnknownStore.State is null,
+            "Agent organization leave ambiguity remained replayable or retained unsafe selected-account custody");
+
         var signedOutRemote = new FakeOrganizationRemote(ready);
         var signedOut = new AccountOrganizationService(
             new OrganizationSignedOutSessionService(),
@@ -813,6 +921,17 @@ static class AccountOrganizationCertification
             signedOutMemberManage.Status == "AUTH_REQUIRED" &&
             signedOutRemote.MemberManageCalls == 0,
             "Agent organization member authority was called without session custody");
+
+
+        var signedOutLeave = await signedOut.LeaveAsync(
+            new AccountOrganizationLeaveRequest(
+                "organization-leave-auth-cert"),
+            CancellationToken.None);
+        Require(
+            signedOutLeave.Status == "AUTH_REQUIRED" &&
+            signedOutLeave.ReauthenticationRequired &&
+            signedOutRemote.LeaveCalls == 0,
+            "Agent organization leave authority was called without session custody");
     }
 
     private static async Task CertifyRemoteTransportAsync()
@@ -831,6 +950,7 @@ static class AccountOrganizationCertification
               },
               "permissions":{
                 "manage_members":true,
+                "leave_organization":false,
                 "view_billing":true,
                 "view_licenses":true
               },
@@ -876,6 +996,7 @@ static class AccountOrganizationCertification
             Require(
                 result.Status == "ready" &&
                 result.Account?.Role == "OWNER" &&
+                result.Permissions?.LeaveOrganization == false &&
                 result.Members?.Count == 1 &&
                 result.Members[0].ManagementHandle ==
                     "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
@@ -1149,6 +1270,63 @@ static class AccountOrganizationCertification
                 "Agent member removal transport drifted");
         }
 
+
+        var leaveHandler = new OrganizationLeaveTransportHandler(
+            HttpStatusCode.OK,
+            """{"status":"left","reauthentication_required":true}""");
+        using (var client = new HttpClient(leaveHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.LeaveAsync(
+                token,
+                CancellationToken.None);
+            Require(
+                result.Status == "left" &&
+                result.ReauthenticationRequired &&
+                leaveHandler.RequestCount == 1 &&
+                leaveHandler.SawBearer &&
+                leaveHandler.SawProtocol &&
+                leaveHandler.SawPost &&
+                leaveHandler.BodyWasEmptyObject &&
+                leaveHandler.BodyExcludedAuthorityIds,
+                "Agent organization leave transport widened self-only intent or lost session mediation");
+        }
+
+        var ownerLeaveHandler = new OrganizationLeaveTransportHandler(
+            HttpStatusCode.Conflict,
+            """{"error":"OWNER_CANNOT_LEAVE"}""");
+        using (var client = new HttpClient(ownerLeaveHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.LeaveAsync(
+                token,
+                CancellationToken.None);
+            Require(
+                result.Status == "owner_cannot_leave" &&
+                result.ErrorCode == "OWNER_CANNOT_LEAVE" &&
+                !result.ReauthenticationRequired,
+                "Agent organization leave lost Digital Solutions owner protection");
+        }
+
+        var driftedLeaveHandler = new OrganizationLeaveTransportHandler(
+            HttpStatusCode.OK,
+            """{"status":"left","reauthentication_required":true,"account_id":"forbidden"}""");
+        using (var client = new HttpClient(driftedLeaveHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.LeaveAsync(
+                    token,
+                    CancellationToken.None),
+                "Agent organization leave accepted authority identifiers in the success response");
+        }
+
         var redirect = new OrganizationTransportHandler(
             HttpStatusCode.Redirect,
             "{}");
@@ -1290,7 +1468,8 @@ sealed class FakeOrganizationRemote(
     RemoteAccountOrganizationCreateResult? createResult = null,
     RemoteAccountOrganizationProfileUpdateResult? profileResult = null,
     RemoteAccountOrganizationInvitationCreateResult? invitationResult = null,
-    RemoteAccountOrganizationMemberManageResult? memberManageResult = null) :
+    RemoteAccountOrganizationMemberManageResult? memberManageResult = null,
+    RemoteAccountOrganizationLeaveResult? leaveResult = null) :
     IAccountOrganizationRemote
 {
     public int Calls { get; private set; }
@@ -1299,6 +1478,7 @@ sealed class FakeOrganizationRemote(
     public int InvitationCreateCalls { get; private set; }
     public int InvitationManageCalls { get; private set; }
     public int MemberManageCalls { get; private set; }
+    public int LeaveCalls { get; private set; }
     public string? LastAccessToken { get; private set; }
     public bool LastUpdateOrganizationProfile { get; private set; }
     public bool LastUpdateBillingProfile { get; private set; }
@@ -1434,6 +1614,20 @@ sealed class FakeOrganizationRemote(
             new RemoteAccountOrganizationMemberManageResult(
                 action == "REMOVE" ? "removed" : "updated"));
     }
+
+    public Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        LeaveCalls++;
+        LastAccessToken = accessToken;
+        return Task.FromResult(
+            leaveResult ??
+            new RemoteAccountOrganizationLeaveResult(
+                "left",
+                ReauthenticationRequired: true));
+    }
 }
 
 
@@ -1492,6 +1686,12 @@ sealed class ThrowingOrganizationRemote(
         string? role,
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationMemberManageResult>(
+            error);
+
+    public Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
+        string accessToken,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationLeaveResult>(
             error);
 }
 
@@ -1924,6 +2124,66 @@ sealed class OrganizationMemberManageTransportHandler(
                 action == "remove"
                     ? """{"status":"removed"}"""
                     : """{"status":"updated"}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
+    }
+}
+
+
+sealed class OrganizationLeaveTransportHandler(
+    HttpStatusCode statusCode,
+    string json) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPost { get; private set; }
+    public bool BodyWasEmptyObject { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPost =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/leave";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        BodyWasEmptyObject = body.Trim() == "{}";
+        BodyExcludedAuthorityIds =
+            !body.Contains("account_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("user_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("member_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("membership_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("owner_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("management_handle", StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
                 Encoding.UTF8,
                 "application/json"),
         };

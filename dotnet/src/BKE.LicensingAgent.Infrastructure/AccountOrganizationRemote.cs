@@ -23,6 +23,8 @@ public sealed class AccountOrganizationRemote :
         "/api/agent-sessions/account/organization/invitations/manage";
     private const string MemberManageEndpoint =
         "/api/agent-sessions/account/organization/members/manage";
+    private const string LeaveEndpoint =
+        "/api/agent-sessions/account/organization/leave";
 
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
@@ -200,6 +202,9 @@ public sealed class AccountOrganizationRemote :
                 RequiredBoolean(
                     permissions,
                     "manage_members"),
+                RequiredBoolean(
+                    permissions,
+                    "leave_organization"),
                 RequiredBoolean(
                     permissions,
                     "view_billing"),
@@ -1019,6 +1024,118 @@ public sealed class AccountOrganizationRemote :
         return new RemoteAccountOrganizationMemberManageResult(
             statusValue);
     }
+
+    public async Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192)
+        {
+            return new RemoteAccountOrganizationLeaveResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_platformBaseUri, LeaveEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            "{}",
+            Encoding.UTF8,
+            "application/json");
+
+        // Organization self-leave is deliberately single-attempt.
+        // A transport or parsing failure after Digital Solutions commits
+        // must never become an automatic replay.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization leave authority redirected.");
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound &&
+            !response.Headers.Contains(
+                "x-bke-account-session-version"))
+        {
+            return new RemoteAccountOrganizationLeaveResult(
+                "leave_unavailable",
+                ErrorCode: "ORGANIZATION_LEAVE_UNAVAILABLE",
+                Retryable: true);
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_LEAVE_UNAVAILABLE";
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization leave authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "ACCOUNT_NOT_ORGANIZATION" => "not_organization",
+                "OWNER_CANNOT_LEAVE" => "owner_cannot_leave",
+                "MEMBER_NOT_FOUND" => "member_not_found",
+                "RATE_LIMITED" => "rate_limited",
+                _ => "leave_unavailable",
+            };
+
+            return new RemoteAccountOrganizationLeaveResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        var statusValue = RequiredString(root, "status");
+        var reauthenticationRequired =
+            RequiredBoolean(root, "reauthentication_required");
+        if (statusValue != "left" ||
+            !reauthenticationRequired ||
+            root.EnumerateObject().Any(
+                property =>
+                    property.Name != "status" &&
+                    property.Name != "reauthentication_required"))
+        {
+            throw new InvalidDataException(
+                "Organization leave response drifted.");
+        }
+
+        return new RemoteAccountOrganizationLeaveResult(
+            "left",
+            ReauthenticationRequired: true);
+    }
+
 
     private static bool ValidBounded(
         string? value,

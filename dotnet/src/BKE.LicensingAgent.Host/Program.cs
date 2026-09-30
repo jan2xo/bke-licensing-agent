@@ -778,6 +778,22 @@ app.MapPost(LocalAgentContract.AccountOrganizationMemberManagePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountOrganizationLeavePath, async (
+    AccountOrganizationLeaveRequest request,
+    IAccountOrganizationService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountOrganizationLeaveInvalidRequest();
+    }
+
+    var response = await service.LeaveAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     ClaimCodeRedeemRequest request,
     IClaimCodeRedemptionService service,
@@ -1379,6 +1395,18 @@ static IResult AccountOrganizationMemberManageInvalidRequest() =>
         new AccountOrganizationError(
             "INVALID_REQUEST",
             "The organization member management request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountOrganizationLeaveInvalidRequest() =>
+    Results.Json(new AccountOrganizationLeaveResponse(
+        LocalAgentContract.AccountOrganizationCapabilityId,
+        LocalAgentContract.AccountOrganizationContractVersion,
+        "INVALID_INPUT",
+        false,
+        new AccountOrganizationError(
+            "INVALID_REQUEST",
+            "The Organization leave request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
