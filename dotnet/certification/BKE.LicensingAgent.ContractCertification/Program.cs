@@ -496,6 +496,7 @@ Require(
         "CreateInvitationAsync",
         "ManageInvitationAsync",
         "ManageMemberAsync",
+        "LeaveAsync",
     ]),
     "account organization service port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
