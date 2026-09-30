@@ -495,6 +495,7 @@ Require(
         "UpdateProfileAsync",
         "CreateInvitationAsync",
         "ManageInvitationAsync",
+        "ManageMemberAsync",
     ]),
     "account organization service port drifted");
 Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "claim-code redemption port drifted");
@@ -544,7 +545,7 @@ Console.WriteLine("Account-session device authorization state machine certified"
 Console.WriteLine("Account password-change transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account MFA session-custody, transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account privacy session-custody, selected-account, no-retry create, and secret boundary certified");
-Console.WriteLine("Account organization read/profile/invitation/create-manage session-custody, opaque-handle, role-filter, single-attempt, transient-secret, and identifier boundary certified");
+Console.WriteLine("Account organization read/profile/invitation/member-management session-custody, opaque-handle, role-filter, single-attempt, transient-secret, and identifier boundary certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
