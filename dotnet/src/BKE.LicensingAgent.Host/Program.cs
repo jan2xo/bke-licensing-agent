@@ -742,6 +742,25 @@ app.MapPost(LocalAgentContract.AccountOrganizationInvitationCreatePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountOrganizationInvitationManagePath, async (
+    AccountOrganizationInvitationManageRequest request,
+    IAccountOrganizationService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidOrganizationInvitationAction(request.Action) ||
+        !ValidOrganizationInvitationManagementHandle(
+            request.ManagementHandle))
+    {
+        return AccountOrganizationInvitationManageInvalidRequest();
+    }
+
+    var response = await service.ManageInvitationAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.ClaimCodeRedeemPath, async (
     ClaimCodeRedeemRequest request,
     IClaimCodeRedemptionService service,
@@ -975,6 +994,17 @@ static bool ValidOrganizationEmail(string? value) =>
 
 static bool ValidOrganizationMemberRole(string? role) =>
     role is "OWNER" or "BILLING" or "LICENSE_MANAGER" or "MEMBER";
+
+static bool ValidOrganizationInvitationAction(string? action) =>
+    action is "RESEND" or "REVOKE";
+
+static bool ValidOrganizationInvitationManagementHandle(
+    string? handle) =>
+    !string.IsNullOrWhiteSpace(handle) &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        handle,
+        "^bke-org-invite-v1_[0-9a-f]{64}$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
 static bool ValidOrganizationProfileUpdate(
     AccountOrganizationProfileUpdateRequest request)
@@ -1289,6 +1319,19 @@ static IResult AccountOrganizationInvitationCreateInvalidRequest() =>
         new AccountOrganizationError(
             "INVALID_REQUEST",
             "The organization invitation request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountOrganizationInvitationManageInvalidRequest() =>
+    Results.Json(new AccountOrganizationInvitationManageResponse(
+        LocalAgentContract.AccountOrganizationCapabilityId,
+        LocalAgentContract.AccountOrganizationContractVersion,
+        "INVALID_INPUT",
+        null,
+        null,
+        new AccountOrganizationError(
+            "INVALID_REQUEST",
+            "The organization invitation management request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
