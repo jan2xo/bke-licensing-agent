@@ -144,10 +144,10 @@ static class AccountLicenseSeatsCertification
                 "/api/agent-sessions/account/license-seats/manage",
                 StringComparison.Ordinal) &&
             remoteSource.Contains(
-                "new AuthenticationHeaderValue("Bearer", accessToken)",
+                "new AuthenticationHeaderValue(\"Bearer\", accessToken)",
                 StringComparison.Ordinal) &&
             remoteSource.Contains(
-                ""x-bke-account-session-version"",
+                "\"x-bke-account-session-version\"",
                 StringComparison.Ordinal) &&
             remoteSource.Contains(
                 "AllowAutoRedirect = false",
