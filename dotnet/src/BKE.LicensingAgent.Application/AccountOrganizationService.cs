@@ -47,6 +47,11 @@ public interface IAccountOrganizationRemote
         string? role,
         CancellationToken cancellationToken);
 
+    Task<RemoteAccountOrganizationOwnershipTransferResult> TransferOwnershipAsync(
+        string accessToken,
+        string managementHandle,
+        CancellationToken cancellationToken);
+
     Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
         string accessToken,
         CancellationToken cancellationToken);
@@ -76,6 +81,10 @@ public interface IAccountOrganizationService
 
     Task<AccountOrganizationMemberManageResponse> ManageMemberAsync(
         AccountOrganizationMemberManageRequest request,
+        CancellationToken cancellationToken);
+
+    Task<AccountOrganizationOwnershipTransferResponse> TransferOwnershipAsync(
+        AccountOrganizationOwnershipTransferRequest request,
         CancellationToken cancellationToken);
 
     Task<AccountOrganizationLeaveResponse> LeaveAsync(
@@ -111,6 +120,12 @@ public sealed record RemoteAccountOrganizationInvitationManageResult(
 
 public sealed record RemoteAccountOrganizationMemberManageResult(
     string Status,
+    string? ErrorCode = null,
+    bool Retryable = false);
+
+public sealed record RemoteAccountOrganizationOwnershipTransferResult(
+    string Status,
+    bool ReauthenticationRequired = false,
     string? ErrorCode = null,
     bool Retryable = false);
 
@@ -714,6 +729,110 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
     }
 
 
+    public async Task<AccountOrganizationOwnershipTransferResponse> TransferOwnershipAsync(
+        AccountOrganizationOwnershipTransferRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return OwnershipTransferResponse(
+                "AUTH_REQUIRED",
+                true,
+                Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before transferring Organization ownership.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.TransferOwnershipAsync(
+                active.AccessToken,
+                request.ManagementHandle,
+                cancellationToken);
+
+            if (result.Status == "transferred" &&
+                result.ReauthenticationRequired)
+            {
+                await _secretStore.ClearAsync(CancellationToken.None);
+                return OwnershipTransferResponse(
+                    "TRANSFERRED",
+                    true);
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "not_organization" => "NOT_ORGANIZATION",
+                "account_forbidden" => "ACCOUNT_FORBIDDEN",
+                "member_not_found" => "MEMBER_NOT_FOUND",
+                "closed_account" => "CLOSED_ACCOUNT",
+                "suspended_account" => "SUSPENDED_ACCOUNT",
+                _ => "FAILED",
+            };
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The Organization ownership transfer request was not accepted.",
+                "not_organization" =>
+                    "The selected BKE account is not an Organization account.",
+                "account_forbidden" =>
+                    "The selected BKE account cannot transfer Organization ownership.",
+                "member_not_found" =>
+                    "The selected member is no longer eligible to receive Organization ownership. Refresh Organization details.",
+                "closed_account" =>
+                    "The selected Organization is closed.",
+                "suspended_account" =>
+                    "The selected Organization is suspended.",
+                "rate_limited" =>
+                    "Organization ownership transfer is temporarily rate limited.",
+                _ =>
+                    "BKE Organization ownership transfer is temporarily unavailable.",
+            };
+
+            return OwnershipTransferResponse(
+                status,
+                false,
+                Error(
+                    result.ErrorCode ??
+                        "ORGANIZATION_OWNERSHIP_TRANSFER_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return OwnershipTransferResponse(
+                "AUTH_REQUIRED",
+                true,
+                Error(
+                    "SESSION_INVALID",
+                    "The selected BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            // Digital Solutions may already have committed ownership transfer.
+            // Fail closed by dropping selected-account custody and require
+            // fresh account resolution instead of replaying the mutation.
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return OwnershipTransferResponse(
+                "OUTCOME_UNKNOWN",
+                true,
+                Error(
+                    "ORGANIZATION_OWNERSHIP_TRANSFER_OUTCOME_UNKNOWN",
+                    "The Organization ownership transfer result could not be confirmed. Sign in again and check the authoritative Organization state before retrying.",
+                    false));
+        }
+    }
+
+
     public async Task<AccountOrganizationLeaveResponse> LeaveAsync(
         AccountOrganizationLeaveRequest request,
         CancellationToken cancellationToken)
@@ -914,6 +1033,17 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             LocalAgentContract.AccountOrganizationCapabilityId,
             LocalAgentContract.AccountOrganizationContractVersion,
             status,
+            error);
+
+    private static AccountOrganizationOwnershipTransferResponse OwnershipTransferResponse(
+        string status,
+        bool reauthenticationRequired,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
+            reauthenticationRequired,
             error);
 
     private static AccountOrganizationLeaveResponse LeaveResponse(
