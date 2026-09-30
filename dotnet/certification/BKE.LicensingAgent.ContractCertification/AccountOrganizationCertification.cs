@@ -1367,6 +1367,70 @@ static class AccountOrganizationCertification
         }
 
 
+        var transferHandler =
+            new OrganizationOwnershipTransferTransportHandler(
+                HttpStatusCode.OK,
+                """{"status":"transferred","reauthentication_required":true}""");
+        using (var client = new HttpClient(transferHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.TransferOwnershipAsync(
+                token,
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                CancellationToken.None);
+            Require(
+                result.Status == "transferred" &&
+                result.ReauthenticationRequired &&
+                transferHandler.RequestCount == 1 &&
+                transferHandler.SawBearer &&
+                transferHandler.SawProtocol &&
+                transferHandler.SawPost &&
+                transferHandler.BodyMatchedIntent &&
+                transferHandler.BodyExcludedAuthorityIds,
+                "Agent ownership transfer transport widened target intent or lost session mediation");
+        }
+
+        var missingTransferHandler =
+            new OrganizationOwnershipTransferTransportHandler(
+                HttpStatusCode.NotFound,
+                """{"error":"MEMBER_NOT_FOUND"}""");
+        using (var client = new HttpClient(missingTransferHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.TransferOwnershipAsync(
+                token,
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                CancellationToken.None);
+            Require(
+                result.Status == "member_not_found" &&
+                !result.ReauthenticationRequired &&
+                result.ErrorCode == "MEMBER_NOT_FOUND" &&
+                missingTransferHandler.RequestCount == 1,
+                "Agent ownership transfer lost explicit target rejection semantics");
+        }
+
+        var driftedTransferHandler =
+            new OrganizationOwnershipTransferTransportHandler(
+                HttpStatusCode.OK,
+                """{"status":"transferred","reauthentication_required":true,"owner_id":"forbidden"}""");
+        using (var client = new HttpClient(driftedTransferHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.TransferOwnershipAsync(
+                    token,
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    CancellationToken.None),
+                "Agent ownership transfer accepted authority identifiers in success response");
+        }
+
+
         var leaveHandler = new OrganizationLeaveTransportHandler(
             HttpStatusCode.OK,
             """{"status":"left","reauthentication_required":true}""");
@@ -2246,6 +2310,71 @@ sealed class OrganizationMemberManageTransportHandler(
                 action == "remove"
                     ? """{"status":"removed"}"""
                     : """{"status":"updated"}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
+    }
+}
+
+
+sealed class OrganizationOwnershipTransferTransportHandler(
+    HttpStatusCode statusCode,
+    string json) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPost { get; private set; }
+    public bool BodyMatchedIntent { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPost =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/ownership/transfer";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        using var document =
+            System.Text.Json.JsonDocument.Parse(body);
+        var root = document.RootElement;
+        BodyMatchedIntent =
+            root.GetProperty("management_handle").GetString() ==
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
+            root.EnumerateObject().Count() == 1;
+        BodyExcludedAuthorityIds =
+            !body.Contains("account_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("user_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("member_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("membership_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("owner_id", StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
                 Encoding.UTF8,
                 "application/json"),
         };
