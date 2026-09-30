@@ -28,7 +28,9 @@ static class AccountOrganizationCertification
             LocalAgentContract.AccountOrganizationInvitationCreatePath ==
                 "/v1/account/organization/invitations/create" &&
             LocalAgentContract.AccountOrganizationInvitationManagePath ==
-                "/v1/account/organization/invitations/manage",
+                "/v1/account/organization/invitations/manage" &&
+            LocalAgentContract.AccountOrganizationMemberManagePath ==
+                "/v1/account/organization/members/manage",
             "account organization contract drifted");
 
         Require(
@@ -85,6 +87,17 @@ static class AccountOrganizationCertification
                     "ManagementHandle"
                 ]),
             "account organization invitation management request widened");
+        Require(
+            typeof(AccountOrganizationMemberManageRequest)
+                .GetProperties()
+                .Select(property => property.Name)
+                .SequenceEqual([
+                    "CorrelationId",
+                    "Action",
+                    "ManagementHandle",
+                    "Role"
+                ]),
+            "account organization member management request widened");
 
         foreach (var type in new[]
         {
@@ -93,6 +106,7 @@ static class AccountOrganizationCertification
             typeof(AccountOrganizationProfileUpdateResponse),
             typeof(AccountOrganizationInvitationCreateResponse),
             typeof(AccountOrganizationInvitationManageResponse),
+            typeof(AccountOrganizationMemberManageResponse),
             typeof(AccountOrganizationInvitationIssued),
             typeof(AccountOrganizationAccount),
             typeof(AccountOrganizationMember),
@@ -118,6 +132,12 @@ static class AccountOrganizationCertification
                         StringComparison.OrdinalIgnoreCase) &&
                     !property.Name.Equals(
                         "InvitationId",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !property.Name.Equals(
+                        "MemberId",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !property.Name.Equals(
+                        "MembershipId",
                         StringComparison.OrdinalIgnoreCase) &&
                     !property.Name.Equals(
                         "OwnerId",
@@ -162,6 +182,9 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             host.Contains(
                 "app.MapPost(LocalAgentContract.AccountOrganizationInvitationManagePath",
+                StringComparison.Ordinal) &&
+            host.Contains(
+                "app.MapPost(LocalAgentContract.AccountOrganizationMemberManagePath",
                 StringComparison.Ordinal),
             "Agent organization Host wiring drifted");
 
@@ -189,6 +212,12 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "/api/agent-sessions/account/organization/invitations/manage",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "/api/agent-sessions/account/organization/members/manage",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "Member role/removal mutations are deliberately single-attempt",
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "Resend/revoke are deliberately single-attempt",
@@ -245,7 +274,8 @@ static class AccountOrganizationCertification
                 new AccountOrganizationMember(
                     "owner@example.test",
                     "Owner",
-                    "OWNER"),
+                    "OWNER",
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
             ],
             Invitations: [
                 new AccountOrganizationInvitation(
@@ -272,6 +302,8 @@ static class AccountOrganizationCertification
             result.Status == "READY" &&
             result.Account?.Role == "OWNER" &&
             result.Members.Count == 1 &&
+            result.Members[0].ManagementHandle ==
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
             result.Invitations.Count == 1 &&
             result.Invitations[0].ManagementHandle ==
                 "bke-org-invite-v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" &&
@@ -430,6 +462,62 @@ static class AccountOrganizationCertification
             remote.InvitationManageCalls == 2 &&
             remote.LastInvitationManageAction == "REVOKE",
             "Agent invitation revoke exposed a delivery secret or lost mutation intent");
+
+        var roleUpdateResult = await service.ManageMemberAsync(
+            new AccountOrganizationMemberManageRequest(
+                "organization-member-role-cert",
+                "UPDATE_ROLE",
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "BILLING"),
+            CancellationToken.None);
+        Require(
+            roleUpdateResult.Status == "UPDATED" &&
+            roleUpdateResult.Error is null &&
+            remote.MemberManageCalls == 1 &&
+            remote.LastMemberManageAction == "UPDATE_ROLE" &&
+            remote.LastMemberManagementHandle ==
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
+            remote.LastMemberManageRole == "BILLING" &&
+            remote.LastAccessToken == "organization-access-secret",
+            "Agent member role update did not preserve opaque-handle/session boundaries");
+
+        var removeMemberResult = await service.ManageMemberAsync(
+            new AccountOrganizationMemberManageRequest(
+                "organization-member-remove-cert",
+                "REMOVE",
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                null),
+            CancellationToken.None);
+        Require(
+            removeMemberResult.Status == "REMOVED" &&
+            removeMemberResult.Error is null &&
+            remote.MemberManageCalls == 2 &&
+            remote.LastMemberManageAction == "REMOVE" &&
+            remote.LastMemberManageRole is null,
+            "Agent member removal widened mutation intent or lost session custody");
+
+        var lastOwnerStore = OrganizationStore.Active(account);
+        var lastOwner = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            lastOwnerStore,
+            new FakeOrganizationRemote(
+                ready,
+                memberManageResult:
+                    new RemoteAccountOrganizationMemberManageResult(
+                        "last_owner_required",
+                        ErrorCode: "LAST_OWNER_REQUIRED")));
+        var lastOwnerResult = await lastOwner.ManageMemberAsync(
+            new AccountOrganizationMemberManageRequest(
+                "organization-member-owner-cert",
+                "UPDATE_ROLE",
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "MEMBER"),
+            CancellationToken.None);
+        Require(
+            lastOwnerResult.Status == "LAST_OWNER_REQUIRED" &&
+            lastOwnerResult.Error?.Code == "LAST_OWNER_REQUIRED" &&
+            lastOwnerStore.State is ActiveAccountSessionState,
+            "Agent member management weakened last-owner protection or destroyed valid session custody");
 
         var personal = new AccountOrganizationService(
             new OrganizationAuthenticatedSessionService(account),
@@ -635,6 +723,29 @@ static class AccountOrganizationCertification
             manageUnknownStore.State is ActiveAccountSessionState,
             "Agent invitation management ambiguity became replayable or destroyed session custody");
 
+        var memberManageUnknownStore =
+            OrganizationStore.Active(account);
+        var memberManageUnknown =
+            new AccountOrganizationService(
+                new OrganizationAuthenticatedSessionService(account),
+                memberManageUnknownStore,
+                new ThrowingOrganizationRemote(
+                    new HttpRequestException(
+                        "certified member-management ambiguity")));
+        var memberManageUnknownResult =
+            await memberManageUnknown.ManageMemberAsync(
+                new AccountOrganizationMemberManageRequest(
+                    "organization-member-manage-unknown-cert",
+                    "REMOVE",
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    null),
+                CancellationToken.None);
+        Require(
+            memberManageUnknownResult.Status == "OUTCOME_UNKNOWN" &&
+            memberManageUnknownResult.Error?.Retryable == false &&
+            memberManageUnknownStore.State is ActiveAccountSessionState,
+            "Agent member-management ambiguity became replayable or destroyed session custody");
+
         var signedOutRemote = new FakeOrganizationRemote(ready);
         var signedOut = new AccountOrganizationService(
             new OrganizationSignedOutSessionService(),
@@ -689,6 +800,19 @@ static class AccountOrganizationCertification
             signedOutManage.InvitationCode is null &&
             signedOutRemote.InvitationManageCalls == 0,
             "Agent organization invitation management authority was called without session custody");
+
+        var signedOutMemberManage =
+            await signedOut.ManageMemberAsync(
+                new AccountOrganizationMemberManageRequest(
+                    "organization-member-manage-auth-cert",
+                    "REMOVE",
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    null),
+                CancellationToken.None);
+        Require(
+            signedOutMemberManage.Status == "AUTH_REQUIRED" &&
+            signedOutRemote.MemberManageCalls == 0,
+            "Agent organization member authority was called without session custody");
     }
 
     private static async Task CertifyRemoteTransportAsync()
@@ -725,7 +849,8 @@ static class AccountOrganizationCertification
                 {
                   "email":"owner@example.test",
                   "name":"Owner",
-                  "role":"OWNER"
+                  "role":"OWNER",
+                  "management_handle":"bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                 }
               ],
               "invitations":[
@@ -752,6 +877,8 @@ static class AccountOrganizationCertification
                 result.Status == "ready" &&
                 result.Account?.Role == "OWNER" &&
                 result.Members?.Count == 1 &&
+                result.Members[0].ManagementHandle ==
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
                 handler.RequestCount == 1 &&
                 handler.SawBearer &&
                 handler.SawProtocol &&
@@ -976,6 +1103,52 @@ static class AccountOrganizationCertification
                 "Agent invitation revoke transport drifted");
         }
 
+        var roleUpdateHandler =
+            new OrganizationMemberManageTransportHandler(
+                "update_role",
+                "BILLING");
+        using (var client = new HttpClient(roleUpdateHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.ManageMemberAsync(
+                token,
+                "UPDATE_ROLE",
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "BILLING",
+                CancellationToken.None);
+            Require(
+                result.Status == "updated" &&
+                roleUpdateHandler.RequestCount == 1 &&
+                roleUpdateHandler.BodyMatchedIntent &&
+                roleUpdateHandler.BodyExcludedAuthorityIds,
+                "Agent member role-update transport drifted");
+        }
+
+        var removeMemberHandler =
+            new OrganizationMemberManageTransportHandler(
+                "remove",
+                null);
+        using (var client = new HttpClient(removeMemberHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.ManageMemberAsync(
+                token,
+                "REMOVE",
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                null,
+                CancellationToken.None);
+            Require(
+                result.Status == "removed" &&
+                removeMemberHandler.RequestCount == 1 &&
+                removeMemberHandler.BodyMatchedIntent &&
+                removeMemberHandler.BodyExcludedAuthorityIds,
+                "Agent member removal transport drifted");
+        }
+
         var redirect = new OrganizationTransportHandler(
             HttpStatusCode.Redirect,
             "{}");
@@ -1116,7 +1289,8 @@ sealed class FakeOrganizationRemote(
     RemoteAccountOrganizationResult result,
     RemoteAccountOrganizationCreateResult? createResult = null,
     RemoteAccountOrganizationProfileUpdateResult? profileResult = null,
-    RemoteAccountOrganizationInvitationCreateResult? invitationResult = null) :
+    RemoteAccountOrganizationInvitationCreateResult? invitationResult = null,
+    RemoteAccountOrganizationMemberManageResult? memberManageResult = null) :
     IAccountOrganizationRemote
 {
     public int Calls { get; private set; }
@@ -1124,6 +1298,7 @@ sealed class FakeOrganizationRemote(
     public int ProfileUpdateCalls { get; private set; }
     public int InvitationCreateCalls { get; private set; }
     public int InvitationManageCalls { get; private set; }
+    public int MemberManageCalls { get; private set; }
     public string? LastAccessToken { get; private set; }
     public bool LastUpdateOrganizationProfile { get; private set; }
     public bool LastUpdateBillingProfile { get; private set; }
@@ -1133,6 +1308,9 @@ sealed class FakeOrganizationRemote(
     public string? LastInvitationRole { get; private set; }
     public string? LastInvitationManageAction { get; private set; }
     public string? LastInvitationManagementHandle { get; private set; }
+    public string? LastMemberManageAction { get; private set; }
+    public string? LastMemberManagementHandle { get; private set; }
+    public string? LastMemberManageRole { get; private set; }
 
     public Task<RemoteAccountOrganizationResult> GetAsync(
         string accessToken,
@@ -1237,7 +1415,27 @@ sealed class FakeOrganizationRemote(
                     ? null
                     : "organization-invitation-resend-code-cert"));
     }
+
+    public Task<RemoteAccountOrganizationMemberManageResult> ManageMemberAsync(
+        string accessToken,
+        string action,
+        string managementHandle,
+        string? role,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        MemberManageCalls++;
+        LastAccessToken = accessToken;
+        LastMemberManageAction = action;
+        LastMemberManagementHandle = managementHandle;
+        LastMemberManageRole = role;
+        return Task.FromResult(
+            memberManageResult ??
+            new RemoteAccountOrganizationMemberManageResult(
+                action == "REMOVE" ? "removed" : "updated"));
+    }
 }
+
 
 
 sealed class ThrowingOrganizationRemote(
@@ -1286,7 +1484,17 @@ sealed class ThrowingOrganizationRemote(
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationInvitationManageResult>(
             error);
+
+    public Task<RemoteAccountOrganizationMemberManageResult> ManageMemberAsync(
+        string accessToken,
+        string action,
+        string managementHandle,
+        string? role,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationMemberManageResult>(
+            error);
 }
+
 
 sealed class OrganizationTransportHandler(
     HttpStatusCode statusCode,
@@ -1664,3 +1872,65 @@ sealed class OrganizationInvitationManageTransportHandler(
         return response;
     }
 }
+
+sealed class OrganizationMemberManageTransportHandler(
+    string action,
+    string? role) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool BodyMatchedIntent { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        using var document =
+            System.Text.Json.JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        var expectedFieldCount = role is null ? 2 : 3;
+        BodyMatchedIntent =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/members/manage" &&
+            root.GetProperty("action").GetString() == action &&
+            root.GetProperty("management_handle").GetString() ==
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
+            root.EnumerateObject().Count() == expectedFieldCount &&
+            (
+                role is null
+                    ? !root.TryGetProperty("role", out _)
+                    : root.GetProperty("role").GetString() == role
+            );
+
+        BodyExcludedAuthorityIds =
+            !body.Contains("account_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("user_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("member_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("membership_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("owner_id", StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                action == "remove"
+                    ? """{"status":"removed"}"""
+                    : """{"status":"updated"}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
+    }
+}
+
