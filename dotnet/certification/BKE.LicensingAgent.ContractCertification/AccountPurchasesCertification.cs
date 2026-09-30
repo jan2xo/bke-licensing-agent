@@ -8,7 +8,7 @@ using BKE.LicensingAgent.Infrastructure;
 static class AccountPurchasesCertification
 {
     private const string ExpectedDigitalSolutionsSource =
-        "95042d595c8855046c6e40ed855e359127d380da";
+        "01035e8d57d4600b8b7199cee046fe45de3fb569";
 
     public static async Task RunAsync()
     {
@@ -185,8 +185,13 @@ static class AccountPurchasesCertification
             response.Permissions?.ViewOrders == true &&
             response.Permissions.ViewSubscriptions &&
             response.Permissions.ViewAllLicenses &&
+            response.Permissions.ManageLicenseSeats &&
             response.Licenses.Count == 1 &&
             response.Licenses[0].KeyLastFour == "ABCD" &&
+            response.Licenses[0].MaxSeats == 2 &&
+            response.Licenses[0].AssignedSeats == 1 &&
+            response.Licenses[0].SeatManagementHandle ==
+                "bke-license-seat-v1_" + new string('a', 64) &&
             response.Subscriptions.Count == 1 &&
             response.Orders.Count == 1 &&
             response.Orders[0].Number == "ORD-CERT-001" &&
@@ -327,7 +332,8 @@ static class AccountPurchasesCertification
               "permissions":{
                 "view_orders":true,
                 "view_subscriptions":true,
-                "view_all_licenses":true
+                "view_all_licenses":true,
+                "manage_license_seats":true
               },
               "licenses":[
                 {
@@ -339,6 +345,9 @@ static class AccountPurchasesCertification
                   "expires_at":"2027-09-30T00:00:00.000Z",
                   "max_devices":4,
                   "active_devices":1,
+                  "max_seats":2,
+                  "assigned_seats":1,
+                  "seat_management_handle":"bke-license-seat-v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "license_id":"license-id-must-not-leak"
                 }
               ],
@@ -455,7 +464,8 @@ static class AccountPurchasesCertification
               "permissions":{
                 "view_orders":true,
                 "view_subscriptions":true,
-                "view_all_licenses":true
+                "view_all_licenses":true,
+                "manage_license_seats":true
               },
               "licenses":["not-an-object"],
               "subscriptions":[],
@@ -502,6 +512,7 @@ static class AccountPurchasesCertification
             new AccountPurchasesPermissions(
                 true,
                 true,
+                true,
                 true),
             [
                 new AccountPurchasesLicense(
@@ -512,7 +523,10 @@ static class AccountPurchasesCertification
                     "ABCD",
                     "2027-09-30T00:00:00.000Z",
                     4,
-                    1),
+                    1,
+                    2,
+                    1,
+                    "bke-license-seat-v1_" + new string('a', 64)),
             ],
             [
                 new AccountPurchasesSubscription(
