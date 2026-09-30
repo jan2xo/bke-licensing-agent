@@ -31,6 +31,8 @@ static class AccountOrganizationCertification
                 "/v1/account/organization/invitations/manage" &&
             LocalAgentContract.AccountOrganizationMemberManagePath ==
                 "/v1/account/organization/members/manage" &&
+            LocalAgentContract.AccountOrganizationOwnershipTransferPath ==
+                "/v1/account/organization/ownership/transfer" &&
             LocalAgentContract.AccountOrganizationLeavePath ==
                 "/v1/account/organization/leave",
             "account organization contract drifted");
@@ -101,6 +103,15 @@ static class AccountOrganizationCertification
                 ]),
             "account organization member management request widened");
         Require(
+            typeof(AccountOrganizationOwnershipTransferRequest)
+                .GetProperties()
+                .Select(property => property.Name)
+                .SequenceEqual([
+                    "CorrelationId",
+                    "ManagementHandle"
+                ]),
+            "account organization ownership transfer request widened");
+        Require(
             typeof(AccountOrganizationLeaveRequest)
                 .GetProperties()
                 .Select(property => property.Name)
@@ -115,6 +126,7 @@ static class AccountOrganizationCertification
             typeof(AccountOrganizationInvitationCreateResponse),
             typeof(AccountOrganizationInvitationManageResponse),
             typeof(AccountOrganizationMemberManageResponse),
+            typeof(AccountOrganizationOwnershipTransferResponse),
             typeof(AccountOrganizationLeaveResponse),
             typeof(AccountOrganizationInvitationIssued),
             typeof(AccountOrganizationAccount),
@@ -196,6 +208,9 @@ static class AccountOrganizationCertification
                 "app.MapPost(LocalAgentContract.AccountOrganizationMemberManagePath",
                 StringComparison.Ordinal) &&
             host.Contains(
+                "app.MapPost(LocalAgentContract.AccountOrganizationOwnershipTransferPath",
+                StringComparison.Ordinal) &&
+            host.Contains(
                 "app.MapPost(LocalAgentContract.AccountOrganizationLeavePath",
                 StringComparison.Ordinal),
             "Agent organization Host wiring drifted");
@@ -229,7 +244,13 @@ static class AccountOrganizationCertification
                 "/api/agent-sessions/account/organization/members/manage",
                 StringComparison.Ordinal) &&
             remote.Contains(
+                "/api/agent-sessions/account/organization/ownership/transfer",
+                StringComparison.Ordinal) &&
+            remote.Contains(
                 "/api/agent-sessions/account/organization/leave",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "Ownership transfer is deliberately single-attempt",
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "Organization self-leave is deliberately single-attempt",
@@ -280,6 +301,7 @@ static class AccountOrganizationCertification
                 "OWNER"),
             Permissions: new AccountOrganizationPermissions(
                 true,
+                true,
                 false,
                 true,
                 true),
@@ -320,6 +342,7 @@ static class AccountOrganizationCertification
         Require(
             result.Status == "READY" &&
             result.Account?.Role == "OWNER" &&
+            result.Permissions?.TransferOwnership == true &&
             result.Permissions?.LeaveOrganization == false &&
             result.Members.Count == 1 &&
             result.Members[0].ManagementHandle ==
@@ -538,6 +561,79 @@ static class AccountOrganizationCertification
             lastOwnerResult.Error?.Code == "LAST_OWNER_REQUIRED" &&
             lastOwnerStore.State is ActiveAccountSessionState,
             "Agent member management weakened last-owner protection or destroyed valid session custody");
+
+
+        var transferStore = OrganizationStore.Active(account);
+        var transferRemote = new FakeOrganizationRemote(
+            ready,
+            ownershipTransferResult:
+                new RemoteAccountOrganizationOwnershipTransferResult(
+                    "transferred",
+                    ReauthenticationRequired: true));
+        var transfer = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            transferStore,
+            transferRemote);
+        var transferResult = await transfer.TransferOwnershipAsync(
+            new AccountOrganizationOwnershipTransferRequest(
+                "organization-owner-transfer-cert",
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+            CancellationToken.None);
+        Require(
+            transferResult.Status == "TRANSFERRED" &&
+            transferResult.ReauthenticationRequired &&
+            transferResult.Error is null &&
+            transferRemote.OwnershipTransferCalls == 1 &&
+            transferRemote.LastOwnershipTransferHandle ==
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
+            transferRemote.LastAccessToken ==
+                "organization-access-secret" &&
+            transferStore.State is null,
+            "Agent ownership transfer did not clear selected-account custody after authoritative transfer");
+
+        var missingTransferStore = OrganizationStore.Active(account);
+        var missingTransfer = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            missingTransferStore,
+            new FakeOrganizationRemote(
+                ready,
+                ownershipTransferResult:
+                    new RemoteAccountOrganizationOwnershipTransferResult(
+                        "member_not_found",
+                        ErrorCode: "MEMBER_NOT_FOUND")));
+        var missingTransferResult =
+            await missingTransfer.TransferOwnershipAsync(
+                new AccountOrganizationOwnershipTransferRequest(
+                    "organization-owner-transfer-missing-cert",
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+                CancellationToken.None);
+        Require(
+            missingTransferResult.Status == "MEMBER_NOT_FOUND" &&
+            !missingTransferResult.ReauthenticationRequired &&
+            missingTransferResult.Error?.Code == "MEMBER_NOT_FOUND" &&
+            missingTransferStore.State is ActiveAccountSessionState,
+            "Explicit invalid ownership target destroyed otherwise-valid selected-account custody");
+
+        var ambiguousTransferStore = OrganizationStore.Active(account);
+        var ambiguousTransfer = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            ambiguousTransferStore,
+            new ThrowingOrganizationRemote(
+                new HttpRequestException(
+                    "certified ownership transfer ambiguity")));
+        var ambiguousTransferResult =
+            await ambiguousTransfer.TransferOwnershipAsync(
+                new AccountOrganizationOwnershipTransferRequest(
+                    "organization-owner-transfer-unknown-cert",
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+                CancellationToken.None);
+        Require(
+            ambiguousTransferResult.Status == "OUTCOME_UNKNOWN" &&
+            ambiguousTransferResult.ReauthenticationRequired &&
+            ambiguousTransferResult.Error?.Code ==
+                "ORGANIZATION_OWNERSHIP_TRANSFER_OUTCOME_UNKNOWN" &&
+            ambiguousTransferStore.State is null,
+            "Ambiguous ownership transfer remained replayable or retained stale selected-account custody");
 
 
         var leaveStore = OrganizationStore.Active(account);
@@ -950,6 +1046,7 @@ static class AccountOrganizationCertification
               },
               "permissions":{
                 "manage_members":true,
+                "transfer_ownership":true,
                 "leave_organization":false,
                 "view_billing":true,
                 "view_licenses":true
@@ -996,6 +1093,7 @@ static class AccountOrganizationCertification
             Require(
                 result.Status == "ready" &&
                 result.Account?.Role == "OWNER" &&
+                result.Permissions?.TransferOwnership == true &&
                 result.Permissions?.LeaveOrganization == false &&
                 result.Members?.Count == 1 &&
                 result.Members[0].ManagementHandle ==
@@ -1271,6 +1369,70 @@ static class AccountOrganizationCertification
         }
 
 
+        var transferHandler =
+            new OrganizationOwnershipTransferTransportHandler(
+                HttpStatusCode.OK,
+                """{"status":"transferred","reauthentication_required":true}""");
+        using (var client = new HttpClient(transferHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.TransferOwnershipAsync(
+                token,
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                CancellationToken.None);
+            Require(
+                result.Status == "transferred" &&
+                result.ReauthenticationRequired &&
+                transferHandler.RequestCount == 1 &&
+                transferHandler.SawBearer &&
+                transferHandler.SawProtocol &&
+                transferHandler.SawPost &&
+                transferHandler.BodyMatchedIntent &&
+                transferHandler.BodyExcludedAuthorityIds,
+                "Agent ownership transfer transport widened target intent or lost session mediation");
+        }
+
+        var missingTransferHandler =
+            new OrganizationOwnershipTransferTransportHandler(
+                HttpStatusCode.NotFound,
+                """{"error":"MEMBER_NOT_FOUND"}""");
+        using (var client = new HttpClient(missingTransferHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.TransferOwnershipAsync(
+                token,
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                CancellationToken.None);
+            Require(
+                result.Status == "member_not_found" &&
+                !result.ReauthenticationRequired &&
+                result.ErrorCode == "MEMBER_NOT_FOUND" &&
+                missingTransferHandler.RequestCount == 1,
+                "Agent ownership transfer lost explicit target rejection semantics");
+        }
+
+        var driftedTransferHandler =
+            new OrganizationOwnershipTransferTransportHandler(
+                HttpStatusCode.OK,
+                """{"status":"transferred","reauthentication_required":true,"owner_id":"forbidden"}""");
+        using (var client = new HttpClient(driftedTransferHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.TransferOwnershipAsync(
+                    token,
+                    "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    CancellationToken.None),
+                "Agent ownership transfer accepted authority identifiers in success response");
+        }
+
+
         var leaveHandler = new OrganizationLeaveTransportHandler(
             HttpStatusCode.OK,
             """{"status":"left","reauthentication_required":true}""");
@@ -1469,6 +1631,7 @@ sealed class FakeOrganizationRemote(
     RemoteAccountOrganizationProfileUpdateResult? profileResult = null,
     RemoteAccountOrganizationInvitationCreateResult? invitationResult = null,
     RemoteAccountOrganizationMemberManageResult? memberManageResult = null,
+    RemoteAccountOrganizationOwnershipTransferResult? ownershipTransferResult = null,
     RemoteAccountOrganizationLeaveResult? leaveResult = null) :
     IAccountOrganizationRemote
 {
@@ -1478,6 +1641,7 @@ sealed class FakeOrganizationRemote(
     public int InvitationCreateCalls { get; private set; }
     public int InvitationManageCalls { get; private set; }
     public int MemberManageCalls { get; private set; }
+    public int OwnershipTransferCalls { get; private set; }
     public int LeaveCalls { get; private set; }
     public string? LastAccessToken { get; private set; }
     public bool LastUpdateOrganizationProfile { get; private set; }
@@ -1491,6 +1655,7 @@ sealed class FakeOrganizationRemote(
     public string? LastMemberManageAction { get; private set; }
     public string? LastMemberManagementHandle { get; private set; }
     public string? LastMemberManageRole { get; private set; }
+    public string? LastOwnershipTransferHandle { get; private set; }
 
     public Task<RemoteAccountOrganizationResult> GetAsync(
         string accessToken,
@@ -1615,6 +1780,22 @@ sealed class FakeOrganizationRemote(
                 action == "REMOVE" ? "removed" : "updated"));
     }
 
+    public Task<RemoteAccountOrganizationOwnershipTransferResult> TransferOwnershipAsync(
+        string accessToken,
+        string managementHandle,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        OwnershipTransferCalls++;
+        LastAccessToken = accessToken;
+        LastOwnershipTransferHandle = managementHandle;
+        return Task.FromResult(
+            ownershipTransferResult ??
+            new RemoteAccountOrganizationOwnershipTransferResult(
+                "transferred",
+                ReauthenticationRequired: true));
+    }
+
     public Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
         string accessToken,
         CancellationToken cancellationToken)
@@ -1686,6 +1867,13 @@ sealed class ThrowingOrganizationRemote(
         string? role,
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationMemberManageResult>(
+            error);
+
+    public Task<RemoteAccountOrganizationOwnershipTransferResult> TransferOwnershipAsync(
+        string accessToken,
+        string managementHandle,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationOwnershipTransferResult>(
             error);
 
     public Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
@@ -2124,6 +2312,71 @@ sealed class OrganizationMemberManageTransportHandler(
                 action == "remove"
                     ? """{"status":"removed"}"""
                     : """{"status":"updated"}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
+    }
+}
+
+
+sealed class OrganizationOwnershipTransferTransportHandler(
+    HttpStatusCode statusCode,
+    string json) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPost { get; private set; }
+    public bool BodyMatchedIntent { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPost =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/ownership/transfer";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        using var document =
+            System.Text.Json.JsonDocument.Parse(body);
+        var root = document.RootElement;
+        BodyMatchedIntent =
+            root.GetProperty("management_handle").GetString() ==
+                "bke-org-member-v1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" &&
+            root.EnumerateObject().Count() == 1;
+        BodyExcludedAuthorityIds =
+            !body.Contains("account_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("user_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("member_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("membership_id", StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains("owner_id", StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                json,
                 Encoding.UTF8,
                 "application/json"),
         };

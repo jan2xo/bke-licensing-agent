@@ -23,6 +23,8 @@ public sealed class AccountOrganizationRemote :
         "/api/agent-sessions/account/organization/invitations/manage";
     private const string MemberManageEndpoint =
         "/api/agent-sessions/account/organization/members/manage";
+    private const string OwnershipTransferEndpoint =
+        "/api/agent-sessions/account/organization/ownership/transfer";
     private const string LeaveEndpoint =
         "/api/agent-sessions/account/organization/leave";
 
@@ -202,6 +204,9 @@ public sealed class AccountOrganizationRemote :
                 RequiredBoolean(
                     permissions,
                     "manage_members"),
+                RequiredBoolean(
+                    permissions,
+                    "transfer_ownership"),
                 RequiredBoolean(
                     permissions,
                     "leave_organization"),
@@ -1024,6 +1029,134 @@ public sealed class AccountOrganizationRemote :
         return new RemoteAccountOrganizationMemberManageResult(
             statusValue);
     }
+
+    public async Task<RemoteAccountOrganizationOwnershipTransferResult>
+        TransferOwnershipAsync(
+            string accessToken,
+            string managementHandle,
+            CancellationToken cancellationToken)
+    {
+        var handleValid =
+            !string.IsNullOrWhiteSpace(managementHandle) &&
+            System.Text.RegularExpressions.Regex.IsMatch(
+                managementHandle,
+                "^bke-org-member-v1_[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192 ||
+            !handleValid)
+        {
+            return new RemoteAccountOrganizationOwnershipTransferResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_platformBaseUri, OwnershipTransferEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new
+            {
+                management_handle = managementHandle,
+            }),
+            Encoding.UTF8,
+            "application/json");
+
+        // Ownership transfer is deliberately single-attempt.
+        // A transport or parsing failure after Digital Solutions commits
+        // must never become an automatic replay.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization ownership transfer authority redirected.");
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound &&
+            !response.Headers.Contains(
+                "x-bke-account-session-version"))
+        {
+            return new RemoteAccountOrganizationOwnershipTransferResult(
+                "transfer_unavailable",
+                ErrorCode:
+                    "ORGANIZATION_OWNERSHIP_TRANSFER_UNAVAILABLE",
+                Retryable: true);
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_OWNERSHIP_TRANSFER_UNAVAILABLE";
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization ownership transfer authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "ACCOUNT_NOT_ORGANIZATION" => "not_organization",
+                "ACCOUNT_ROLE_FORBIDDEN" => "account_forbidden",
+                "MEMBER_NOT_FOUND" => "member_not_found",
+                "CLOSED_ACCOUNT" => "closed_account",
+                "SUSPENDED_ACCOUNT" => "suspended_account",
+                "RATE_LIMITED" => "rate_limited",
+                _ => "transfer_unavailable",
+            };
+
+            return new RemoteAccountOrganizationOwnershipTransferResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        var statusValue = RequiredString(root, "status");
+        var reauthenticationRequired =
+            RequiredBoolean(root, "reauthentication_required");
+        if (statusValue != "transferred" ||
+            !reauthenticationRequired ||
+            root.EnumerateObject().Any(
+                property =>
+                    property.Name != "status" &&
+                    property.Name != "reauthentication_required"))
+        {
+            throw new InvalidDataException(
+                "Organization ownership transfer response drifted.");
+        }
+
+        return new RemoteAccountOrganizationOwnershipTransferResult(
+            "transferred",
+            ReauthenticationRequired: true);
+    }
+
 
     public async Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
         string accessToken,

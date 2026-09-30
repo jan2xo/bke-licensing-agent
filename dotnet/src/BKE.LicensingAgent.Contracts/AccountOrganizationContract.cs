@@ -42,6 +42,7 @@ public sealed record AccountOrganizationAccount(
 
 public sealed record AccountOrganizationPermissions(
     [property: JsonPropertyName("manage_members")] bool ManageMembers,
+    [property: JsonPropertyName("transfer_ownership")] bool TransferOwnership,
     [property: JsonPropertyName("leave_organization")] bool LeaveOrganization,
     [property: JsonPropertyName("view_billing")] bool ViewBilling,
     [property: JsonPropertyName("view_licenses")] bool ViewLicenses);
@@ -95,6 +96,17 @@ public sealed record AccountOrganizationProfileUpdateResponse(
     [property: JsonPropertyName("capability_id")] string CapabilityId,
     [property: JsonPropertyName("contract_version")] int ContractVersion,
     [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
+public sealed record AccountOrganizationOwnershipTransferRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("management_handle")] string ManagementHandle);
+
+public sealed record AccountOrganizationOwnershipTransferResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reauthentication_required")] bool ReauthenticationRequired,
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
 
 public sealed record AccountOrganizationLeaveRequest(
