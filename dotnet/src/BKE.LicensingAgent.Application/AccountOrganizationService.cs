@@ -46,6 +46,10 @@ public interface IAccountOrganizationRemote
         string managementHandle,
         string? role,
         CancellationToken cancellationToken);
+
+    Task<RemoteAccountOrganizationLeaveResult> LeaveAsync(
+        string accessToken,
+        CancellationToken cancellationToken);
 }
 
 public interface IAccountOrganizationService
@@ -72,6 +76,10 @@ public interface IAccountOrganizationService
 
     Task<AccountOrganizationMemberManageResponse> ManageMemberAsync(
         AccountOrganizationMemberManageRequest request,
+        CancellationToken cancellationToken);
+
+    Task<AccountOrganizationLeaveResponse> LeaveAsync(
+        AccountOrganizationLeaveRequest request,
         CancellationToken cancellationToken);
 }
 
@@ -103,6 +111,12 @@ public sealed record RemoteAccountOrganizationInvitationManageResult(
 
 public sealed record RemoteAccountOrganizationMemberManageResult(
     string Status,
+    string? ErrorCode = null,
+    bool Retryable = false);
+
+public sealed record RemoteAccountOrganizationLeaveResult(
+    string Status,
+    bool ReauthenticationRequired = false,
     string? ErrorCode = null,
     bool Retryable = false);
 
@@ -700,6 +714,110 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
     }
 
 
+    public async Task<AccountOrganizationLeaveResponse> LeaveAsync(
+        AccountOrganizationLeaveRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return LeaveResponse(
+                "AUTH_REQUIRED",
+                true,
+                Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before leaving an organization.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.LeaveAsync(
+                active.AccessToken,
+                cancellationToken);
+
+            if (result.Status == "left" &&
+                result.ReauthenticationRequired)
+            {
+                await _secretStore.ClearAsync(CancellationToken.None);
+                return LeaveResponse("LEFT", true);
+            }
+
+            if (result.Status == "member_not_found")
+            {
+                await _secretStore.ClearAsync(CancellationToken.None);
+                return LeaveResponse(
+                    "MEMBER_NOT_FOUND",
+                    true,
+                    Error(
+                        result.ErrorCode ?? "MEMBER_NOT_FOUND",
+                        "The selected Organization membership is no longer available. Sign in again.",
+                        false));
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "not_organization" => "NOT_ORGANIZATION",
+                "owner_cannot_leave" => "OWNER_CANNOT_LEAVE",
+                _ => "FAILED",
+            };
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The Organization leave request was not accepted.",
+                "not_organization" =>
+                    "The selected BKE account is not an Organization account.",
+                "owner_cannot_leave" =>
+                    "Transfer Organization ownership before leaving.",
+                "rate_limited" =>
+                    "Organization leave is temporarily rate limited.",
+                _ =>
+                    "BKE Organization leave is temporarily unavailable.",
+            };
+
+            return LeaveResponse(
+                status,
+                false,
+                Error(
+                    result.ErrorCode ??
+                        "ORGANIZATION_LEAVE_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return LeaveResponse(
+                "AUTH_REQUIRED",
+                true,
+                Error(
+                    "SESSION_INVALID",
+                    "The selected BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            // Digital Solutions may already have committed the leave.
+            // Fail closed by dropping selected-account custody and require
+            // fresh account resolution instead of replaying the mutation.
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return LeaveResponse(
+                "OUTCOME_UNKNOWN",
+                true,
+                Error(
+                    "ORGANIZATION_LEAVE_OUTCOME_UNKNOWN",
+                    "The Organization leave result could not be confirmed. Sign in again and check available accounts before retrying.",
+                    false));
+        }
+    }
+
+
     private async Task<ActiveAccountSessionState?> ActiveAsync(
         string correlationId,
         CancellationToken cancellationToken)
@@ -796,6 +914,17 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             LocalAgentContract.AccountOrganizationCapabilityId,
             LocalAgentContract.AccountOrganizationContractVersion,
             status,
+            error);
+
+    private static AccountOrganizationLeaveResponse LeaveResponse(
+        string status,
+        bool reauthenticationRequired,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
+            reauthenticationRequired,
             error);
 
     private static AccountOrganizationError Error(
