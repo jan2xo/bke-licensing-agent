@@ -244,6 +244,7 @@ public sealed class AccountPurchasesRemote :
         var items = array.EnumerateArray()
             .Select(item =>
             {
+                RequireObjectItem(item, "licenses");
                 var maxDevices =
                     RequiredNonNegativeInt(
                         item,
@@ -295,7 +296,10 @@ public sealed class AccountPurchasesRemote :
     {
         var array = RequiredArray(root, "subscriptions");
         var items = array.EnumerateArray()
-            .Select(item => new AccountPurchasesSubscription(
+            .Select(item =>
+            {
+                RequireObjectItem(item, "subscriptions");
+                return new AccountPurchasesSubscription(
                 RequiredBoundedString(
                     item,
                     "product_name",
@@ -310,7 +314,8 @@ public sealed class AccountPurchasesRemote :
                 RequiredPositiveInt(item, "seats"),
                 RequiredTimestamp(
                     item,
-                    "current_period_end")))
+                    "current_period_end"));
+            })
             .ToArray();
 
         if (items.Length > MaximumItems)
@@ -327,7 +332,10 @@ public sealed class AccountPurchasesRemote :
     {
         var array = RequiredArray(root, "orders");
         var items = array.EnumerateArray()
-            .Select(item => new AccountPurchasesOrder(
+            .Select(item =>
+            {
+                RequireObjectItem(item, "orders");
+                return new AccountPurchasesOrder(
                 RequiredBoundedString(
                     item,
                     "number",
@@ -342,7 +350,8 @@ public sealed class AccountPurchasesRemote :
                 RequiredBoolean(
                     item,
                     "invoice_available"),
-                RequiredOrderItems(item)))
+                RequiredOrderItems(item));
+            })
             .ToArray();
 
         if (items.Length > MaximumItems)
@@ -359,7 +368,10 @@ public sealed class AccountPurchasesRemote :
     {
         var array = RequiredArray(order, "items");
         var items = array.EnumerateArray()
-            .Select(item => new AccountPurchasesOrderItem(
+            .Select(item =>
+            {
+                RequireObjectItem(item, "order.items");
+                return new AccountPurchasesOrderItem(
                 RequiredBoundedString(
                     item,
                     "product_name",
@@ -372,7 +384,8 @@ public sealed class AccountPurchasesRemote :
                 OptionalBoundedString(
                     item,
                     "plan_name",
-                    120)))
+                    120));
+            })
             .ToArray();
 
         if (items.Length > MaximumOrderItems)
@@ -382,6 +395,17 @@ public sealed class AccountPurchasesRemote :
         }
 
         return items;
+    }
+
+    private static void RequireObjectItem(
+        JsonElement item,
+        string name)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException(
+                $"Invalid {name} item.");
+        }
     }
 
     private static JsonElement RequiredObject(
