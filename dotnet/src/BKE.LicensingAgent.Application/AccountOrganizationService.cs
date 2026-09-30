@@ -27,6 +27,12 @@ public interface IAccountOrganizationRemote
         string? billingEmail,
         string? taxId,
         CancellationToken cancellationToken);
+
+    Task<RemoteAccountOrganizationInvitationCreateResult> CreateInvitationAsync(
+        string accessToken,
+        string email,
+        string role,
+        CancellationToken cancellationToken);
 }
 
 public interface IAccountOrganizationService
@@ -42,6 +48,10 @@ public interface IAccountOrganizationService
     Task<AccountOrganizationProfileUpdateResponse> UpdateProfileAsync(
         AccountOrganizationProfileUpdateRequest request,
         CancellationToken cancellationToken);
+
+    Task<AccountOrganizationInvitationCreateResponse> CreateInvitationAsync(
+        AccountOrganizationInvitationCreateRequest request,
+        CancellationToken cancellationToken);
 }
 
 public sealed record RemoteAccountOrganizationCreateResult(
@@ -53,6 +63,13 @@ public sealed record RemoteAccountOrganizationCreateResult(
 
 public sealed record RemoteAccountOrganizationProfileUpdateResult(
     string Status,
+    string? ErrorCode = null,
+    bool Retryable = false);
+
+public sealed record RemoteAccountOrganizationInvitationCreateResult(
+    string Status,
+    AccountOrganizationInvitationIssued? Invitation = null,
+    string? InvitationCode = null,
     string? ErrorCode = null,
     bool Retryable = false);
 
@@ -346,6 +363,99 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
     }
 
 
+    public async Task<AccountOrganizationInvitationCreateResponse> CreateInvitationAsync(
+        AccountOrganizationInvitationCreateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var active = await ActiveAsync(
+            request.CorrelationId,
+            cancellationToken);
+        if (active is null)
+        {
+            return InvitationCreateResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "AUTH_REQUIRED",
+                    "Sign in with BKE before inviting an organization member.",
+                    false));
+        }
+
+        try
+        {
+            var result = await _remote.CreateInvitationAsync(
+                active.AccessToken,
+                request.Email,
+                request.Role,
+                cancellationToken);
+
+            if (result.Status == "created" &&
+                result.Invitation is not null &&
+                !string.IsNullOrWhiteSpace(result.InvitationCode))
+            {
+                return InvitationCreateResponse(
+                    "CREATED",
+                    result.Invitation,
+                    result.InvitationCode);
+            }
+
+            var status = result.Status switch
+            {
+                "invalid_input" => "INVALID_INPUT",
+                "not_organization" => "NOT_ORGANIZATION",
+                "account_forbidden" => "ACCOUNT_FORBIDDEN",
+                "conflict" => "CONFLICT",
+                _ => "FAILED",
+            };
+
+            var message = result.Status switch
+            {
+                "invalid_input" =>
+                    "The organization invitation details were not accepted.",
+                "not_organization" =>
+                    "The selected BKE account is not an Organization account.",
+                "account_forbidden" =>
+                    "The selected BKE account role cannot invite organization members.",
+                "conflict" =>
+                    "The invited email already has an incompatible membership or pending invitation state.",
+                "rate_limited" =>
+                    "Organization invitations are temporarily rate limited.",
+                _ =>
+                    "BKE organization invitation issuance is temporarily unavailable.",
+            };
+
+            return InvitationCreateResponse(
+                status,
+                error: Error(
+                    result.ErrorCode ??
+                        "ORGANIZATION_INVITATION_UNAVAILABLE",
+                    message,
+                    result.Retryable));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await _secretStore.ClearAsync(CancellationToken.None);
+            return InvitationCreateResponse(
+                "AUTH_REQUIRED",
+                error: Error(
+                    "SESSION_INVALID",
+                    "The BKE account session is no longer valid. Sign in again.",
+                    false));
+        }
+        catch (Exception error) when (
+            error is HttpRequestException or
+            InvalidDataException or
+            TaskCanceledException)
+        {
+            return InvitationCreateResponse(
+                "OUTCOME_UNKNOWN",
+                error: Error(
+                    "ORGANIZATION_INVITATION_OUTCOME_UNKNOWN",
+                    "The invitation result could not be confirmed. Refresh organization details before deciding whether to issue another invitation.",
+                    false));
+        }
+    }
+
+
     private async Task<ActiveAccountSessionState?> ActiveAsync(
         string correlationId,
         CancellationToken cancellationToken)
@@ -407,6 +517,19 @@ public sealed class AccountOrganizationService : IAccountOrganizationService
             LocalAgentContract.AccountOrganizationCapabilityId,
             LocalAgentContract.AccountOrganizationContractVersion,
             status,
+            error);
+
+    private static AccountOrganizationInvitationCreateResponse InvitationCreateResponse(
+        string status,
+        AccountOrganizationInvitationIssued? invitation = null,
+        string? invitationCode = null,
+        AccountOrganizationError? error = null) =>
+        new(
+            LocalAgentContract.AccountOrganizationCapabilityId,
+            LocalAgentContract.AccountOrganizationContractVersion,
+            status,
+            invitation,
+            invitationCode,
             error);
 
     private static AccountOrganizationError Error(

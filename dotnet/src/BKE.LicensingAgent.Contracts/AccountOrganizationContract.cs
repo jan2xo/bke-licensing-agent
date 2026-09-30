@@ -23,6 +23,18 @@ public sealed record AccountOrganizationProfileUpdateRequest(
     [property: JsonPropertyName("billing_email"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? BillingEmail,
     [property: JsonPropertyName("tax_id")] string? TaxId);
 
+public sealed record AccountOrganizationInvitationCreateRequest(
+    [property: JsonPropertyName("correlation_id")] string CorrelationId,
+    [property: JsonPropertyName("email")] string Email,
+    [property: JsonPropertyName("role")] string Role);
+
+public sealed record AccountOrganizationInvitationIssued(
+    [property: JsonPropertyName("email")] string Email,
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("expires_at")] string ExpiresAt,
+    [property: JsonPropertyName("created_at")] string CreatedAt);
+
 public sealed record AccountOrganizationAccount(
     [property: JsonPropertyName("display_name")] string DisplayName,
     [property: JsonPropertyName("lifecycle_state")] string LifecycleState,
@@ -80,6 +92,14 @@ public sealed record AccountOrganizationProfileUpdateResponse(
     [property: JsonPropertyName("capability_id")] string CapabilityId,
     [property: JsonPropertyName("contract_version")] int ContractVersion,
     [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
+
+public sealed record AccountOrganizationInvitationCreateResponse(
+    [property: JsonPropertyName("capability_id")] string CapabilityId,
+    [property: JsonPropertyName("contract_version")] int ContractVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("invitation"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationInvitationIssued? Invitation,
+    [property: JsonPropertyName("invitation_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InvitationCode,
     [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AccountOrganizationError? Error);
 
 public sealed record AccountOrganizationError(

@@ -17,6 +17,8 @@ public sealed class AccountOrganizationRemote :
         "/api/agent-sessions/account/organization/create";
     private const string ProfileEndpoint =
         "/api/agent-sessions/account/organization/profile";
+    private const string InvitationCreateEndpoint =
+        "/api/agent-sessions/account/organization/invitations/create";
 
     private readonly Uri _platformBaseUri;
     private readonly HttpClient _http;
@@ -518,6 +520,186 @@ public sealed class AccountOrganizationRemote :
 
         return new RemoteAccountOrganizationProfileUpdateResult(
             "updated");
+    }
+
+    public async Task<RemoteAccountOrganizationInvitationCreateResult>
+        CreateInvitationAsync(
+            string accessToken,
+            string email,
+            string role,
+            CancellationToken cancellationToken)
+    {
+        var normalizedEmail = email?.Trim();
+        var emailValid =
+            !string.IsNullOrWhiteSpace(normalizedEmail) &&
+            normalizedEmail.Length <= 320 &&
+            System.Net.Mail.MailAddress.TryCreate(
+                normalizedEmail,
+                out var parsedEmail) &&
+            string.Equals(
+                parsedEmail.Address,
+                normalizedEmail,
+                StringComparison.OrdinalIgnoreCase);
+        var roleValid =
+            role is "OWNER" or "BILLING" or
+                "LICENSE_MANAGER" or "MEMBER";
+
+        if (string.IsNullOrWhiteSpace(accessToken) ||
+            accessToken.Length > 8192 ||
+            !emailValid ||
+            !roleValid)
+        {
+            return new RemoteAccountOrganizationInvitationCreateResult(
+                "invalid_input",
+                ErrorCode: "INVALID_INPUT");
+        }
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["email"] = normalizedEmail,
+            ["role"] = role,
+        };
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_platformBaseUri, InvitationCreateEndpoint));
+        request.Headers.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        request.Headers.TryAddWithoutValidation(
+            "x-request-id",
+            Guid.NewGuid().ToString("N"));
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json");
+
+        // Invitation issuance is deliberately single-attempt. A transport
+        // failure after Digital Solutions commits the invitation is
+        // ambiguous, and replay could create or rotate invitation state.
+        using var response = await _http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if ((int)response.StatusCode is >= 300 and <= 399)
+        {
+            throw new HttpRequestException(
+                "BKE organization invitation authority redirected.");
+        }
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new RemoteAccountOrganizationInvitationCreateResult(
+                "invitation_unavailable",
+                ErrorCode: "ORGANIZATION_INVITATION_UNAVAILABLE",
+                Retryable: true);
+        }
+
+        EnsureProtocol(response);
+        using var document = await ReadJsonAsync(
+            response,
+            cancellationToken);
+        var root = document.RootElement;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = OptionalString(root, "error") ??
+                "ORGANIZATION_INVITATION_UNAVAILABLE";
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized &&
+                error == "INVALID_TOKEN")
+            {
+                throw new UnauthorizedAccessException(
+                    "BKE organization invitation authority rejected the account session.");
+            }
+
+            var status = error switch
+            {
+                "INVALID_INPUT" => "invalid_input",
+                "ACCOUNT_NOT_ORGANIZATION" => "not_organization",
+                "ACCOUNT_ROLE_FORBIDDEN" => "account_forbidden",
+                "INVITATION_ALREADY_PENDING" => "conflict",
+                "ACCOUNT_MEMBER_EXISTS" => "conflict",
+                "MEMBER_ALREADY_EXISTS" => "conflict",
+                "RATE_LIMITED" => "rate_limited",
+                _ => "invitation_unavailable",
+            };
+
+            return new RemoteAccountOrganizationInvitationCreateResult(
+                status,
+                ErrorCode: error,
+                Retryable:
+                    (int)response.StatusCode == 429 ||
+                    response.StatusCode ==
+                        HttpStatusCode.ServiceUnavailable);
+        }
+
+        if (RequiredString(root, "status") != "created" ||
+            !root.TryGetProperty("invitation", out var invitation) ||
+            invitation.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException(
+                "Organization invitation response drifted.");
+        }
+
+        var invitedEmail = RequiredString(invitation, "email");
+        var invitedRole = RequiredString(invitation, "role");
+        var invitationStatus = RequiredString(invitation, "status");
+        var expiresAt = RequiredString(invitation, "expires_at");
+        var createdAt = RequiredString(invitation, "created_at");
+        var invitationCode = RequiredString(root, "invitation_code");
+
+        if (invitedEmail.Length > 320 ||
+            !System.Net.Mail.MailAddress.TryCreate(
+                invitedEmail,
+                out var parsedInvitedEmail) ||
+            !string.Equals(
+                parsedInvitedEmail.Address,
+                invitedEmail,
+                StringComparison.OrdinalIgnoreCase) ||
+            invitedRole is not (
+                "OWNER" or "BILLING" or
+                "LICENSE_MANAGER" or "MEMBER") ||
+            invitationStatus.Length > 32 ||
+            !DateTimeOffset.TryParse(expiresAt, out _) ||
+            !DateTimeOffset.TryParse(createdAt, out _) ||
+            invitationCode.Length is < 8 or > 1024 ||
+            invitationCode.Any(character => character < 32))
+        {
+            throw new InvalidDataException(
+                "Organization invitation response contained invalid fields.");
+        }
+
+        if (root.TryGetProperty("account_id", out _) ||
+            root.TryGetProperty("user_id", out _) ||
+            root.TryGetProperty("owner_id", out _) ||
+            root.TryGetProperty("invitation_id", out _) ||
+            root.TryGetProperty("token_hash", out _) ||
+            invitation.TryGetProperty("account_id", out _) ||
+            invitation.TryGetProperty("user_id", out _) ||
+            invitation.TryGetProperty("owner_id", out _) ||
+            invitation.TryGetProperty("id", out _) ||
+            invitation.TryGetProperty("token_hash", out _))
+        {
+            throw new InvalidDataException(
+                "Organization invitation response exposed authority identifiers.");
+        }
+
+        return new RemoteAccountOrganizationInvitationCreateResult(
+            "created",
+            new AccountOrganizationInvitationIssued(
+                invitedEmail,
+                invitedRole,
+                invitationStatus,
+                expiresAt,
+                createdAt),
+            invitationCode);
     }
 
     private static bool ValidBounded(

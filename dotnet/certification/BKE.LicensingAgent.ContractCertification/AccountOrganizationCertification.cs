@@ -24,7 +24,9 @@ static class AccountOrganizationCertification
             LocalAgentContract.AccountOrganizationCreatePath ==
                 "/v1/account/organization/create" &&
             LocalAgentContract.AccountOrganizationProfileUpdatePath ==
-                "/v1/account/organization/profile",
+                "/v1/account/organization/profile" &&
+            LocalAgentContract.AccountOrganizationInvitationCreatePath ==
+                "/v1/account/organization/invitations/create",
             "account organization contract drifted");
 
         Require(
@@ -61,12 +63,24 @@ static class AccountOrganizationCertification
                     "TaxId"
                 ]),
             "account organization profile update request drifted");
+        Require(
+            typeof(AccountOrganizationInvitationCreateRequest)
+                .GetProperties()
+                .Select(property => property.Name)
+                .SequenceEqual([
+                    "CorrelationId",
+                    "Email",
+                    "Role"
+                ]),
+            "account organization invitation request widened");
 
         foreach (var type in new[]
         {
             typeof(AccountOrganizationOverviewResponse),
             typeof(AccountOrganizationCreateResponse),
             typeof(AccountOrganizationProfileUpdateResponse),
+            typeof(AccountOrganizationInvitationCreateResponse),
+            typeof(AccountOrganizationInvitationIssued),
             typeof(AccountOrganizationAccount),
             typeof(AccountOrganizationMember),
             typeof(AccountOrganizationInvitation),
@@ -129,6 +143,9 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal) &&
             host.Contains(
                 "app.MapPost(LocalAgentContract.AccountOrganizationProfileUpdatePath",
+                StringComparison.Ordinal) &&
+            host.Contains(
+                "app.MapPost(LocalAgentContract.AccountOrganizationInvitationCreatePath",
                 StringComparison.Ordinal),
             "Agent organization Host wiring drifted");
 
@@ -152,7 +169,13 @@ static class AccountOrganizationCertification
                 "/api/agent-sessions/account/organization/profile",
                 StringComparison.Ordinal) &&
             remote.Contains(
+                "/api/agent-sessions/account/organization/invitations/create",
+                StringComparison.Ordinal) &&
+            remote.Contains(
                 "HttpMethod.Patch",
+                StringComparison.Ordinal) &&
+            remote.Contains(
+                "Invitation issuance is deliberately single-attempt",
                 StringComparison.Ordinal) &&
             remote.Contains(
                 "single-attempt",
@@ -309,6 +332,48 @@ static class AccountOrganizationCertification
                 StringComparison.Ordinal),
             "Agent organization profile update response leaked session/account identifiers");
 
+        var invitationResult = await service.CreateInvitationAsync(
+            new AccountOrganizationInvitationCreateRequest(
+                "organization-invitation-cert",
+                "new-member@example.test",
+                "MEMBER"),
+            CancellationToken.None);
+        Require(
+            invitationResult.Status == "CREATED" &&
+            invitationResult.Invitation?.Email ==
+                "new-member@example.test" &&
+            invitationResult.Invitation?.Role == "MEMBER" &&
+            invitationResult.InvitationCode ==
+                "organization-invitation-code-cert" &&
+            remote.InvitationCreateCalls == 1 &&
+            remote.LastAccessToken == "organization-access-secret" &&
+            remote.LastInvitationEmail ==
+                "new-member@example.test" &&
+            remote.LastInvitationRole == "MEMBER",
+            "Agent organization invitation did not preserve session custody or transient delivery state");
+        var invitationWire =
+            System.Text.Json.JsonSerializer.Serialize(invitationResult);
+        Require(
+            invitationWire.Contains(
+                "organization-invitation-code-cert",
+                StringComparison.Ordinal) &&
+            !invitationWire.Contains(
+                "organization-access-secret",
+                StringComparison.Ordinal) &&
+            !invitationWire.Contains(
+                "organization-refresh-secret",
+                StringComparison.Ordinal) &&
+            !invitationWire.Contains(
+                "org-account",
+                StringComparison.Ordinal) &&
+            !invitationWire.Contains(
+                "invitation-id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !invitationWire.Contains(
+                "token-hash",
+                StringComparison.OrdinalIgnoreCase),
+            "Agent organization invitation leaked session/authority identifiers or lost its one-time delivery secret");
+
         var personal = new AccountOrganizationService(
             new OrganizationAuthenticatedSessionService(account),
             OrganizationStore.Active(account),
@@ -429,6 +494,69 @@ static class AccountOrganizationCertification
             profileUnknownResult.Error?.Retryable == false,
             "Agent organization profile ambiguity was replayable or destroyed session custody");
 
+        var invitationDeniedStore = OrganizationStore.Active(account);
+        var invitationDenied = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            invitationDeniedStore,
+            new FakeOrganizationRemote(
+                ready,
+                invitationResult:
+                    new RemoteAccountOrganizationInvitationCreateResult(
+                        "account_forbidden",
+                        ErrorCode: "ACCOUNT_ROLE_FORBIDDEN")));
+        var invitationDeniedResult =
+            await invitationDenied.CreateInvitationAsync(
+                new AccountOrganizationInvitationCreateRequest(
+                    "organization-invitation-denied-cert",
+                    "denied@example.test",
+                    "MEMBER"),
+                CancellationToken.None);
+        Require(
+            invitationDeniedResult.Status == "ACCOUNT_FORBIDDEN" &&
+            invitationDeniedResult.InvitationCode is null &&
+            invitationDeniedStore.State is ActiveAccountSessionState,
+            "Agent organization invitation role denial leaked a code or destroyed valid session custody");
+
+        var invitationUnknownStore = OrganizationStore.Active(account);
+        var invitationUnknown = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            invitationUnknownStore,
+            new ThrowingOrganizationRemote(
+                new HttpRequestException(
+                    "certified organization invitation ambiguity")));
+        var invitationUnknownResult =
+            await invitationUnknown.CreateInvitationAsync(
+                new AccountOrganizationInvitationCreateRequest(
+                    "organization-invitation-unknown-cert",
+                    "ambiguous@example.test",
+                    "MEMBER"),
+                CancellationToken.None);
+        Require(
+            invitationUnknownResult.Status == "OUTCOME_UNKNOWN" &&
+            invitationUnknownResult.InvitationCode is null &&
+            invitationUnknownResult.Error?.Retryable == false &&
+            invitationUnknownStore.State is ActiveAccountSessionState,
+            "Agent organization invitation ambiguity became replayable, leaked a code, or destroyed session custody");
+
+        var invitationInvalidStore = OrganizationStore.Active(account);
+        var invitationInvalid = new AccountOrganizationService(
+            new OrganizationAuthenticatedSessionService(account),
+            invitationInvalidStore,
+            new ThrowingOrganizationRemote(
+                new UnauthorizedAccessException(
+                    "certified organization invitation session rejection")));
+        var invitationInvalidResult =
+            await invitationInvalid.CreateInvitationAsync(
+                new AccountOrganizationInvitationCreateRequest(
+                    "organization-invitation-invalid-cert",
+                    "invalid@example.test",
+                    "MEMBER"),
+                CancellationToken.None);
+        Require(
+            invitationInvalidResult.Status == "AUTH_REQUIRED" &&
+            invitationInvalidStore.State is null,
+            "Agent organization invitation invalid token did not clear session custody");
+
         var signedOutRemote = new FakeOrganizationRemote(ready);
         var signedOut = new AccountOrganizationService(
             new OrganizationSignedOutSessionService(),
@@ -458,6 +586,19 @@ static class AccountOrganizationCertification
             signedOutProfile.Status == "AUTH_REQUIRED" &&
             signedOutRemote.ProfileUpdateCalls == 0,
             "Agent organization profile authority was called without authenticated session custody");
+
+        var signedOutInvitation =
+            await signedOut.CreateInvitationAsync(
+                new AccountOrganizationInvitationCreateRequest(
+                    "organization-invitation-auth-cert",
+                    "signed-out@example.test",
+                    "MEMBER"),
+                CancellationToken.None);
+        Require(
+            signedOutInvitation.Status == "AUTH_REQUIRED" &&
+            signedOutInvitation.InvitationCode is null &&
+            signedOutRemote.InvitationCreateCalls == 0,
+            "Agent organization invitation authority was called without authenticated session custody");
     }
 
     private static async Task CertifyRemoteTransportAsync()
@@ -638,6 +779,65 @@ static class AccountOrganizationCertification
                 "Agent organization-profile billing-field transport drifted");
         }
 
+        var invitationHandler =
+            new OrganizationInvitationTransportHandler();
+        using (var client = new HttpClient(invitationHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            var result = await remote.CreateInvitationAsync(
+                token,
+                "new-member@example.test",
+                "MEMBER",
+                CancellationToken.None);
+            Require(
+                result.Status == "created" &&
+                result.Invitation?.Email ==
+                    "new-member@example.test" &&
+                result.Invitation?.Role == "MEMBER" &&
+                result.InvitationCode ==
+                    "organization-invitation-code-cert" &&
+                invitationHandler.RequestCount == 1 &&
+                invitationHandler.SawBearer &&
+                invitationHandler.SawProtocol &&
+                invitationHandler.SawPost &&
+                invitationHandler.BodyMatchedIntent &&
+                invitationHandler.BodyExcludedAuthorityIds,
+                "Agent organization invitation transport drifted");
+        }
+
+        var leakingInvitationHandler =
+            new OrganizationTransportHandler(
+                HttpStatusCode.Created,
+                """
+                {
+                  "status":"created",
+                  "invitation":{
+                    "id":"must-not-cross",
+                    "email":"new-member@example.test",
+                    "role":"MEMBER",
+                    "status":"PENDING",
+                    "expires_at":"2026-10-07T00:00:00.000Z",
+                    "created_at":"2026-09-30T00:00:00.000Z"
+                  },
+                  "invitation_code":"organization-invitation-code-cert"
+                }
+                """);
+        using (var client = new HttpClient(leakingInvitationHandler))
+        using (var remote = new AccountOrganizationRemote(
+            client,
+            "https://organization-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.CreateInvitationAsync(
+                    token,
+                    "new-member@example.test",
+                    "MEMBER",
+                    CancellationToken.None),
+                "Agent organization invitation accepted a cloud invitation identifier");
+        }
+
         var redirect = new OrganizationTransportHandler(
             HttpStatusCode.Redirect,
             "{}");
@@ -777,17 +977,21 @@ sealed class OrganizationSignedOutSessionService : IAccountSessionService
 sealed class FakeOrganizationRemote(
     RemoteAccountOrganizationResult result,
     RemoteAccountOrganizationCreateResult? createResult = null,
-    RemoteAccountOrganizationProfileUpdateResult? profileResult = null) :
+    RemoteAccountOrganizationProfileUpdateResult? profileResult = null,
+    RemoteAccountOrganizationInvitationCreateResult? invitationResult = null) :
     IAccountOrganizationRemote
 {
     public int Calls { get; private set; }
     public int CreateCalls { get; private set; }
     public int ProfileUpdateCalls { get; private set; }
+    public int InvitationCreateCalls { get; private set; }
     public string? LastAccessToken { get; private set; }
     public bool LastUpdateOrganizationProfile { get; private set; }
     public bool LastUpdateBillingProfile { get; private set; }
     public string? LastRegistrationNumber { get; private set; }
     public string? LastTaxId { get; private set; }
+    public string? LastInvitationEmail { get; private set; }
+    public string? LastInvitationRole { get; private set; }
 
     public Task<RemoteAccountOrganizationResult> GetAsync(
         string accessToken,
@@ -842,6 +1046,30 @@ sealed class FakeOrganizationRemote(
             new RemoteAccountOrganizationProfileUpdateResult(
                 "updated"));
     }
+
+    public Task<RemoteAccountOrganizationInvitationCreateResult> CreateInvitationAsync(
+        string accessToken,
+        string email,
+        string role,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        InvitationCreateCalls++;
+        LastAccessToken = accessToken;
+        LastInvitationEmail = email;
+        LastInvitationRole = role;
+        return Task.FromResult(
+            invitationResult ??
+            new RemoteAccountOrganizationInvitationCreateResult(
+                "created",
+                new AccountOrganizationInvitationIssued(
+                    email,
+                    role,
+                    "PENDING",
+                    "2026-10-07T00:00:00.000Z",
+                    "2026-09-30T00:00:00.000Z"),
+                "organization-invitation-code-cert"));
+    }
 }
 
 sealed class ThrowingOrganizationRemote(
@@ -873,6 +1101,14 @@ sealed class ThrowingOrganizationRemote(
         string? taxId,
         CancellationToken cancellationToken) =>
         Task.FromException<RemoteAccountOrganizationProfileUpdateResult>(
+            error);
+
+    public Task<RemoteAccountOrganizationInvitationCreateResult> CreateInvitationAsync(
+        string accessToken,
+        string email,
+        string role,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RemoteAccountOrganizationInvitationCreateResult>(
             error);
 }
 
@@ -1083,6 +1319,100 @@ sealed class OrganizationProfileTransportHandler(
         {
             Content = new StringContent(
                 """{"status":"updated"}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version",
+            AccountSessionRemote.ProtocolVersion);
+        return response;
+    }
+}
+
+
+sealed class OrganizationInvitationTransportHandler :
+    HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+    public bool SawBearer { get; private set; }
+    public bool SawProtocol { get; private set; }
+    public bool SawPost { get; private set; }
+    public bool BodyMatchedIntent { get; private set; }
+    public bool BodyExcludedAuthorityIds { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RequestCount++;
+        SawBearer =
+            request.Headers.Authorization?.Scheme == "Bearer" &&
+            request.Headers.Authorization.Parameter ==
+                "organization-transport-secret";
+        SawProtocol =
+            request.Headers.TryGetValues(
+                "x-bke-account-session-version",
+                out var values) &&
+            values.SingleOrDefault() ==
+                AccountSessionRemote.ProtocolVersion;
+        SawPost =
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath ==
+                "/api/agent-sessions/account/organization/invitations/create";
+
+        var body = request.Content is null
+            ? string.Empty
+            : await request.Content.ReadAsStringAsync(
+                cancellationToken);
+        using var document =
+            System.Text.Json.JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        BodyMatchedIntent =
+            root.EnumerateObject().Select(property => property.Name)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .SequenceEqual(
+                    new[] { "email", "role" }
+                        .OrderBy(value => value, StringComparer.Ordinal)) &&
+            root.GetProperty("email").GetString() ==
+                "new-member@example.test" &&
+            root.GetProperty("role").GetString() == "MEMBER";
+
+        BodyExcludedAuthorityIds =
+            !body.Contains(
+                "account_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "user_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "owner_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "invitation_id",
+                StringComparison.OrdinalIgnoreCase) &&
+            !body.Contains(
+                "token_hash",
+                StringComparison.OrdinalIgnoreCase);
+
+        var response = new HttpResponseMessage(
+            HttpStatusCode.Created)
+        {
+            Content = new StringContent(
+                """
+                {
+                  "status":"created",
+                  "invitation":{
+                    "email":"new-member@example.test",
+                    "role":"MEMBER",
+                    "status":"PENDING",
+                    "expires_at":"2026-10-07T00:00:00.000Z",
+                    "created_at":"2026-09-30T00:00:00.000Z"
+                  },
+                  "invitation_code":"organization-invitation-code-cert"
+                }
+                """,
                 Encoding.UTF8,
                 "application/json"),
         };
