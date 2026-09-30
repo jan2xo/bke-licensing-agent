@@ -521,6 +521,7 @@ await CertifyAccountSessionStateMachine();
 await CertifyAccountPasswordChangeBoundary();
 await CertifyAccountMfaBoundary();
 await AccountPrivacyCertification.RunAsync();
+await AccountPurchasesCertification.RunAsync();
 await AccountOrganizationCertification.RunAsync();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
