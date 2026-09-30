@@ -195,7 +195,7 @@ static class AccountPurchasesCertification
             "account purchases service mediation drifted");
 
         var wire = JsonSerializer.Serialize(response);
-        foreach (var forbidden in new[]
+        foreach (var forbiddenValue in new[]
         {
             "purchases-access-secret",
             "purchases-refresh-secret",
@@ -206,7 +206,7 @@ static class AccountPurchasesCertification
         {
             Require(
                 !wire.Contains(
-                    forbidden,
+                    forbiddenValue,
                     StringComparison.Ordinal),
                 "account purchases response leaked Agent/cloud authority material");
         }
