@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BKE.LicensingAgent.Contracts;
 
 namespace BKE.LicensingAgent.Application;
@@ -114,6 +115,7 @@ public sealed class AccountPurchasesService : IAccountPurchasesService
         catch (Exception error) when (
             error is HttpRequestException or
             InvalidDataException or
+            JsonException or
             TaskCanceledException)
         {
             return Response(
