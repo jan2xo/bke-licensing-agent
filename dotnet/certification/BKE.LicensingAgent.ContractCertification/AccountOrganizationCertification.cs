@@ -1046,6 +1046,7 @@ static class AccountOrganizationCertification
               },
               "permissions":{
                 "manage_members":true,
+                "transfer_ownership":true,
                 "leave_organization":false,
                 "view_billing":true,
                 "view_licenses":true
@@ -1092,6 +1093,7 @@ static class AccountOrganizationCertification
             Require(
                 result.Status == "ready" &&
                 result.Account?.Role == "OWNER" &&
+                result.Permissions?.TransferOwnership == true &&
                 result.Permissions?.LeaveOrganization == false &&
                 result.Members?.Count == 1 &&
                 result.Members[0].ManagementHandle ==
