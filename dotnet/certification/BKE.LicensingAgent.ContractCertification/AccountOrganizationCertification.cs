@@ -1211,7 +1211,7 @@ sealed class FakeOrganizationRemote(
                     "2026-09-30T00:00:00.000Z"),
                 "organization-invitation-code-cert"));
     }
-    
+
     public Task<RemoteAccountOrganizationInvitationManageResult> ManageInvitationAsync(
         string accessToken,
         string action,
