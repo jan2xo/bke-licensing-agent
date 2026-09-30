@@ -136,6 +136,13 @@ builder.Services.AddSingleton<IAccountPurchasesService>(services => new AccountP
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountPurchasesRemote>()));
+builder.Services.AddSingleton<AccountLicenseSeatsRemote>();
+builder.Services.AddSingleton<IAccountLicenseSeatsRemote>(services =>
+    services.GetRequiredService<AccountLicenseSeatsRemote>());
+builder.Services.AddSingleton<IAccountLicenseSeatsService>(services => new AccountLicenseSeatsService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountLicenseSeatsRemote>()));
 builder.Services.AddSingleton<AccountOrganizationRemote>();
 builder.Services.AddSingleton<IAccountOrganizationRemote>(services =>
     services.GetRequiredService<AccountOrganizationRemote>());
@@ -695,6 +702,39 @@ app.MapPost(LocalAgentContract.AccountPurchasesPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountLicenseSeatsPath, async (
+    AccountLicenseSeatsRequest request,
+    IAccountLicenseSeatsService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidLicenseSeatManagementHandle(
+            request.LicenseManagementHandle))
+    {
+        return AccountLicenseSeatsInvalidRequest();
+    }
+
+    var response = await service.GetAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountLicenseSeatsManagePath, async (
+    AccountLicenseSeatsManageRequest request,
+    IAccountLicenseSeatsService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidLicenseSeatManageRequest(request))
+    {
+        return AccountLicenseSeatsManageInvalidRequest();
+    }
+
+    var response = await service.ManageAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountOrganizationOverviewPath, async (
     AccountOrganizationOverviewRequest request,
     IAccountOrganizationService service,
@@ -1108,6 +1148,30 @@ static bool ValidOrganizationMemberManagementHandle(
         "^bke-org-member-v1_[0-9a-f]{64}$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
+static bool ValidLicenseSeatManagementHandle(
+    string? handle) =>
+    !string.IsNullOrWhiteSpace(handle) &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        handle,
+        "^bke-license-seat-v1_[0-9a-f]{64}$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+static bool ValidLicenseSeatTargetHandle(
+    string? handle) =>
+    !string.IsNullOrWhiteSpace(handle) &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        handle,
+        "^bke-license-seat-user-v1_[0-9a-f]{64}$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+static bool ValidLicenseSeatManageRequest(
+    AccountLicenseSeatsManageRequest request) =>
+    request.Action is "ASSIGN" or "REMOVE" &&
+    ValidLicenseSeatManagementHandle(
+        request.LicenseManagementHandle) &&
+    ValidLicenseSeatTargetHandle(
+        request.TargetManagementHandle);
+
 static bool ValidOrganizationMemberManageRequest(
     AccountOrganizationMemberManageRequest request) =>
     ValidOrganizationMemberManagementHandle(
@@ -1392,6 +1456,30 @@ static IResult AccountPurchasesInvalidRequest() =>
         new AccountPurchasesError(
             "INVALID_REQUEST",
             "The account purchases request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountLicenseSeatsInvalidRequest() =>
+    Results.Json(new AccountLicenseSeatsResponse(
+        LocalAgentContract.AccountLicenseSeatsCapabilityId,
+        LocalAgentContract.AccountLicenseSeatsContractVersion,
+        "INVALID_INPUT",
+        null,
+        Array.Empty<AccountLicenseSeatTarget>(),
+        new AccountLicenseSeatsError(
+            "INVALID_REQUEST",
+            "The account license seat request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountLicenseSeatsManageInvalidRequest() =>
+    Results.Json(new AccountLicenseSeatsManageResponse(
+        LocalAgentContract.AccountLicenseSeatsCapabilityId,
+        LocalAgentContract.AccountLicenseSeatsContractVersion,
+        "INVALID_INPUT",
+        new AccountLicenseSeatsError(
+            "INVALID_REQUEST",
+            "The account license seat change request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
