@@ -268,6 +268,26 @@ static class AccountPurchasesCertification
             failureStore.State is ActiveAccountSessionState,
             "read-only purchases failure did not preserve valid Agent custody");
 
+        var malformedStore = PurchasesStore.Active(account);
+        var malformedService =
+            new AccountPurchasesService(
+                new PurchasesAuthenticatedSessionService(
+                    account),
+                malformedStore,
+                new ThrowingAccountPurchasesRemote(
+                    new JsonException(
+                        "certified malformed purchases JSON")));
+        var malformed = await malformedService.GetAsync(
+            new AccountPurchasesRequest(
+                "purchases-malformed-json"),
+            CancellationToken.None);
+        Require(
+            malformed.Status == "FAILED" &&
+            malformed.Error?.Code ==
+                "ACCOUNT_PURCHASES_UNAVAILABLE" &&
+            malformedStore.State is ActiveAccountSessionState,
+            "malformed purchases JSON escaped the fail-closed service envelope");
+
         var forbiddenService =
             new AccountPurchasesService(
                 new PurchasesAuthenticatedSessionService(
@@ -419,6 +439,39 @@ static class AccountPurchasesCertification
             Require(
                 redirect.RequestCount == 1,
                 "account purchases read redirect was replayed");
+        }
+
+        var malformedItem = new PurchasesTransportHandler(
+            HttpStatusCode.OK,
+            """
+            {
+              "status":"ready",
+              "account":{
+                "type":"INDIVIDUAL",
+                "display_name":"Certification Personal",
+                "lifecycle_state":"ACTIVE",
+                "role":"OWNER"
+              },
+              "permissions":{
+                "view_orders":true,
+                "view_subscriptions":true,
+                "view_all_licenses":true
+              },
+              "licenses":["not-an-object"],
+              "subscriptions":[],
+              "orders":[]
+            }
+            """);
+        using (var client = new HttpClient(malformedItem))
+        using (var remote = new AccountPurchasesRemote(
+            client,
+            "https://purchases-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.GetAsync(
+                    token,
+                    CancellationToken.None),
+                "account purchases accepted a malformed collection item");
         }
 
         var missingProtocol = new PurchasesTransportHandler(
