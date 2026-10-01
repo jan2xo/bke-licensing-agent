@@ -494,6 +494,11 @@ Require(
     ]),
     "account purchases service port drifted");
 Require(
+    MethodNames<IAccountBillingService>().SetEquals([
+        "GetAsync",
+    ]),
+    "account billing service port drifted");
+Require(
     MethodNames<IAccountPendingOrdersService>().SetEquals([
         "ContinueAsync",
         "CancelAsync",
@@ -545,6 +550,7 @@ await CertifyAccountPasswordChangeBoundary();
 await CertifyAccountMfaBoundary();
 await AccountPrivacyCertification.RunAsync();
 await AccountPurchasesCertification.RunAsync();
+await AccountBillingCertification.RunAsync();
 await AccountPendingOrdersCertification.RunAsync();
 await AccountLicenseSeatsCertification.RunAsync();
 await AccountLicenseDevicesCertification.RunAsync();
@@ -576,6 +582,7 @@ Console.WriteLine("Account password-change transient-secret, no-retry, and fail-
 Console.WriteLine("Account MFA session-custody, transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account privacy session-custody, selected-account, no-retry create, and secret boundary certified");
 Console.WriteLine("Account purchases role-filtered read and additive seat/device/pending-order metadata boundary certified");
+Console.WriteLine("Account billing role-filtered read, session-custody, strict-parser, no-persistence, and provider/identifier boundary certified");
 Console.WriteLine("Account pending-order continue/cancel session-custody, opaque-handle, Legal, single-attempt, refresh-after-ambiguity, and identifier boundary certified");
 Console.WriteLine("Account license-seat read/mutation session-custody, opaque-handle, single-attempt, refresh-after-ambiguity, and identifier boundary certified");
 Console.WriteLine("Account organization read/profile/invitation issuance/acceptance/member-management/ownership-transfer/self-leave session-custody, opaque-handle, role-filter, single-attempt, transient-secret, reauthentication, and identifier boundary certified");
