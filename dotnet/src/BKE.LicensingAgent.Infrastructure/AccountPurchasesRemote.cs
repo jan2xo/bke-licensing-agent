@@ -162,7 +162,10 @@ public sealed class AccountPurchasesRemote :
                 "view_all_licenses"),
             RequiredBoolean(
                 permissionsRoot,
-                "manage_license_seats"));
+                "manage_license_seats"),
+            RequiredBoolean(
+                permissionsRoot,
+                "manage_devices"));
 
         var licenses = RequiredLicenses(root);
         var subscriptions = RequiredSubscriptions(root);
@@ -300,7 +303,10 @@ public sealed class AccountPurchasesRemote :
                     assignedSeats,
                     OptionalLicenseSeatManagementHandle(
                         item,
-                        "seat_management_handle"));
+                        "seat_management_handle"),
+                    OptionalLicenseDeviceManagementHandle(
+                        item,
+                        "device_management_handle"));
             })
             .ToArray();
 
@@ -661,6 +667,28 @@ public sealed class AccountPurchasesRemote :
         if (!System.Text.RegularExpressions.Regex.IsMatch(
                 value,
                 "^bke-license-seat-v1_[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException(
+                $"Invalid {name}.");
+        }
+
+        return value;
+    }
+
+    private static string? OptionalLicenseDeviceManagementHandle(
+        JsonElement root,
+        string name)
+    {
+        var value = OptionalString(root, name);
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                value,
+                "^bke-license-device-v1_[0-9a-f]{64}$",
                 System.Text.RegularExpressions.RegexOptions.CultureInvariant))
         {
             throw new InvalidDataException(
