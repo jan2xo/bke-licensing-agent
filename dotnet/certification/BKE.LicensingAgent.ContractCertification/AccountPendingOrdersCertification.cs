@@ -8,7 +8,7 @@ using BKE.LicensingAgent.Infrastructure;
 static class AccountPendingOrdersCertification
 {
     private const string ExpectedDigitalSolutionsSource =
-        "26ccdcdaabf173698150752c00e3d0167f4c3a9d";
+        "b84965a513f6cdcd9574c8da8fef86785f5f207d";
     private static readonly string ContinueHandle =
         "bke-order-continue-v1_" + new string('a', 64);
     private static readonly string CancelHandle =

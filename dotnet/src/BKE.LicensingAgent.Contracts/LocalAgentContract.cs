@@ -38,6 +38,8 @@ public static class LocalAgentContract
     public const string AccountMfaChallengePath = "/v1/account/mfa/challenge";
     public const string AccountMfaDisablePath = "/v1/account/mfa/disable";
     public const string AccountMfaRecoveryRegeneratePath = "/v1/account/mfa/recovery/regenerate";
+    public const string AccountRecentAuthStartPath = "/v1/account/recent-auth/start";
+    public const string AccountRecentAuthCompletePath = "/v1/account/recent-auth/complete";
     public const string AccountPrivacyListPath = "/v1/account/privacy/requests/list";
     public const string AccountPrivacyCreatePath = "/v1/account/privacy/requests/create";
     public const string AccountPurchasesPath = "/v1/account/purchases";
@@ -70,6 +72,8 @@ public static class LocalAgentContract
     public const string StoreTrialStartPath = "/v1/store/trials/start";
     public const string StoreCheckoutStatusPath = "/v1/store/checkout-status";
     public const string StoreGiftClaimRevealPath = "/v1/store/gift-claim-code";
+    public const string StoreGiftClaimsPath = "/v1/store/gift-claim-codes";
+    public const string StoreGiftClaimPersistentRevealPath = "/v1/store/gift-claim-codes/reveal";
 
     public const string UpdateCapabilityId = "bke.updates.check";
     public const int UpdateContractVersion = 1;
@@ -87,6 +91,8 @@ public static class LocalAgentContract
     public const int AccountPasswordChangeContractVersion = 1;
     public const string AccountMfaCapabilityId = "bke.account-mfa";
     public const int AccountMfaContractVersion = 1;
+    public const string AccountRecentAuthCapabilityId = "bke.account-recent-auth";
+    public const int AccountRecentAuthContractVersion = 1;
     public const string AccountPrivacyCapabilityId = "bke.account-privacy";
     public const int AccountPrivacyContractVersion = 1;
     public const string AccountPurchasesCapabilityId = "bke.account-purchases";
@@ -127,6 +133,10 @@ public static class LocalAgentContract
     public const int StoreCheckoutStatusContractVersion = 1;
     public const string StoreGiftClaimRevealCapabilityId = "bke.store-gift-claim-reveal";
     public const int StoreGiftClaimRevealContractVersion = 1;
+    public const string StoreGiftClaimsCapabilityId = "bke.store-gift-claims";
+    public const int StoreGiftClaimsContractVersion = 1;
+    public const string StoreGiftClaimPersistentRevealCapabilityId = "bke.store-gift-claim-persistent-reveal";
+    public const int StoreGiftClaimPersistentRevealContractVersion = 1;
 }
 
 public sealed record PlatformAuthorityRequest(
