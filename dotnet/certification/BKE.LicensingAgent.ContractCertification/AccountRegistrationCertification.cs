@@ -194,7 +194,7 @@ static class AccountRegistrationCertification
                 "Console.",
                 StringComparison.Ordinal) &&
             serviceSource.Contains(
-                ""RESULT_UNKNOWN"",
+                "\"RESULT_UNKNOWN\"",
                 StringComparison.Ordinal),
             "Native registration service introduced persistence/logging or lost ambiguity handling.");
     }
