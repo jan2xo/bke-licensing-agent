@@ -235,7 +235,7 @@ static class AccountLicenseDevicesCertification
             read,
             deactivated,
         });
-        foreach (var forbidden in new[]
+        foreach (var forbiddenValue in new[]
         {
             "device-access-secret",
             "device-refresh-secret",
@@ -248,7 +248,7 @@ static class AccountLicenseDevicesCertification
         {
             Require(
                 !wire.Contains(
-                    forbidden,
+                    forbiddenValue,
                     StringComparison.Ordinal),
                 "account authorized-device response leaked Agent/cloud/machine authority material");
         }
