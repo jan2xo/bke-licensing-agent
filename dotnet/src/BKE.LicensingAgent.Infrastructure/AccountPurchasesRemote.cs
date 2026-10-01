@@ -175,7 +175,10 @@ public sealed class AccountPurchasesRemote :
 
         var licenses = RequiredLicenses(root);
         var subscriptions = RequiredSubscriptions(root);
-        var orders = RequiredOrders(root, permissions);
+        var orders = RequiredOrders(
+            root,
+            account.LifecycleState,
+            permissions);
 
         return new RemoteAccountPurchasesResult(
             "ready",
@@ -364,6 +367,7 @@ public sealed class AccountPurchasesRemote :
     private static IReadOnlyList<AccountPurchasesOrder>
         RequiredOrders(
             JsonElement root,
+            string accountLifecycleState,
             AccountPurchasesPermissions permissions)
     {
         var array = RequiredArray(root, "orders");
@@ -389,6 +393,14 @@ public sealed class AccountPurchasesRemote :
                         "Non-pending order exposed a management handle.");
                 }
 
+                if (accountLifecycleState != "ACTIVE" &&
+                    (continueHandle is not null ||
+                     cancelHandle is not null))
+                {
+                    throw new InvalidDataException(
+                        "Inactive account exposed an order management handle.");
+                }
+
                 if ((!permissions.ContinuePendingOrders &&
                      continueHandle is not null) ||
                     (!permissions.CancelPendingOrders &&
@@ -398,15 +410,16 @@ public sealed class AccountPurchasesRemote :
                         "Order management handle exceeded account permissions.");
                 }
 
-                if ((status == "PENDING" &&
-                     permissions.ContinuePendingOrders &&
-                     continueHandle is null) ||
-                    (status == "PENDING" &&
-                     permissions.CancelPendingOrders &&
-                     cancelHandle is null))
+                if (accountLifecycleState == "ACTIVE" &&
+                    ((status == "PENDING" &&
+                      permissions.ContinuePendingOrders &&
+                      continueHandle is null) ||
+                     (status == "PENDING" &&
+                      permissions.CancelPendingOrders &&
+                      cancelHandle is null)))
                 {
                     throw new InvalidDataException(
-                        "Pending order management handle is missing.");
+                        "Active pending order management handle is missing.");
                 }
 
                 return new AccountPurchasesOrder(

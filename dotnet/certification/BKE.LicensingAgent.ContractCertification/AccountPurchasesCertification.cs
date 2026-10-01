@@ -489,6 +489,114 @@ static class AccountPurchasesCertification
                 "account purchases read redirect was replayed");
         }
 
+        var inactiveAccount = new PurchasesTransportHandler(
+            HttpStatusCode.OK,
+            """
+            {
+              "status":"ready",
+              "account":{
+                "type":"ORGANIZATION",
+                "display_name":"Suspended Organization",
+                "lifecycle_state":"SUSPENDED",
+                "role":"OWNER"
+              },
+              "permissions":{
+                "view_orders":true,
+                "view_subscriptions":true,
+                "view_all_licenses":true,
+                "manage_license_seats":true,
+                "manage_devices":true,
+                "continue_pending_orders":true,
+                "cancel_pending_orders":true
+              },
+              "licenses":[],
+              "subscriptions":[],
+              "orders":[
+                {
+                  "number":"ORD-SUSPENDED-PENDING",
+                  "status":"PENDING",
+                  "total_minor":15000000,
+                  "currency":"PHP",
+                  "created_at":"2026-10-01T00:00:00.000Z",
+                  "invoice_available":false,
+                  "continue_handle":null,
+                  "cancel_handle":null,
+                  "items":[]
+                }
+              ]
+            }
+            """);
+        using (var client = new HttpClient(inactiveAccount))
+        using (var remote = new AccountPurchasesRemote(
+            client,
+            "https://purchases-cert.example.test"))
+        {
+            var result = await remote.GetAsync(
+                token,
+                CancellationToken.None);
+            Require(
+                result.Status == "ready" &&
+                result.Account?.LifecycleState == "SUSPENDED" &&
+                result.Permissions?.ContinuePendingOrders == true &&
+                result.Permissions.CancelPendingOrders &&
+                result.Orders?.Count == 1 &&
+                result.Orders[0].Status == "PENDING" &&
+                result.Orders[0].ContinueHandle is null &&
+                result.Orders[0].CancelHandle is null,
+                "account purchases rejected the valid inactive-account pending-order projection.");
+        }
+
+        var inactiveAccountWithHandle =
+            new PurchasesTransportHandler(
+                HttpStatusCode.OK,
+                """
+                {
+                  "status":"ready",
+                  "account":{
+                    "type":"ORGANIZATION",
+                    "display_name":"Suspended Organization",
+                    "lifecycle_state":"SUSPENDED",
+                    "role":"OWNER"
+                  },
+                  "permissions":{
+                    "view_orders":true,
+                    "view_subscriptions":true,
+                    "view_all_licenses":true,
+                    "manage_license_seats":true,
+                    "manage_devices":true,
+                    "continue_pending_orders":true,
+                    "cancel_pending_orders":true
+                  },
+                  "licenses":[],
+                  "subscriptions":[],
+                  "orders":[
+                    {
+                      "number":"ORD-SUSPENDED-PENDING",
+                      "status":"PENDING",
+                      "total_minor":15000000,
+                      "currency":"PHP",
+                      "created_at":"2026-10-01T00:00:00.000Z",
+                      "invoice_available":false,
+                      "continue_handle":"bke-order-continue-v1_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                      "cancel_handle":null,
+                      "items":[]
+                    }
+                  ]
+                }
+                """);
+        using (var client =
+            new HttpClient(inactiveAccountWithHandle))
+        using (var remote = new AccountPurchasesRemote(
+            client,
+            "https://purchases-cert.example.test"))
+        {
+            await RequireThrowsAsync<InvalidDataException>(
+                () => remote.GetAsync(
+                    token,
+                    CancellationToken.None),
+                "inactive account order mutation handle was accepted");
+        }
+
         var malformedItem = new PurchasesTransportHandler(
             HttpStatusCode.OK,
             """
