@@ -26,6 +26,10 @@ public static class LocalAgentContract
     public const string CheckUpdatesPath = "/v1/updates/check";
     public const string OpenUpdateCenterPath = "/v1/update-center/open";
     public const string PlatformAuthorityPath = "/v1/runtime/platform-authority";
+    public const string AccountRegistrationPreflightPath = "/v1/account/registration/preflight";
+    public const string AccountRegistrationRegisterPath = "/v1/account/registration/register";
+    public const string AccountRegistrationVerifyEmailPath = "/v1/account/registration/verify-email";
+    public const string AccountRegistrationResendPath = "/v1/account/registration/resend";
     public const string AccountSessionDeviceContextPath = "/v1/account-session/device-context";
     public const string AccountSessionCompletePath = "/v1/account-session/complete";
     public const string AccountSessionStartPath = "/v1/account-session/start";
@@ -85,6 +89,8 @@ public static class LocalAgentContract
     public const int AccountNotificationInboxContractVersion = 1;
     public const string PlatformAuthorityCapabilityId = "bke.platform-authority";
     public const int PlatformAuthorityContractVersion = 1;
+    public const string AccountRegistrationCapabilityId = "bke.account-registration";
+    public const int AccountRegistrationContractVersion = 1;
     public const string AccountSessionCapabilityId = "bke.account-session";
     public const int AccountSessionContractVersion = 1;
     public const string AccountPasswordChangeCapabilityId = "bke.account-password-change";

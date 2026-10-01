@@ -470,6 +470,14 @@ Require(MethodNames<IActivationService>().SetEquals(["ActivateAsync"]), "activat
 Require(MethodNames<ILicenseCenterService>().SetEquals(["OpenAsync"]), "License Center port drifted");
 Require(MethodNames<INotificationService>().SetEquals(["RequestAsync", "FeedAsync", "AccountFeedAsync", "AccountReceiptAsync", "MarkReadAsync", "DismissAsync", "UnreadCountAsync"]), "notification port drifted");
 Require(MethodNames<IUpdateService>().SetEquals(["CheckAsync", "OpenCenterAsync"]), "update port drifted");
+Require(
+    MethodNames<IAccountRegistrationService>().SetEquals([
+        "PreflightAsync",
+        "RegisterAsync",
+        "VerifyEmailAsync",
+        "ResendAsync",
+    ]),
+    "account registration service port drifted");
 Require(MethodNames<IAccountSessionService>().SetEquals(["CompleteAsync", "StartAsync", "StatusAsync", "LogoutAsync"]), "account-session port drifted");
 Require(MethodNames<IAccountPasswordChangeService>().SetEquals(["ChangeAsync"]), "account password-change port drifted");
 Require(
@@ -553,6 +561,7 @@ CertifyRuntimeEnvironmentBoundary();
 CertifyFreshStorageBootstrap(storage);
 CertifyNotificationSchemaUpgrade();
 await CertifyAuthenticatedAccountNotificationSync();
+await AccountRegistrationCertification.RunAsync();
 await CertifyAccountSessionStateMachine();
 await CertifyAccountPasswordChangeBoundary();
 await CertifyAccountMfaBoundary();
@@ -587,6 +596,7 @@ Require(notificationColumns.Contains("title") && notificationColumns.Contains("b
 Console.WriteLine("BKE Licensing Agent .NET 10 Gen2 contract certification: PASS");
 Console.WriteLine($"Routes certified: {contractRoutes.Count}");
 Console.WriteLine($"SQLite schema certified: {LocalAgentContract.StorageSchemaVersion}");
+Console.WriteLine("Native customer registration Legal-preflight, transient-credential, enumeration-resistance, single-attempt mutation, and strict transport boundary certified");
 Console.WriteLine("Account-session device authorization state machine certified");
 Console.WriteLine("Account password-change transient-secret, no-retry, and fail-closed boundary certified");
 Console.WriteLine("Account MFA session-custody, transient-secret, no-retry, and fail-closed boundary certified");
