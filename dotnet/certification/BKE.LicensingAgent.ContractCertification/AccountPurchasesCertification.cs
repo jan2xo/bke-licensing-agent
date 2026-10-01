@@ -8,7 +8,7 @@ using BKE.LicensingAgent.Infrastructure;
 static class AccountPurchasesCertification
 {
     private const string ExpectedDigitalSolutionsSource =
-        "511bd3309244a5dc8170558b5410fbf831facc9f";
+        "d1c35b3b2ce10a7c08b4e0ca5d0419884ec88d0e";
 
     public static async Task RunAsync()
     {
@@ -187,6 +187,8 @@ static class AccountPurchasesCertification
             response.Permissions.ViewAllLicenses &&
             response.Permissions.ManageLicenseSeats &&
             response.Permissions.ManageDevices &&
+            response.Permissions.ContinuePendingOrders &&
+            response.Permissions.CancelPendingOrders &&
             response.Licenses.Count == 1 &&
             response.Licenses[0].KeyLastFour == "ABCD" &&
             response.Licenses[0].MaxSeats == 2 &&
@@ -196,8 +198,13 @@ static class AccountPurchasesCertification
             response.Licenses[0].DeviceManagementHandle ==
                 "bke-license-device-v1_" + new string('c', 64) &&
             response.Subscriptions.Count == 1 &&
-            response.Orders.Count == 1 &&
-            response.Orders[0].Number == "ORD-CERT-001" &&
+            response.Orders.Count == 2 &&
+            response.Orders.Single(order =>
+                order.Status == "PENDING").ContinueHandle ==
+                "bke-order-continue-v1_" + new string('d', 64) &&
+            response.Orders.Single(order =>
+                order.Status == "PENDING").CancelHandle ==
+                "bke-order-cancel-v1_" + new string('e', 64) &&
             remote.Calls == 1 &&
             remote.LastAccessToken == "purchases-access-secret",
             "account purchases service mediation drifted");
@@ -337,7 +344,9 @@ static class AccountPurchasesCertification
                 "view_subscriptions":true,
                 "view_all_licenses":true,
                 "manage_license_seats":true,
-                "manage_devices":true
+                "manage_devices":true,
+                "continue_pending_orders":true,
+                "cancel_pending_orders":true
               },
               "licenses":[
                 {
@@ -374,7 +383,26 @@ static class AccountPurchasesCertification
                   "currency":"PHP",
                   "created_at":"2026-09-30T00:00:00.000Z",
                   "invoice_available":true,
+                  "continue_handle":null,
+                  "cancel_handle":null,
                   "payment_secret":"payment-secret-must-not-leak",
+                  "items":[
+                    {
+                      "product_name":"Render Dock",
+                      "edition_name":"Pro",
+                      "plan_name":"Annual"
+                    }
+                  ]
+                },
+                {
+                  "number":"ORD-CERT-PENDING",
+                  "status":"PENDING",
+                  "total_minor":15000000,
+                  "currency":"PHP",
+                  "created_at":"2026-10-01T00:00:00.000Z",
+                  "invoice_available":false,
+                  "continue_handle":"bke-order-continue-v1_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  "cancel_handle":"bke-order-cancel-v1_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                   "items":[
                     {
                       "product_name":"Render Dock",
@@ -399,7 +427,13 @@ static class AccountPurchasesCertification
                 result.Status == "ready" &&
                 result.Account?.Role == "OWNER" &&
                 result.Licenses?.Count == 1 &&
-                result.Orders?.Count == 1 &&
+                result.Orders?.Count == 2 &&
+                result.Orders.Single(order =>
+                    order.Status == "PENDING").ContinueHandle ==
+                    "bke-order-continue-v1_" + new string('d', 64) &&
+                result.Orders.Single(order =>
+                    order.Status == "PENDING").CancelHandle ==
+                    "bke-order-cancel-v1_" + new string('e', 64) &&
                 handler.RequestCount == 1 &&
                 handler.SawBearer &&
                 handler.SawProtocol &&
@@ -471,7 +505,9 @@ static class AccountPurchasesCertification
                 "view_subscriptions":true,
                 "view_all_licenses":true,
                 "manage_license_seats":true,
-                "manage_devices":true
+                "manage_devices":true,
+                "continue_pending_orders":true,
+                "cancel_pending_orders":true
               },
               "licenses":["not-an-object"],
               "subscriptions":[],
@@ -520,6 +556,8 @@ static class AccountPurchasesCertification
                 true,
                 true,
                 true,
+                true,
+                true,
                 true),
             [
                 new AccountPurchasesLicense(
@@ -553,6 +591,25 @@ static class AccountPurchasesCertification
                     "PHP",
                     "2026-09-30T00:00:00.000Z",
                     true,
+                    null,
+                    null,
+                    [
+                        new AccountPurchasesOrderItem(
+                            "Render Dock",
+                            "Pro",
+                            "Annual"),
+                    ]),
+                new AccountPurchasesOrder(
+                    "ORD-CERT-PENDING",
+                    "PENDING",
+                    15000000,
+                    "PHP",
+                    "2026-10-01T00:00:00.000Z",
+                    false,
+                    "bke-order-continue-v1_" +
+                        new string('d', 64),
+                    "bke-order-cancel-v1_" +
+                        new string('e', 64),
                     [
                         new AccountPurchasesOrderItem(
                             "Render Dock",

@@ -16,7 +16,9 @@ public sealed record AccountPurchasesPermissions(
     [property: JsonPropertyName("view_subscriptions")] bool ViewSubscriptions,
     [property: JsonPropertyName("view_all_licenses")] bool ViewAllLicenses,
     [property: JsonPropertyName("manage_license_seats")] bool ManageLicenseSeats,
-    [property: JsonPropertyName("manage_devices")] bool ManageDevices);
+    [property: JsonPropertyName("manage_devices")] bool ManageDevices,
+    [property: JsonPropertyName("continue_pending_orders")] bool ContinuePendingOrders,
+    [property: JsonPropertyName("cancel_pending_orders")] bool CancelPendingOrders);
 
 public sealed record AccountPurchasesLicense(
     [property: JsonPropertyName("product_name")] string ProductName,
@@ -52,6 +54,8 @@ public sealed record AccountPurchasesOrder(
     [property: JsonPropertyName("currency")] string Currency,
     [property: JsonPropertyName("created_at")] string CreatedAt,
     [property: JsonPropertyName("invoice_available")] bool InvoiceAvailable,
+    [property: JsonPropertyName("continue_handle"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContinueHandle,
+    [property: JsonPropertyName("cancel_handle"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CancelHandle,
     [property: JsonPropertyName("items")] IReadOnlyList<AccountPurchasesOrderItem> Items);
 
 public sealed record AccountPurchasesResponse(

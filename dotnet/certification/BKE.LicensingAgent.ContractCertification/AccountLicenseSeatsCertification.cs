@@ -8,7 +8,7 @@ using BKE.LicensingAgent.Infrastructure;
 static class AccountLicenseSeatsCertification
 {
     private const string ExpectedDigitalSolutionsSource =
-        "511bd3309244a5dc8170558b5410fbf831facc9f";
+        "d1c35b3b2ce10a7c08b4e0ca5d0419884ec88d0e";
 
     private static readonly string LicenseHandle =
         "bke-license-seat-v1_" + new string('a', 64);

@@ -41,6 +41,8 @@ public static class LocalAgentContract
     public const string AccountPrivacyListPath = "/v1/account/privacy/requests/list";
     public const string AccountPrivacyCreatePath = "/v1/account/privacy/requests/create";
     public const string AccountPurchasesPath = "/v1/account/purchases";
+    public const string AccountPendingOrderContinuePath = "/v1/account/orders/continue";
+    public const string AccountPendingOrderCancelPath = "/v1/account/orders/cancel";
     public const string AccountLicenseSeatsPath = "/v1/account/license-seats";
     public const string AccountLicenseSeatsManagePath = "/v1/account/license-seats/manage";
     public const string AccountLicenseDevicesPath = "/v1/account/license-devices";
@@ -87,6 +89,8 @@ public static class LocalAgentContract
     public const int AccountPrivacyContractVersion = 1;
     public const string AccountPurchasesCapabilityId = "bke.account-purchases";
     public const int AccountPurchasesContractVersion = 1;
+    public const string AccountPendingOrdersCapabilityId = "bke.account-pending-orders";
+    public const int AccountPendingOrdersContractVersion = 1;
     public const string AccountLicenseSeatsCapabilityId = "bke.account-license-seats";
     public const int AccountLicenseSeatsContractVersion = 1;
     public const string AccountLicenseDevicesCapabilityId = "bke.account-license-devices";

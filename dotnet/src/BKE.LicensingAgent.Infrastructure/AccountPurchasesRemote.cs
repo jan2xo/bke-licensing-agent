@@ -165,11 +165,17 @@ public sealed class AccountPurchasesRemote :
                 "manage_license_seats"),
             RequiredBoolean(
                 permissionsRoot,
-                "manage_devices"));
+                "manage_devices"),
+            RequiredBoolean(
+                permissionsRoot,
+                "continue_pending_orders"),
+            RequiredBoolean(
+                permissionsRoot,
+                "cancel_pending_orders"));
 
         var licenses = RequiredLicenses(root);
         var subscriptions = RequiredSubscriptions(root);
-        var orders = RequiredOrders(root);
+        var orders = RequiredOrders(root, permissions);
 
         return new RemoteAccountPurchasesResult(
             "ready",
@@ -356,20 +362,60 @@ public sealed class AccountPurchasesRemote :
     }
 
     private static IReadOnlyList<AccountPurchasesOrder>
-        RequiredOrders(JsonElement root)
+        RequiredOrders(
+            JsonElement root,
+            AccountPurchasesPermissions permissions)
     {
         var array = RequiredArray(root, "orders");
         var items = array.EnumerateArray()
             .Select(item =>
             {
                 RequireObjectItem(item, "orders");
+                var status = RequiredStatus(item, "status");
+                var continueHandle =
+                    OptionalOrderContinueHandle(
+                        item,
+                        "continue_handle");
+                var cancelHandle =
+                    OptionalOrderCancelHandle(
+                        item,
+                        "cancel_handle");
+
+                if (status != "PENDING" &&
+                    (continueHandle is not null ||
+                     cancelHandle is not null))
+                {
+                    throw new InvalidDataException(
+                        "Non-pending order exposed a management handle.");
+                }
+
+                if ((!permissions.ContinuePendingOrders &&
+                     continueHandle is not null) ||
+                    (!permissions.CancelPendingOrders &&
+                     cancelHandle is not null))
+                {
+                    throw new InvalidDataException(
+                        "Order management handle exceeded account permissions.");
+                }
+
+                if ((status == "PENDING" &&
+                     permissions.ContinuePendingOrders &&
+                     continueHandle is null) ||
+                    (status == "PENDING" &&
+                     permissions.CancelPendingOrders &&
+                     cancelHandle is null))
+                {
+                    throw new InvalidDataException(
+                        "Pending order management handle is missing.");
+                }
+
                 return new AccountPurchasesOrder(
                 RequiredBoundedString(
                     item,
                     "number",
                     1,
                     120),
-                RequiredStatus(item, "status"),
+                status,
                 RequiredNonNegativeInt(
                     item,
                     "total_minor"),
@@ -378,6 +424,8 @@ public sealed class AccountPurchasesRemote :
                 RequiredBoolean(
                     item,
                     "invoice_available"),
+                continueHandle,
+                cancelHandle,
                 RequiredOrderItems(item));
             })
             .ToArray();
@@ -652,6 +700,50 @@ public sealed class AccountPurchasesRemote :
             ? value.GetString()
             : throw new InvalidDataException(
                 $"Invalid {name}.");
+    }
+
+    private static string? OptionalOrderContinueHandle(
+        JsonElement root,
+        string name)
+    {
+        var value = OptionalString(root, name);
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                value,
+                "^bke-order-continue-v1_[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException(
+                $"Invalid {name}.");
+        }
+
+        return value;
+    }
+
+    private static string? OptionalOrderCancelHandle(
+        JsonElement root,
+        string name)
+    {
+        var value = OptionalString(root, name);
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                value,
+                "^bke-order-cancel-v1_[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException(
+                $"Invalid {name}.");
+        }
+
+        return value;
     }
 
     private static string? OptionalLicenseSeatManagementHandle(
