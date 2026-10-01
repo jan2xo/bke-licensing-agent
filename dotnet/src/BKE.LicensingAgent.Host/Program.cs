@@ -85,12 +85,6 @@ builder.Services.AddSingleton<IStandaloneSoftwareRepairer>(services =>
 builder.Services.AddSingleton<IStandaloneSoftwareRemover>(services =>
     services.GetRequiredService<PrivilegedUpdateCenterProvider>());
 builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
-builder.Services.AddSingleton<AccountRegistrationRemote>();
-builder.Services.AddSingleton<IAccountRegistrationRemote>(services =>
-    services.GetRequiredService<AccountRegistrationRemote>());
-builder.Services.AddSingleton<IAccountRegistrationService>(services =>
-    new AccountRegistrationService(
-        services.GetRequiredService<IAccountRegistrationRemote>()));
 builder.Services.AddSingleton<IAccountSessionRemote>(_ => new AccountSessionRemote());
 builder.Services.AddSingleton<IAccountSessionSecretStore>(_ => new WindowsDpapiAccountSessionSecretStore());
 builder.Services.AddSingleton<IAccountSessionService>(services => new AccountSessionService(
@@ -514,82 +508,6 @@ app.MapPost(LocalAgentContract.PlatformAuthorityPath, (
         runtimeEnvironment.Name,
         runtimeEnvironment.EffectivePlatformBaseUrl,
         null), statusCode: 200);
-});
-
-app.MapPost(LocalAgentContract.AccountRegistrationPreflightPath, async (
-    AccountRegistrationPreflightRequest request,
-    IAccountRegistrationService service,
-    CancellationToken cancellationToken) =>
-{
-    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
-    {
-        return AccountRegistrationPreflightInvalidRequest(
-            request.CorrelationId ?? string.Empty);
-    }
-
-    var response = await service.PreflightAsync(
-        request,
-        cancellationToken);
-    return Results.Json(response, statusCode: 200);
-});
-
-app.MapPost(LocalAgentContract.AccountRegistrationRegisterPath, async (
-    AccountRegistrationRequest request,
-    IAccountRegistrationService service,
-    CancellationToken cancellationToken) =>
-{
-    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
-        !ValidOrganizationEmail(request.Email) ||
-        !ValidOrganizationText(request.Name, 2, 100) ||
-        !ValidPasswordMaterial(request.Password) ||
-        !ValidRegistrationLegalVersionIds(
-            request.LegalVersionIds))
-    {
-        return AccountRegistrationInvalidRequest(
-            request.CorrelationId ?? string.Empty);
-    }
-
-    var response = await service.RegisterAsync(
-        request,
-        cancellationToken);
-    return Results.Json(response, statusCode: 200);
-});
-
-app.MapPost(LocalAgentContract.AccountRegistrationVerifyEmailPath, async (
-    AccountRegistrationVerifyEmailRequest request,
-    IAccountRegistrationService service,
-    CancellationToken cancellationToken) =>
-{
-    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
-        !ValidOrganizationEmail(request.Email) ||
-        !ValidRegistrationVerificationCode(request.Code))
-    {
-        return AccountRegistrationInvalidRequest(
-            request.CorrelationId ?? string.Empty);
-    }
-
-    var response = await service.VerifyEmailAsync(
-        request,
-        cancellationToken);
-    return Results.Json(response, statusCode: 200);
-});
-
-app.MapPost(LocalAgentContract.AccountRegistrationResendPath, async (
-    AccountRegistrationResendRequest request,
-    IAccountRegistrationService service,
-    CancellationToken cancellationToken) =>
-{
-    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
-        !ValidOrganizationEmail(request.Email))
-    {
-        return AccountRegistrationInvalidRequest(
-            request.CorrelationId ?? string.Empty);
-    }
-
-    var response = await service.ResendAsync(
-        request,
-        cancellationToken);
-    return Results.Json(response, statusCode: 200);
 });
 
 app.MapPost(LocalAgentContract.AccountSessionDeviceContextPath, (
@@ -1388,29 +1306,6 @@ static bool ValidAccountSessionCorrelationId(string? correlationId) =>
 static bool ValidPasswordMaterial(string? password) =>
     !string.IsNullOrEmpty(password) && password.Length <= 128;
 
-static bool ValidRegistrationLegalVersionIds(
-    IReadOnlyList<string>? versionIds) =>
-    versionIds is { Count: 2 } &&
-    versionIds.All(value =>
-        !string.IsNullOrWhiteSpace(value) &&
-        value.Length <= 256 &&
-        value.All(character => character >= 32)) &&
-    versionIds.Distinct(StringComparer.Ordinal).Count() == 2;
-
-static bool ValidRegistrationVerificationCode(string? code)
-{
-    const string alphabet =
-        "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    if (string.IsNullOrWhiteSpace(code))
-    {
-        return false;
-    }
-
-    var normalized = code.Trim().ToUpperInvariant();
-    return normalized.Length == 8 &&
-        normalized.All(alphabet.Contains);
-}
-
 static bool ValidMfaChallengeToken(string? token) =>
     !string.IsNullOrWhiteSpace(token) &&
     token.Length is >= 16 and <= 512 &&
@@ -1686,33 +1581,6 @@ static IResult PlatformAuthorityInvalidRequest() =>
         new PlatformAuthorityError(
             "INVALID_REQUEST",
             "The platform-authority request is invalid.",
-            false)),
-        statusCode: StatusCodes.Status400BadRequest);
-
-static IResult AccountRegistrationPreflightInvalidRequest(
-    string correlationId) =>
-    Results.Json(new AccountRegistrationPreflightResponse(
-        LocalAgentContract.AccountRegistrationCapabilityId,
-        LocalAgentContract.AccountRegistrationContractVersion,
-        "FAILED",
-        correlationId,
-        Array.Empty<AccountRegistrationLegalDocument>(),
-        new AccountRegistrationError(
-            "INVALID_REQUEST",
-            "The native registration preflight request is invalid.",
-            false)),
-        statusCode: StatusCodes.Status400BadRequest);
-
-static IResult AccountRegistrationInvalidRequest(
-    string correlationId) =>
-    Results.Json(new AccountRegistrationResponse(
-        LocalAgentContract.AccountRegistrationCapabilityId,
-        LocalAgentContract.AccountRegistrationContractVersion,
-        "INVALID_INPUT",
-        correlationId,
-        new AccountRegistrationError(
-            "INVALID_REQUEST",
-            "The native registration request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
