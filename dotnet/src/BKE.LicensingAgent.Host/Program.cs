@@ -136,6 +136,13 @@ builder.Services.AddSingleton<IAccountPurchasesService>(services => new AccountP
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountPurchasesRemote>()));
+builder.Services.AddSingleton<AccountPendingOrdersRemote>();
+builder.Services.AddSingleton<IAccountPendingOrdersRemote>(services =>
+    services.GetRequiredService<AccountPendingOrdersRemote>());
+builder.Services.AddSingleton<IAccountPendingOrdersService>(services => new AccountPendingOrdersService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountPendingOrdersRemote>()));
 builder.Services.AddSingleton<AccountLicenseSeatsRemote>();
 builder.Services.AddSingleton<IAccountLicenseSeatsRemote>(services =>
     services.GetRequiredService<AccountLicenseSeatsRemote>());
@@ -709,6 +716,42 @@ app.MapPost(LocalAgentContract.AccountPurchasesPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountPendingOrderContinuePath, async (
+    AccountPendingOrderContinueRequest request,
+    IAccountPendingOrdersService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPendingOrderContinueHandle(
+            request.OrderContinueHandle))
+    {
+        return AccountPendingOrderContinueInvalidRequest();
+    }
+
+    var response = await service.ContinueAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountPendingOrderCancelPath, async (
+    AccountPendingOrderCancelRequest request,
+    IAccountPendingOrdersService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPendingOrderCancelHandle(
+            request.OrderCancelHandle))
+    {
+        return AccountPendingOrderCancelInvalidRequest();
+    }
+
+    var response = await service.CancelAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountLicenseSeatsPath, async (
     AccountLicenseSeatsRequest request,
     IAccountLicenseSeatsService service,
@@ -1217,6 +1260,22 @@ static bool ValidLicenseSeatManageRequest(
     ValidLicenseSeatTargetHandle(
         request.TargetManagementHandle);
 
+static bool ValidPendingOrderContinueHandle(
+    string? handle) =>
+    !string.IsNullOrWhiteSpace(handle) &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        handle,
+        "^bke-order-continue-v1_[0-9a-f]{64}$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+static bool ValidPendingOrderCancelHandle(
+    string? handle) =>
+    !string.IsNullOrWhiteSpace(handle) &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        handle,
+        "^bke-order-cancel-v1_[0-9a-f]{64}$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
 static bool ValidLicenseDeviceManagementHandle(
     string? handle) =>
     !string.IsNullOrWhiteSpace(handle) &&
@@ -1517,6 +1576,29 @@ static IResult AccountPurchasesInvalidRequest() =>
         new AccountPurchasesError(
             "INVALID_REQUEST",
             "The account purchases request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountPendingOrderContinueInvalidRequest() =>
+    Results.Json(new AccountPendingOrderContinueResponse(
+        LocalAgentContract.AccountPendingOrdersCapabilityId,
+        LocalAgentContract.AccountPendingOrdersContractVersion,
+        "INVALID_INPUT",
+        null,
+        new AccountPendingOrderError(
+            "INVALID_REQUEST",
+            "The pending-order continuation request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountPendingOrderCancelInvalidRequest() =>
+    Results.Json(new AccountPendingOrderCancelResponse(
+        LocalAgentContract.AccountPendingOrdersCapabilityId,
+        LocalAgentContract.AccountPendingOrdersContractVersion,
+        "INVALID_INPUT",
+        new AccountPendingOrderError(
+            "INVALID_REQUEST",
+            "The pending-order cancellation request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
