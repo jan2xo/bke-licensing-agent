@@ -122,6 +122,13 @@ builder.Services.AddSingleton<IAccountMfaService>(services => new AccountMfaServ
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountMfaRemote>()));
+builder.Services.AddSingleton<AccountRecentAuthRemote>();
+builder.Services.AddSingleton<IAccountRecentAuthRemote>(services =>
+    services.GetRequiredService<AccountRecentAuthRemote>());
+builder.Services.AddSingleton<IAccountRecentAuthService>(services => new AccountRecentAuthService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountRecentAuthRemote>()));
 builder.Services.AddSingleton<AccountPrivacyRemote>();
 builder.Services.AddSingleton<IAccountPrivacyRemote>(services =>
     services.GetRequiredService<AccountPrivacyRemote>());
@@ -213,6 +220,13 @@ builder.Services.AddSingleton<IStoreGiftClaimRevealService>(services => new Stor
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IStoreGiftClaimRevealRemote>()));
+builder.Services.AddSingleton<StoreGiftClaimsRemote>();
+builder.Services.AddSingleton<IStoreGiftClaimsRemote>(services =>
+    services.GetRequiredService<StoreGiftClaimsRemote>());
+builder.Services.AddSingleton<IStoreGiftClaimsService>(services => new StoreGiftClaimsService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IStoreGiftClaimsRemote>()));
 builder.Services.AddSingleton<StandaloneProvisionAuthorizationRemote>();
 builder.Services.AddSingleton<IStandaloneProvisionAuthorizationRemote>(services =>
     services.GetRequiredService<StandaloneProvisionAuthorizationRemote>());
@@ -685,6 +699,43 @@ app.MapPost(LocalAgentContract.AccountMfaRecoveryRegeneratePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountRecentAuthStartPath, async (
+    AccountRecentAuthStartRequest request,
+    IAccountRecentAuthService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidPasswordMaterial(request.CurrentPassword))
+    {
+        return AccountRecentAuthInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.StartAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountRecentAuthCompletePath, async (
+    AccountRecentAuthCompleteRequest request,
+    IAccountRecentAuthService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidMfaChallengeToken(request.ChallengeToken) ||
+        !ValidMfaCode(request.Code))
+    {
+        return AccountRecentAuthInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.CompleteAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountPrivacyListPath, async (
     AccountPrivacyListRequest request,
     IAccountPrivacyService service,
@@ -1116,6 +1167,41 @@ app.MapPost(LocalAgentContract.StoreGiftClaimRevealPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.StoreGiftClaimsPath, async (
+    StoreGiftClaimsRequest request,
+    IStoreGiftClaimsService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return StoreGiftClaimsInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.ListAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.StoreGiftClaimPersistentRevealPath, async (
+    StoreGiftClaimPersistentRevealRequest request,
+    IStoreGiftClaimsService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidGiftClaimHandle(request.GiftClaimHandle))
+    {
+        return StoreGiftClaimPersistentRevealInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.RevealAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     SoftwareCatalogRequest request,
     ISoftwareCatalogService service,
@@ -1414,6 +1500,21 @@ static bool ValidClaimCode(string? code)
                 character is >= '0' and <= '9' ||
                 character is >= 'A' and <= 'F' ||
                 character is >= 'a' and <= 'f'));
+}
+
+static bool ValidGiftClaimHandle(string? value)
+{
+    const string prefix = "bke-gift-claim-v1_";
+    if (string.IsNullOrWhiteSpace(value) ||
+        !value.StartsWith(prefix, StringComparison.Ordinal) ||
+        value.Length != prefix.Length + 64)
+    {
+        return false;
+    }
+
+    return value[prefix.Length..].All(character =>
+        character is >= '0' and <= '9' ||
+        character is >= 'a' and <= 'f');
 }
 
 static bool ValidPurchasePlanId(string? purchasePlanId) =>
@@ -1936,6 +2037,52 @@ static IResult StoreGiftClaimRevealInvalidRequest(string correlationId) =>
         new StoreGiftClaimRevealError(
             "INVALID_REQUEST",
             "The Store gift Claim Code reveal request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountRecentAuthInvalidRequest(string correlationId) =>
+    Results.Json(new AccountRecentAuthResponse(
+        LocalAgentContract.AccountRecentAuthCapabilityId,
+        LocalAgentContract.AccountRecentAuthContractVersion,
+        "FAILED",
+        correlationId,
+        null,
+        null,
+        null,
+        null,
+        null,
+        new AccountRecentAuthError(
+            "INVALID_REQUEST",
+            "The recent-auth request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult StoreGiftClaimsInvalidRequest(string correlationId) =>
+    Results.Json(new StoreGiftClaimsResponse(
+        LocalAgentContract.StoreGiftClaimsCapabilityId,
+        LocalAgentContract.StoreGiftClaimsContractVersion,
+        "FAILED",
+        correlationId,
+        null,
+        Array.Empty<StoreGiftClaimItem>(),
+        new StoreGiftClaimsError(
+            "INVALID_REQUEST",
+            "The Gift Claim Code history request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult StoreGiftClaimPersistentRevealInvalidRequest(
+    string correlationId) =>
+    Results.Json(new StoreGiftClaimPersistentRevealResponse(
+        LocalAgentContract.StoreGiftClaimPersistentRevealCapabilityId,
+        LocalAgentContract.StoreGiftClaimPersistentRevealContractVersion,
+        "FAILED",
+        correlationId,
+        null,
+        null,
+        new StoreGiftClaimsError(
+            "INVALID_REQUEST",
+            "The persistent Gift Claim Code reveal request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
