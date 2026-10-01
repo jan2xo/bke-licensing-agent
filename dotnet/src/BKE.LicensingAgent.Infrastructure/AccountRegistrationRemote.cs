@@ -468,8 +468,8 @@ public sealed class AccountRegistrationRemote :
         return new RemoteAccountRegistrationMutationResult(
             normalized,
             error,
-            response.StatusCode is
-                (HttpStatusCode)429 or
+            response.StatusCode == (HttpStatusCode)429 ||
+            response.StatusCode ==
                 HttpStatusCode.ServiceUnavailable);
     }
 
