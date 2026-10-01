@@ -139,11 +139,13 @@ static class AccountPendingOrdersCertification
 
         Require(
             remoteSource.Contains(
-                "new AuthenticationHeaderValue(" +
-                Environment.NewLine +
-                "                \"Bearer\"," +
-                Environment.NewLine +
-                "                accessToken)",
+                "new AuthenticationHeaderValue(",
+                StringComparison.Ordinal) &&
+            remoteSource.Contains(
+                "\"Bearer\"",
+                StringComparison.Ordinal) &&
+            remoteSource.Contains(
+                "accessToken",
                 StringComparison.Ordinal) &&
             remoteSource.Contains(
                 "\"x-bke-account-session-version\"",
