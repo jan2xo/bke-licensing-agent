@@ -210,6 +210,10 @@ public sealed class AccountPendingOrdersService :
             "account_not_active" => "ACCOUNT_NOT_ACTIVE",
             "checkout_creation_in_progress" =>
                 "CHECKOUT_CREATION_IN_PROGRESS",
+            "legal_acceptance_required" =>
+                "LEGAL_ACCEPTANCE_REQUIRED",
+            "legal_reacceptance_required" =>
+                "LEGAL_REACCEPTANCE_REQUIRED",
             "invalid_input" => "INVALID_INPUT",
             _ => "FAILED",
         };
@@ -226,6 +230,10 @@ public sealed class AccountPendingOrdersService :
                 "Pending orders cannot be continued while the selected BKE account is inactive.",
             "checkout_creation_in_progress" =>
                 "Checkout creation is already in progress. Refresh purchases before trying again.",
+            "legal_acceptance_required" =>
+                "Current BKE Legal documents must be accepted before the pending order can continue.",
+            "legal_reacceptance_required" =>
+                "Updated BKE Legal documents must be accepted before the pending order can continue.",
             "rate_limited" =>
                 "Pending-order continuation is temporarily rate limited.",
             "invalid_input" =>
@@ -244,6 +252,10 @@ public sealed class AccountPendingOrdersService :
                 "This pending order is no longer available.",
             "account_not_active" =>
                 "Pending orders cannot be cancelled while the selected BKE account is inactive.",
+            "legal_acceptance_required" =>
+                "Current BKE Legal documents must be accepted before the pending order can be cancelled.",
+            "legal_reacceptance_required" =>
+                "Updated BKE Legal documents must be accepted before the pending order can be cancelled.",
             "rate_limited" =>
                 "Pending-order cancellation is temporarily rate limited.",
             "invalid_input" =>
