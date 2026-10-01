@@ -248,6 +248,13 @@ public sealed class PrivilegedUpdateCenterProvider :
         {
             throw;
         }
+        catch (ReleasePackageContractException)
+        {
+            return new StandaloneProvisioningResult(
+                "RELEASE_PACKAGE_INVALID",
+                "release_package_invalid",
+                false);
+        }
         catch
         {
             return new StandaloneProvisioningResult(
@@ -1785,10 +1792,17 @@ public sealed class PrivilegedUpdateCenterProvider :
             "stage");
         Directory.CreateDirectory(operationRoot);
 
-        ExtractUpdatePackage(
-            artifact,
-            stageRoot,
-            target.EntryPoint);
+        try
+        {
+            ExtractUpdatePackage(
+                artifact,
+                stageRoot,
+                target.EntryPoint);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new ReleasePackageContractException(exception);
+        }
 
         var transactionRoot = Path.Combine(
             runtimeRoot,
@@ -2900,6 +2914,15 @@ public sealed class PrivilegedUpdateCenterProvider :
         string Sha256,
         string EntryPoint,
         string DownloadUrl);
+
+    private sealed class ReleasePackageContractException :
+        Exception
+    {
+        public ReleasePackageContractException(Exception innerException)
+            : base("verified release package violates its signed installation contract", innerException)
+        {
+        }
+    }
 
     private sealed class GitHubReleasePackageException :
         Exception

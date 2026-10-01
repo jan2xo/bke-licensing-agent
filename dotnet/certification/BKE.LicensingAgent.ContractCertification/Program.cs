@@ -207,6 +207,17 @@ Require(
         "transferTimeoutSource.CancelAfter(GitHubAssetTransferTimeout)",
         StringComparison.Ordinal),
     "Standalone release acquisition regressed to an unbounded or control-plane-sized package timeout.");
+Require(
+    privilegedUpdateCenterSource.Contains(
+        "catch (ReleasePackageContractException)",
+        StringComparison.Ordinal) &&
+    privilegedUpdateCenterSource.Contains(
+        "\"RELEASE_PACKAGE_INVALID\"",
+        StringComparison.Ordinal) &&
+    privilegedUpdateCenterSource.Contains(
+        "throw new ReleasePackageContractException(exception);",
+        StringComparison.Ordinal),
+    "Standalone first-install package-contract failures are still flattened into privileged handoff failures.");
 Require(localApi.GetProperty("contract_id").GetString() == LocalAgentContract.ContractId, "contract id mismatch");
 Require(localApi.GetProperty("contract_version").GetInt32() == LocalAgentContract.ContractVersion, "contract version mismatch");
 Require(localApi.GetProperty("bind_host").GetString() == LocalAgentContract.BindHost, "bind host mismatch");
@@ -2801,6 +2812,47 @@ static async Task CertifySoftwareInstallBoundary()
             "bke-render-dock"),
         CancellationToken.None);
     Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful install denial was flattened");
+
+    var invalidPackage = new SoftwareInstallService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        inventory,
+        remote,
+        new FakeStandaloneSoftwareProvisioner(
+            new StandaloneProvisioningResult(
+                "RELEASE_PACKAGE_INVALID",
+                "release_package_invalid",
+                false)));
+    var invalidPackageResponse = await invalidPackage.InstallAsync(
+        new SoftwareInstallRequest(
+            "cert-install-invalid-package",
+            "bke-render-dock"),
+        CancellationToken.None);
+    Require(
+        invalidPackageResponse.Status == "FAILED" &&
+        invalidPackageResponse.State == "release_package_invalid" &&
+        invalidPackageResponse.Error is
+            {
+                Code: "RELEASE_PACKAGE_INVALID",
+                Retryable: false
+            } &&
+        invalidPackageResponse.Error.Message ==
+            "The verified release package does not match its signed installation contract.",
+        "invalid verified release package was flattened into a privileged handoff failure");
+
+    var invalidPackageWire = JsonSerializer.Serialize(
+        invalidPackageResponse);
+    Require(
+        !invalidPackageWire.Contains(
+            "Program Files",
+            StringComparison.OrdinalIgnoreCase) &&
+        !invalidPackageWire.Contains(
+            "github.com",
+            StringComparison.OrdinalIgnoreCase) &&
+        !invalidPackageWire.Contains(
+            "BKE_RENDER_DOCK",
+            StringComparison.Ordinal),
+        "invalid-package response leaked privileged path or release authority");
 }
 
 static async Task CertifySoftwareUpdateBoundary()
