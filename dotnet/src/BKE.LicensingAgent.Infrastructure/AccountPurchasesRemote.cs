@@ -389,21 +389,21 @@ public sealed class AccountPurchasesRemote :
                         "Non-pending order exposed a management handle.");
                 }
 
-                if (!permissions.ContinuePendingOrders &&
-                    continueHandle is not null ||
-                    !permissions.CancelPendingOrders &&
-                    cancelHandle is not null)
+                if ((!permissions.ContinuePendingOrders &&
+                     continueHandle is not null) ||
+                    (!permissions.CancelPendingOrders &&
+                     cancelHandle is not null))
                 {
                     throw new InvalidDataException(
                         "Order management handle exceeded account permissions.");
                 }
 
-                if (status == "PENDING" &&
-                    permissions.ContinuePendingOrders &&
-                    continueHandle is null ||
-                    status == "PENDING" &&
-                    permissions.CancelPendingOrders &&
-                    cancelHandle is null)
+                if ((status == "PENDING" &&
+                     permissions.ContinuePendingOrders &&
+                     continueHandle is null) ||
+                    (status == "PENDING" &&
+                     permissions.CancelPendingOrders &&
+                     cancelHandle is null))
                 {
                     throw new InvalidDataException(
                         "Pending order management handle is missing.");
