@@ -483,6 +483,12 @@ Require(
     ]),
     "account MFA service port drifted");
 Require(
+    MethodNames<IAccountRecentAuthService>().SetEquals([
+        "StartAsync",
+        "CompleteAsync",
+    ]),
+    "account recent-auth service port drifted");
+Require(
     MethodNames<IAccountPrivacyService>().SetEquals([
         "ListAsync",
         "CreateAsync",
@@ -534,6 +540,7 @@ Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store cata
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
 Require(MethodNames<IStoreCheckoutStartService>().SetEquals(["StartAsync"]), "Store checkout-start port drifted");
 Require(MethodNames<IStoreTrialStartService>().SetEquals(["StartAsync"]), "Store trial-start port drifted");
+Require(MethodNames<IStoreGiftClaimsService>().SetEquals(["ListAsync", "RevealAsync"]), "persistent Gift Claim Code port drifted");
 Require(MethodNames<IStoreCheckoutStatusService>().SetEquals(["CheckAsync"]), "Store checkout-status port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
@@ -563,6 +570,7 @@ await CertifyStoreCheckoutStartBoundary();
 await StoreTrialStartCertification.RunAsync();
 await CertifyStoreCheckoutStatusBoundary();
 await StoreGiftClaimRevealCertification.RunAsync();
+await PersistentGiftClaimCertification.RunAsync();
 await CertifySoftwareCatalogBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
@@ -595,6 +603,7 @@ Console.WriteLine("Store checkout-start intent, no-retry mutation, strict-parser
 Console.WriteLine("Store self-service trial-start session-custody, selected-edition, single-attempt ambiguity, strict-parser, and identifier boundary certified");
 Console.WriteLine("Store checkout-status read-only recovery, strict-parser, and secret boundary certified");
 Console.WriteLine("Store GIFT Claim Code session, strict-parser, no-persistence, and secret boundary certified");
+Console.WriteLine("Persistent Gift Claim Code metadata/recent-auth/reveal session-custody, opaque-handle, transient-secret, bounded-read, single-attempt-reveal, and identifier boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");
 Console.WriteLine("Software install authority, release-source, and secret boundary certified");
 Console.WriteLine("Software Update newer-version authority and rollback boundary certified");
