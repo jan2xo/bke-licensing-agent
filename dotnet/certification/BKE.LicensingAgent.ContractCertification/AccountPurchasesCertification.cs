@@ -8,7 +8,7 @@ using BKE.LicensingAgent.Infrastructure;
 static class AccountPurchasesCertification
 {
     private const string ExpectedDigitalSolutionsSource =
-        "01035e8d57d4600b8b7199cee046fe45de3fb569";
+        "511bd3309244a5dc8170558b5410fbf831facc9f";
 
     public static async Task RunAsync()
     {
