@@ -533,6 +533,7 @@ Require(MethodNames<IClaimCodeRedemptionService>().SetEquals(["RedeemAsync"]), "
 Require(MethodNames<IStoreCatalogService>().SetEquals(["GetAsync"]), "Store catalog port drifted");
 Require(MethodNames<IStoreCheckoutReviewService>().SetEquals(["ReviewAsync"]), "Store checkout-review port drifted");
 Require(MethodNames<IStoreCheckoutStartService>().SetEquals(["StartAsync"]), "Store checkout-start port drifted");
+Require(MethodNames<IStoreTrialStartService>().SetEquals(["StartAsync"]), "Store trial-start port drifted");
 Require(MethodNames<IStoreCheckoutStatusService>().SetEquals(["CheckAsync"]), "Store checkout-status port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
@@ -559,6 +560,7 @@ await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
 await CertifyStoreCheckoutReviewBoundary();
 await CertifyStoreCheckoutStartBoundary();
+await StoreTrialStartCertification.RunAsync();
 await CertifyStoreCheckoutStatusBoundary();
 await StoreGiftClaimRevealCertification.RunAsync();
 await CertifySoftwareCatalogBoundary();
@@ -590,6 +592,7 @@ Console.WriteLine("Claim Code redemption session, secret, and single-attempt bou
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-start intent, no-retry mutation, strict-parser, and secret boundary certified");
+Console.WriteLine("Store self-service trial-start session-custody, selected-edition, single-attempt ambiguity, strict-parser, and identifier boundary certified");
 Console.WriteLine("Store checkout-status read-only recovery, strict-parser, and secret boundary certified");
 Console.WriteLine("Store GIFT Claim Code session, strict-parser, no-persistence, and secret boundary certified");
 Console.WriteLine("Software catalog authority and secret boundary certified");

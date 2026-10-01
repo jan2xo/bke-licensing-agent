@@ -192,6 +192,13 @@ builder.Services.AddSingleton<IStoreCheckoutStartService>(services => new StoreC
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IStoreCheckoutStartRemote>()));
+builder.Services.AddSingleton<StoreTrialStartRemote>();
+builder.Services.AddSingleton<IStoreTrialStartRemote>(services =>
+    services.GetRequiredService<StoreTrialStartRemote>());
+builder.Services.AddSingleton<IStoreTrialStartService>(services => new StoreTrialStartService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IStoreTrialStartRemote>()));
 builder.Services.AddSingleton<StoreCheckoutStatusRemote>();
 builder.Services.AddSingleton<IStoreCheckoutStatusRemote>(services =>
     services.GetRequiredService<StoreCheckoutStatusRemote>());
@@ -1061,6 +1068,24 @@ app.MapPost(LocalAgentContract.StoreCheckoutStartPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.StoreTrialStartPath, async (
+    StoreTrialStartRequest request,
+    IStoreTrialStartService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidStoreEditionId(request.EditionId))
+    {
+        return StoreTrialStartInvalidRequest(
+            request.CorrelationId ?? string.Empty);
+    }
+
+    var response = await service.StartAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.StoreCheckoutStatusPath, async (
     StoreCheckoutStatusRequest request,
     IStoreCheckoutStatusService service,
@@ -1395,6 +1420,11 @@ static bool ValidPurchasePlanId(string? purchasePlanId) =>
     !string.IsNullOrWhiteSpace(purchasePlanId) &&
     purchasePlanId.Length <= 256 &&
     purchasePlanId.All(character => character >= 32);
+
+static bool ValidStoreEditionId(string? editionId) =>
+    !string.IsNullOrWhiteSpace(editionId) &&
+    editionId.Length <= 256 &&
+    editionId.All(character => character >= 32);
 
 static bool ValidLegalVersionIds(IReadOnlyList<string>? legalVersionIds) =>
     legalVersionIds is { Count: >= 2 and <= 3 } &&
@@ -1858,6 +1888,20 @@ static IResult StoreCheckoutStartInvalidRequest(string correlationId) =>
         new StoreCheckoutStartError(
             "INVALID_REQUEST",
             "The Store checkout-start request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult StoreTrialStartInvalidRequest(string correlationId) =>
+    Results.Json(new StoreTrialStartResponse(
+        LocalAgentContract.StoreTrialStartCapabilityId,
+        LocalAgentContract.StoreTrialStartContractVersion,
+        "FAILED",
+        correlationId,
+        null,
+        null,
+        new StoreTrialStartError(
+            "INVALID_REQUEST",
+            "The Store trial-start request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
