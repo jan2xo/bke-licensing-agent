@@ -231,7 +231,7 @@ static class AccountPendingOrdersCertification
             continued,
             cancelled,
         });
-        foreach (var forbidden in new[]
+        foreach (var forbiddenValue in new[]
         {
             "pending-order-access-secret",
             "pending-order-refresh-secret",
@@ -241,7 +241,7 @@ static class AccountPendingOrdersCertification
         {
             Require(
                 !wire.Contains(
-                    forbidden,
+                    forbiddenValue,
                     StringComparison.Ordinal),
                 "pending-order response leaked Agent/cloud authority material");
         }
