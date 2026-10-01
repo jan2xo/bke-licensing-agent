@@ -495,6 +495,12 @@ Require(
     ]),
     "account license seat service port drifted");
 Require(
+    MethodNames<IAccountLicenseDevicesService>().SetEquals([
+        "GetAsync",
+        "DeactivateAsync",
+    ]),
+    "account authorized-device service port drifted");
+Require(
     MethodNames<IAccountOrganizationService>().SetEquals([
         "GetAsync",
         "CreateAsync",
@@ -529,6 +535,7 @@ await CertifyAccountMfaBoundary();
 await AccountPrivacyCertification.RunAsync();
 await AccountPurchasesCertification.RunAsync();
 await AccountLicenseSeatsCertification.RunAsync();
+await AccountLicenseDevicesCertification.RunAsync();
 await AccountOrganizationCertification.RunAsync();
 await CertifyClaimCodeRedemptionBoundary();
 await CertifyStoreCatalogBoundary();
