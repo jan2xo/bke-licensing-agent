@@ -187,6 +187,8 @@ static class AccountPurchasesCertification
             response.Permissions.ViewAllLicenses &&
             response.Permissions.ManageLicenseSeats &&
             response.Permissions.ManageDevices &&
+            response.Permissions.ContinuePendingOrders &&
+            response.Permissions.CancelPendingOrders &&
             response.Licenses.Count == 1 &&
             response.Licenses[0].KeyLastFour == "ABCD" &&
             response.Licenses[0].MaxSeats == 2 &&
@@ -196,8 +198,13 @@ static class AccountPurchasesCertification
             response.Licenses[0].DeviceManagementHandle ==
                 "bke-license-device-v1_" + new string('c', 64) &&
             response.Subscriptions.Count == 1 &&
-            response.Orders.Count == 1 &&
-            response.Orders[0].Number == "ORD-CERT-001" &&
+            response.Orders.Count == 2 &&
+            response.Orders.Single(order =>
+                order.Status == "PENDING").ContinueHandle ==
+                "bke-order-continue-v1_" + new string('d', 64) &&
+            response.Orders.Single(order =>
+                order.Status == "PENDING").CancelHandle ==
+                "bke-order-cancel-v1_" + new string('e', 64) &&
             remote.Calls == 1 &&
             remote.LastAccessToken == "purchases-access-secret",
             "account purchases service mediation drifted");
