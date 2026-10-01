@@ -143,6 +143,13 @@ builder.Services.AddSingleton<IAccountLicenseSeatsService>(services => new Accou
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountLicenseSeatsRemote>()));
+builder.Services.AddSingleton<AccountLicenseDevicesRemote>();
+builder.Services.AddSingleton<IAccountLicenseDevicesRemote>(services =>
+    services.GetRequiredService<AccountLicenseDevicesRemote>());
+builder.Services.AddSingleton<IAccountLicenseDevicesService>(services => new AccountLicenseDevicesService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountLicenseDevicesRemote>()));
 builder.Services.AddSingleton<AccountOrganizationRemote>();
 builder.Services.AddSingleton<IAccountOrganizationRemote>(services =>
     services.GetRequiredService<AccountOrganizationRemote>());
@@ -735,6 +742,44 @@ app.MapPost(LocalAgentContract.AccountLicenseSeatsManagePath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.AccountLicenseDevicesPath, async (
+    AccountLicenseDevicesRequest request,
+    IAccountLicenseDevicesService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidLicenseDeviceManagementHandle(
+            request.LicenseManagementHandle))
+    {
+        return AccountLicenseDevicesInvalidRequest();
+    }
+
+    var response = await service.GetAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountLicenseDevicesManagePath, async (
+    AccountLicenseDeviceDeactivateRequest request,
+    IAccountLicenseDevicesService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidLicenseDeviceManagementHandle(
+            request.LicenseManagementHandle) ||
+        !ValidLicenseDeviceTargetHandle(
+            request.DeviceManagementHandle))
+    {
+        return AccountLicenseDeviceDeactivateInvalidRequest();
+    }
+
+    var response = await service.DeactivateAsync(
+        request,
+        cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.AccountOrganizationOverviewPath, async (
     AccountOrganizationOverviewRequest request,
     IAccountOrganizationService service,
@@ -1172,6 +1217,22 @@ static bool ValidLicenseSeatManageRequest(
     ValidLicenseSeatTargetHandle(
         request.TargetManagementHandle);
 
+static bool ValidLicenseDeviceManagementHandle(
+    string? handle) =>
+    !string.IsNullOrWhiteSpace(handle) &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        handle,
+        "^bke-license-device-v1_[0-9a-f]{64}$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+static bool ValidLicenseDeviceTargetHandle(
+    string? handle) =>
+    !string.IsNullOrWhiteSpace(handle) &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        handle,
+        "^bke-license-device-target-v1_[0-9a-f]{64}$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
 static bool ValidOrganizationMemberManageRequest(
     AccountOrganizationMemberManageRequest request) =>
     ValidOrganizationMemberManagementHandle(
@@ -1480,6 +1541,30 @@ static IResult AccountLicenseSeatsManageInvalidRequest() =>
         new AccountLicenseSeatsError(
             "INVALID_REQUEST",
             "The account license seat change request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountLicenseDevicesInvalidRequest() =>
+    Results.Json(new AccountLicenseDevicesResponse(
+        LocalAgentContract.AccountLicenseDevicesCapabilityId,
+        LocalAgentContract.AccountLicenseDevicesContractVersion,
+        "INVALID_INPUT",
+        null,
+        Array.Empty<AccountAuthorizedDevice>(),
+        new AccountLicenseDevicesError(
+            "INVALID_REQUEST",
+            "The account authorized-device request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountLicenseDeviceDeactivateInvalidRequest() =>
+    Results.Json(new AccountLicenseDeviceDeactivateResponse(
+        LocalAgentContract.AccountLicenseDevicesCapabilityId,
+        LocalAgentContract.AccountLicenseDevicesContractVersion,
+        "INVALID_INPUT",
+        new AccountLicenseDevicesError(
+            "INVALID_REQUEST",
+            "The account authorized-device deactivation request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
