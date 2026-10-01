@@ -136,6 +136,13 @@ builder.Services.AddSingleton<IAccountPurchasesService>(services => new AccountP
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<IAccountPurchasesRemote>()));
+builder.Services.AddSingleton<AccountBillingRemote>();
+builder.Services.AddSingleton<IAccountBillingRemote>(services =>
+    services.GetRequiredService<AccountBillingRemote>());
+builder.Services.AddSingleton<IAccountBillingService>(services => new AccountBillingService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<IAccountBillingRemote>()));
 builder.Services.AddSingleton<AccountPendingOrdersRemote>();
 builder.Services.AddSingleton<IAccountPendingOrdersRemote>(services =>
     services.GetRequiredService<AccountPendingOrdersRemote>());
@@ -710,6 +717,20 @@ app.MapPost(LocalAgentContract.AccountPurchasesPath, async (
     if (!ValidAccountSessionCorrelationId(request.CorrelationId))
     {
         return AccountPurchasesInvalidRequest();
+    }
+
+    var response = await service.GetAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
+app.MapPost(LocalAgentContract.AccountBillingPath, async (
+    AccountBillingRequest request,
+    IAccountBillingService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId))
+    {
+        return AccountBillingInvalidRequest();
     }
 
     var response = await service.GetAsync(request, cancellationToken);
@@ -1576,6 +1597,21 @@ static IResult AccountPurchasesInvalidRequest() =>
         new AccountPurchasesError(
             "INVALID_REQUEST",
             "The account purchases request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult AccountBillingInvalidRequest() =>
+    Results.Json(new AccountBillingResponse(
+        LocalAgentContract.AccountBillingCapabilityId,
+        LocalAgentContract.AccountBillingContractVersion,
+        "INVALID_INPUT",
+        null,
+        null,
+        Array.Empty<AccountBillingInvoice>(),
+        Array.Empty<AccountBillingPayment>(),
+        new AccountBillingError(
+            "INVALID_REQUEST",
+            "The account billing request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
