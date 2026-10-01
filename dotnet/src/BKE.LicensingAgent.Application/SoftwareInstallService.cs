@@ -299,6 +299,8 @@ public sealed class SoftwareInstallService : ISoftwareInstallService
             "The authorized GitHub Release package metadata is invalid.",
         "RELEASE_DOWNLOAD_FAILED" =>
             "The authorized GitHub Release package could not be downloaded.",
+        "RELEASE_PACKAGE_INVALID" =>
+            "The verified release package does not match its signed installation contract.",
         "PRIVILEGED_HANDOFF_FAILED" =>
             "The verified package could not be handed to the privileged installer.",
         _ => "The verified installation could not be started.",
