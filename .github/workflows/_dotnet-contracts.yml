@@ -46,6 +46,59 @@ jobs:
           dotnet build dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release
           dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
 
+      - name: Prove PREPRODUCTION update-authority key custody tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_root="$RUNNER_TEMP/bke-agent-update-preproduction-key"
+          package_root="$RUNNER_TEMP/bke-agent-update-preproduction-package"
+          rm -rf "$key_root" "$package_root"
+          trap 'rm -rf "$key_root" "$package_root"' EXIT
+
+          dotnet run \
+            --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
+            --configuration Release --no-build -- \
+            generate-preproduction-update-key \
+            --key-id bke-agent-update-preproduction-contract-v1 \
+            --output-dir "$key_root" \
+            --authorization AUTHORIZE_OFFLINE_PREPRODUCTION_KEY_GENERATION
+
+          test -s "$key_root/BKE-UPDATE-AUTHORITY-PRIVATE.pem"
+          test -s "$key_root/bke-agent-update-preproduction-contract-v1.json"
+          grep -q "BEGIN PRIVATE KEY" "$key_root/BKE-UPDATE-AUTHORITY-PRIVATE.pem"
+          grep -q "NOT FOR PRODUCTION" "$key_root/PREPRODUCTION-PRIVATE-KEY.txt"
+
+          if dotnet run \
+            --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
+            --configuration Release --no-build -- \
+            generate-preproduction-update-key \
+            --key-id bke-agent-update-preproduction-forbidden-v1 \
+            --output-dir "$GITHUB_WORKSPACE/.forbidden-preproduction-update-key" \
+            --authorization AUTHORIZE_OFFLINE_PREPRODUCTION_KEY_GENERATION; then
+            echo "Preproduction key tooling wrote private material inside Git tree"
+            exit 1
+          fi
+          test ! -e "$GITHUB_WORKSPACE/.forbidden-preproduction-update-key"
+
+          dotnet run \
+            --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj \
+            --configuration Release --no-build -- \
+            generate-disposable-trust \
+            --root "$package_root" \
+            --target-key-id preproduction-contract-target-v1 \
+            --policy-id preproduction-contract-policy-v1 \
+            --update-key-json "$key_root/bke-agent-update-preproduction-contract-v1.json"
+
+          cmp \
+            "$key_root/bke-agent-update-preproduction-contract-v1.json" \
+            "$package_root/update-authority-keys/bke-agent-update-preproduction-contract-v1.json"
+
+          test ! -e "$package_root/BKE-UPDATE-AUTHORITY-PRIVATE.pem"
+          if grep -R -l "BEGIN PRIVATE KEY" "$package_root"; then
+            echo "Private key material entered Agent package trust"
+            exit 1
+          fi
+
       - name: Run .NET contract certifications
         run: |
           dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
