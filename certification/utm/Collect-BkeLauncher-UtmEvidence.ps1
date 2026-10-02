@@ -15,6 +15,10 @@ param(
     [string]$AgentSourceSha,
 
     [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[0-9a-fA-F]{40}$")]
+    [string]$DemoAppSourceSha,
+
+    [Parameter(Mandatory = $true)]
     [ValidatePattern("^[0-9a-fA-F]{64}$")]
     [string]$ParentInstallerSha256,
 
@@ -58,6 +62,7 @@ Write-JsonEvidence "00-stack-provenance.json" ([ordered]@{
     digital_solutions_source_sha = $DigitalSolutionsSourceSha.ToLowerInvariant()
     launcher_source_sha = $LauncherSourceSha.ToLowerInvariant()
     agent_source_sha = $AgentSourceSha.ToLowerInvariant()
+    demo_app_source_sha = $DemoAppSourceSha.ToLowerInvariant()
     parent_installer_sha256 = $ParentInstallerSha256.ToLowerInvariant()
     certification_state = "PREPRODUCTION_DISPOSABLE_UTM"
 })
