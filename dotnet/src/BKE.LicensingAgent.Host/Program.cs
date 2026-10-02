@@ -101,6 +101,9 @@ builder.Services.AddSingleton<ISoftwareCatalogService>(services => new SoftwareC
     services.GetRequiredService<IAccountSessionSecretStore>(),
     services.GetRequiredService<ISoftwareCatalogRemote>(),
     services.GetRequiredService<ILocalProductInventory>()));
+builder.Services.AddSingleton<ILauncherPluginAuthorizationService>(services =>
+    new LauncherPluginAuthorizationService(
+        services.GetRequiredService<ISoftwareCatalogService>()));
 builder.Services.AddSingleton<ClaimCodeRedemptionRemote>();
 builder.Services.AddSingleton<IClaimCodeRedemptionRemote>(services =>
     services.GetRequiredService<ClaimCodeRedemptionRemote>());
@@ -1216,6 +1219,22 @@ app.MapPost(LocalAgentContract.SoftwareCatalogPath, async (
     return Results.Json(response, statusCode: 200);
 });
 
+app.MapPost(LocalAgentContract.LauncherPluginAuthorizePath, async (
+    LauncherPluginAuthorizeRequest request,
+    ILauncherPluginAuthorizationService service,
+    CancellationToken cancellationToken) =>
+{
+    if (!ValidAccountSessionCorrelationId(request.CorrelationId) ||
+        !ValidSoftwareProductId(request.ProductId) ||
+        !ValidSoftwareVersion(request.Version))
+    {
+        return LauncherPluginAuthorizeInvalidRequest();
+    }
+
+    var response = await service.AuthorizeAsync(request, cancellationToken);
+    return Results.Json(response, statusCode: 200);
+});
+
 app.MapPost(LocalAgentContract.SoftwareInstallPath, async (
     SoftwareInstallRequest request,
     ISoftwareInstallService service,
@@ -1543,6 +1562,14 @@ static bool ValidSoftwareProductId(string? productId) =>
         character is >= 'a' and <= 'z' ||
         character is >= '0' and <= '9' ||
         character == '-');
+
+static bool ValidSoftwareVersion(string? version) =>
+    !string.IsNullOrWhiteSpace(version) &&
+    version.Length <= 128 &&
+    System.Text.RegularExpressions.Regex.IsMatch(
+        version,
+        @"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
 static bool ValidNotificationContext(string? productId, string? version, string? installationId) =>
     ValidProductContext(productId, version, installationId) &&
@@ -2095,6 +2122,19 @@ static IResult SoftwareCatalogInvalidRequest() =>
         new SoftwareCatalogError(
             "INVALID_REQUEST",
             "The software catalog request is invalid.",
+            false)),
+        statusCode: StatusCodes.Status400BadRequest);
+
+static IResult LauncherPluginAuthorizeInvalidRequest() =>
+    Results.Json(new LauncherPluginAuthorizeResponse(
+        LocalAgentContract.LauncherPluginAuthorizeCapabilityId,
+        LocalAgentContract.LauncherPluginAuthorizeContractVersion,
+        "FAILED",
+        false,
+        "invalid_request",
+        new LauncherPluginAuthorizeError(
+            "INVALID_REQUEST",
+            "The Launcher plugin authorization request is invalid.",
             false)),
         statusCode: StatusCodes.Status400BadRequest);
 
