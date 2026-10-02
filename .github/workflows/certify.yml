@@ -13,6 +13,10 @@ on:
         description: Space/comma-separated certification targets
         required: true
         type: string
+      digital_solutions_sha:
+        description: Exact Digital Solutions SHA required by cross-repo self-update proof
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -33,6 +37,7 @@ jobs:
     outputs:
       source_sha: ${{ steps.plan.outputs.source_sha }}
       targets_json: ${{ steps.plan.outputs.targets_json }}
+      digital_solutions_sha: ${{ steps.plan.outputs.digital_solutions_sha }}
     steps:
       - id: plan
         name: Resolve exact head and targets
@@ -40,6 +45,7 @@ jobs:
         env:
           DISPATCH_SHA: ${{ inputs.source_sha }}
           DISPATCH_TARGETS: ${{ inputs.targets }}
+          DISPATCH_DS_SHA: ${{ inputs.digital_solutions_sha }}
         with:
           script: |
             const allowedTargets = [
@@ -50,9 +56,11 @@ jobs:
               "preflight",
               "utm-trust",
               "acquisition",
+              "self-update",
             ];
             let sourceSha;
             let requested;
+            let digitalSolutionsSha = "";
 
             if (context.eventName === "issue_comment") {
               const association = context.payload.comment?.author_association ?? "NONE";
@@ -75,9 +83,19 @@ jobs:
               requested = (context.payload.comment?.body ?? "")
                 .replace(/^\/certify\s+/i, "")
                 .trim();
+
+              const rawTokens = requested.split(/[\s,]+/).map(v => v.trim()).filter(Boolean);
+              const sourceToken = rawTokens.find(v => /^sha:[0-9a-f]{40}$/i.test(v));
+              const dsToken = rawTokens.find(v => /^ds:[0-9a-f]{40}$/i.test(v));
+              if (sourceToken) sourceSha = sourceToken.slice(4);
+              if (dsToken) digitalSolutionsSha = dsToken.slice(3);
+              requested = rawTokens
+                .filter(v => !/^sha:[0-9a-f]{40}$/i.test(v) && !/^ds:[0-9a-f]{40}$/i.test(v))
+                .join(" ");
             } else {
               sourceSha = (process.env.DISPATCH_SHA ?? "").trim();
               requested = (process.env.DISPATCH_TARGETS ?? "").trim();
+              digitalSolutionsSha = (process.env.DISPATCH_DS_SHA ?? "").trim();
             }
 
             if (!/^[0-9a-f]{40}$/i.test(sourceSha ?? "")) {
@@ -100,12 +118,19 @@ jobs:
               return;
             }
 
+            if (unique.includes("self-update") && !/^[0-9a-f]{40}$/i.test(digitalSolutionsSha)) {
+              core.setFailed("self-update certification requires an exact Digital Solutions SHA via ds:<sha> or digital_solutions_sha.");
+              return;
+            }
+
             core.setOutput("source_sha", sourceSha);
             core.setOutput("targets_json", JSON.stringify(unique));
+            core.setOutput("digital_solutions_sha", digitalSolutionsSha);
             await core.summary
               .addHeading("BKE Agent certification plan")
               .addRaw(`Exact source SHA: \`${sourceSha}\`\n\n`)
               .addRaw(`Targets: \`${unique.join(", ")}\`\n`)
+              .addRaw(digitalSolutionsSha ? `Digital Solutions SHA: \`${digitalSolutionsSha}\`\n` : "")
               .write();
 
   contracts:
@@ -157,10 +182,18 @@ jobs:
     with:
       source_sha: ${{ needs.plan.outputs.source_sha }}
 
+  self-update:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'self-update')
+    uses: ./.github/workflows/dotnet-signed-self-update.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+      digital_solutions_sha: ${{ needs.plan.outputs.digital_solutions_sha }}
+
   required-certification:
     name: Required certification
     if: always() && needs.plan.result == 'success'
-    needs: [plan, contracts, windows-x64, installer, rollback, preflight, utm-trust, acquisition]
+    needs: [plan, contracts, windows-x64, installer, rollback, preflight, utm-trust, acquisition, self-update]
     runs-on: ubuntu-latest
     env:
       SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
@@ -172,6 +205,7 @@ jobs:
       PREFLIGHT_RESULT: ${{ needs.preflight.result }}
       UTM_TRUST_RESULT: ${{ needs.utm-trust.result }}
       ACQUISITION_RESULT: ${{ needs.acquisition.result }}
+      SELF_UPDATE_RESULT: ${{ needs.self-update.result }}
     steps:
       - name: Verify declared certification plan
         shell: bash
@@ -186,6 +220,7 @@ jobs:
             preflight: process.env.PREFLIGHT_RESULT,
             "utm-trust": process.env.UTM_TRUST_RESULT,
             acquisition: process.env.ACQUISITION_RESULT,
+            "self-update": process.env.SELF_UPDATE_RESULT,
           };
           const failed = targets
             .filter(target => results[target] !== "success")

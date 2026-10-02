@@ -13,6 +13,7 @@ Retained proof targets:
 - preflight
 - utm-trust
 - acquisition
+- self-update (requires explicit exact Digital Solutions SHA)
 
 Rules:
 - no automatic `pull_request` certification
@@ -23,7 +24,6 @@ Rules:
 Legacy-only for now:
 - `pr-guard.yml` — automatic PR trigger removed
 - `dotnet-production-signing.yml` — privileged production action, not certification
-- `dotnet-signed-self-update.yml` — historical cross-repo proof hard-pins an old Digital Solutions SHA; must be rebuilt with explicit immutable cross-repo input before reactivation
 - `dotnet-desktop-ui.yml` — standalone historical manual proof not currently part of the retained certification graph
 
 Historical workflows are preserved verbatim under `.github/legacy-workflows/2026-10-02/`.
