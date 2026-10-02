@@ -2,11 +2,6 @@ name: Agent .NET contract certification
 
 on:
   workflow_call:
-    inputs:
-      source_sha:
-        description: Exact Agent commit SHA to certify
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -19,13 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-
-      - name: Verify exact source checkout
-        env:
-          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          ref: ${{ github.sha }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"

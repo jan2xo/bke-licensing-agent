@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: phase10-rollback-${{ inputs.source_sha }}
+  group: phase10-rollback-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -31,8 +31,6 @@ jobs:
   dotnet-contracts:
     name: Fast contract gate
     uses: ./.github/workflows/_dotnet-contracts.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
 
   baseline-package:
     name: Healthy 2.0.0 baseline artifact

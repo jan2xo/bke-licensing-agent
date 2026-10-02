@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: phase11-preflight-${{ inputs.source_sha }}
+  group: phase11-preflight-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -29,8 +29,6 @@ jobs:
   dotnet-contracts:
     name: Fast contract gate
     uses: ./.github/workflows/_dotnet-contracts.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
 
   installer-package:
     name: Build unsigned x64 package

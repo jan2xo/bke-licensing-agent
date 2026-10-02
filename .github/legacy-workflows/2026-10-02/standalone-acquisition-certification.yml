@@ -1,0 +1,197 @@
+name: Standalone acquisition exact-provider certification
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent source SHA to certify
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Agent source SHA to certify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-acquisition-${{ inputs.source_sha }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  AGENT_VERSION: "2.0.0"
+  SERVICE_NAME: BKE-Licensing-Agent
+
+jobs:
+  windows-x64-system-acquisition:
+    name: Real provider + GitHub release under SYSTEM
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out exact Agent source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact source checkout
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Agent source checkout drifted: expected $env:SOURCE_SHA, got $actual" }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build certification and release tooling
+        shell: pwsh
+        run: |
+          dotnet build dotnet/certification/BKE.LicensingAgent.StandaloneAcquisitionCertification/BKE.LicensingAgent.StandaloneAcquisitionCertification.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Standalone acquisition certification build failed." }
+          dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Release tooling build failed." }
+
+      - name: Build canonical Agent x64 installer
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture x64
+          if ($LASTEXITCODE -ne 0) { throw "Agent x64 support payload publish failed." }
+
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release --no-build -- generate-disposable-trust --root dist/windows --target-key-id acquisition-parent-target --policy-id acquisition-parent-policy --update-key-id acquisition-parent-update
+          if ($LASTEXITCODE -ne 0) { throw "Agent disposable installer trust generation failed." }
+
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-service
+          if ($LASTEXITCODE -ne 0) { throw "Agent x64 service publish failed." }
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-runtime
+          if ($LASTEXITCODE -ne 0) { throw "Agent x64 runtime publish failed." }
+
+          $iscc = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
+          & $iscc packaging/windows/bke-licensing-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "Agent x64 installer compile failed." }
+
+      - name: Install canonical Agent x64 package
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP "standalone-acquisition-agent-install.log"
+          $process = Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "Agent install failed: $($process.ExitCode)"
+          }
+          $service = Get-Service -Name $env:SERVICE_NAME -ErrorAction Stop
+          $service.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
+          $config = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\privileged-update.json"
+          if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "Installed Agent privileged-update.json is missing." }
+
+      - name: Generate and install x64-only disposable Render Dock target trust
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP "render-dock-target-trust"
+          $x64 = Join-Path $bundle "x64"
+          New-Item -ItemType Directory -Force $x64 | Out-Null
+          Copy-Item certification/utm/Install-RenderDock-UtmTargetTrust.ps1 $bundle
+          Copy-Item certification/utm/Remove-RenderDock-UtmTargetTrust.ps1 $bundle
+
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release --no-build -- generate-disposable-target-policy --output-dir "$x64" --product-id "bke-render-dock" --platform "windows" --architecture "x86_64" --install-root 'C:\Program Files\BKE Digital Solutions\Render Dock' --entry-point 'RENDER DOCK.exe' --target-key-id "utm-render-dock-x64-target-v1" --policy-id "utm-render-dock-windows-x64-v1" --revision "1"
+          if ($LASTEXITCODE -ne 0) { throw "Disposable Render Dock target policy generation failed." }
+
+          powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $bundle "Install-RenderDock-UtmTargetTrust.ps1") -Architecture x64
+          if ($LASTEXITCODE -ne 0) { throw "Disposable Render Dock target trust install failed." }
+
+          "TRUST_BUNDLE=$bundle" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish exact x64 acquisition certification executable
+        shell: pwsh
+        run: |
+          dotnet publish dotnet/certification/BKE.LicensingAgent.StandaloneAcquisitionCertification/BKE.LicensingAgent.StandaloneAcquisitionCertification.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false --output dist/standalone-acquisition-cert
+          if ($LASTEXITCODE -ne 0) { throw "Standalone acquisition certification publish failed." }
+          $exe = "dist/standalone-acquisition-cert/BKE.LicensingAgent.StandaloneAcquisitionCertification.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Standalone acquisition certification executable is missing." }
+
+      - name: Run real provider and helper under NT AUTHORITY SYSTEM
+        shell: pwsh
+        run: |
+          $cert = (Resolve-Path "dist/standalone-acquisition-cert/BKE.LicensingAgent.StandaloneAcquisitionCertification.exe").Path
+          $evidenceDir = Join-Path $env:RUNNER_TEMP "standalone-acquisition-evidence"
+          New-Item -ItemType Directory -Force $evidenceDir | Out-Null
+          $evidence = Join-Path $evidenceDir "acquisition.json"
+          $taskName = "BKE-Standalone-Acquisition-$([Guid]::NewGuid().ToString('N'))"
+          $argument = '--output "' + $evidence + '" --source-sha ' + $env:SOURCE_SHA
+
+          $action = New-ScheduledTaskAction -Execute $cert -Argument $argument
+          $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+          Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+
+          try {
+            Start-ScheduledTask -TaskName $taskName
+            $deadline = (Get-Date).AddMinutes(12)
+            do {
+              Start-Sleep -Seconds 2
+              $task = Get-ScheduledTask -TaskName $taskName
+              $info = Get-ScheduledTaskInfo -TaskName $taskName
+              if ($task.State -ne "Running" -and $info.LastRunTime -gt [DateTime]::MinValue) { break }
+            } while ((Get-Date) -lt $deadline)
+
+            if ($task.State -eq "Running") { throw "SYSTEM acquisition certification timed out." }
+            if (Test-Path -LiteralPath $evidence) { Get-Content -LiteralPath $evidence }
+            if ($info.LastTaskResult -ne 0) { throw "SYSTEM acquisition certification failed with task result $($info.LastTaskResult)." }
+            if (-not (Test-Path -LiteralPath $evidence -PathType Leaf)) { throw "SYSTEM acquisition certification did not emit evidence." }
+
+            $result = Get-Content -LiteralPath $evidence -Raw | ConvertFrom-Json
+            if ($result.status -ne "PASS") { throw "SYSTEM acquisition evidence did not report PASS." }
+            if ($result.identity -ne "NT AUTHORITY\SYSTEM") { throw "Acquisition certification did not execute as SYSTEM." }
+            if ($result.process_architecture -ne "X64") { throw "Acquisition certification process was not x64." }
+            if ([int64]$result.artifact_bytes -ne 54167312) { throw "Render Dock x64 release bytes drifted." }
+            if ([string]$result.artifact_sha256 -ne "916931fb2efe5fb26720e0f150bdef290f064780f534dcfd96577e1fda45ffa0") { throw "Render Dock x64 release hash drifted." }
+
+            Copy-Item -LiteralPath $evidence -Destination "standalone-acquisition-evidence.json"
+          }
+          finally {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+          }
+
+      - name: Hash installed evidence target
+        shell: pwsh
+        run: |
+          $entry = "C:\Program Files\BKE Digital Solutions\Render Dock\RENDER DOCK.exe"
+          if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) { throw "Render Dock entry point is missing after acquisition certification." }
+          $hash = (Get-FileHash -LiteralPath $entry -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  RENDER DOCK.exe" | Set-Content standalone-acquisition-entrypoint.sha256 -Encoding ascii
+          Get-Content standalone-acquisition-entrypoint.sha256
+
+      - name: Remove disposable target trust
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:TRUST_BUNDLE) {
+            $remove = Join-Path $env:TRUST_BUNDLE "Remove-RenderDock-UtmTargetTrust.ps1"
+            if (Test-Path -LiteralPath $remove -PathType Leaf) {
+              powershell -NoProfile -ExecutionPolicy Bypass -File $remove -Architecture x64
+            }
+          }
+
+      - name: Upload acquisition certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-acquisition-system-evidence
+          path: |
+            standalone-acquisition-evidence.json
+            standalone-acquisition-entrypoint.sha256
+          if-no-files-found: warn
+          retention-days: 14

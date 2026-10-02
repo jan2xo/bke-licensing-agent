@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   workflow_call:
     inputs:
       source_sha:
@@ -12,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: agent-ci-${{ inputs.source_sha }}
+  group: agent-ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -23,8 +25,6 @@ jobs:
   dotnet-contracts:
     name: Fast contract gate
     uses: ./.github/workflows/_dotnet-contracts.yml
-    with:
-      source_sha: ${{ inputs.source_sha }}
 
   windows-native:
     name: Native Windows x64 payload
