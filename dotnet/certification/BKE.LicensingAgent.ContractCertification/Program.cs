@@ -30,6 +30,101 @@ var utmWorkflowSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
 var intentCertificationSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "certify.yml"));
+var activeWorkflowDirectory = Path.Combine(".github", "workflows");
+var activeWorkflowNames = Directory
+    .GetFiles(activeWorkflowDirectory, "*.yml")
+    .Select(Path.GetFileName)
+    .OrderBy(name => name, StringComparer.Ordinal)
+    .ToArray();
+var expectedActiveWorkflowNames = new[]
+{
+    "_dotnet-contracts.yml",
+    "_intent-contracts.yml",
+    "certify.yml",
+    "ci.yml",
+    "dotnet-broken-update-rollback.yml",
+    "dotnet-production-installer.yml",
+    "dotnet-production-release-preflight.yml",
+    "standalone-acquisition-certification.yml",
+    "utm-disposable-target-trust.yml",
+}.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+
+Require(
+    activeWorkflowNames.SequenceEqual(expectedActiveWorkflowNames),
+    "Active Agent workflow surface is not the declared intentional certification graph.");
+
+foreach (var workflowName in expectedActiveWorkflowNames)
+{
+    var workflowSource = File.ReadAllText(
+        Path.Combine(activeWorkflowDirectory, workflowName));
+    var permissionsIndex = workflowSource.IndexOf(
+        "\npermissions:",
+        StringComparison.Ordinal);
+    var jobsIndex = workflowSource.IndexOf(
+        "\njobs:",
+        StringComparison.Ordinal);
+    var boundaryCandidates = new[] { permissionsIndex, jobsIndex }
+        .Where(index => index >= 0)
+        .ToArray();
+    var triggerBoundary = boundaryCandidates.Length == 0
+        ? workflowSource.Length
+        : boundaryCandidates.Min();
+    var triggerSource = workflowSource[..triggerBoundary];
+
+    Require(
+        !triggerSource.Contains(
+            "\n  pull_request:",
+            StringComparison.Ordinal),
+        $"Agent workflow {workflowName} must not certify automatically on pull_request.");
+    Require(
+        !triggerSource.Contains(
+            "\n  push:",
+            StringComparison.Ordinal),
+        $"Agent workflow {workflowName} must not certify automatically on push.");
+}
+
+var legacyWorkflowDirectory = Path.Combine(
+    ".github",
+    "legacy-workflows",
+    "2026-10-02");
+foreach (var legacyOnly in new[]
+{
+    "pr-guard.yml",
+    "dotnet-production-signing.yml",
+    "dotnet-signed-self-update.yml",
+    "dotnet-desktop-ui.yml",
+})
+{
+    Require(
+        File.Exists(Path.Combine(legacyWorkflowDirectory, legacyOnly)),
+        $"Legacy Agent workflow archive is missing {legacyOnly}.");
+    Require(
+        !File.Exists(Path.Combine(activeWorkflowDirectory, legacyOnly)),
+        $"Legacy-only Agent workflow {legacyOnly} was reactivated.");
+}
+
+var exactDotnetContractsSource = File.ReadAllText(
+    Path.Combine(activeWorkflowDirectory, "_dotnet-contracts.yml"));
+Require(
+    exactDotnetContractsSource.Contains(
+        "source_sha:",
+        StringComparison.Ordinal) &&
+    exactDotnetContractsSource.Contains(
+        "ref: ${{ inputs.source_sha }}",
+        StringComparison.Ordinal) &&
+    exactDotnetContractsSource.Contains(
+        "Verify exact source checkout",
+        StringComparison.Ordinal),
+    "Agent reusable .NET contracts are not exact-source-SHA certified.");
+Require(
+    !intentCertificationSource.Contains(
+        "dotnet-signed-self-update.yml",
+        StringComparison.Ordinal) &&
+    !intentCertificationSource.Contains(
+        "\"self-update\"",
+        StringComparison.Ordinal),
+    "Stale hard-pinned self-update certification must remain legacy-only.");
+
 var privilegedUpdateCenterSource = File.ReadAllText(
     Path.Combine(
         "dotnet",
