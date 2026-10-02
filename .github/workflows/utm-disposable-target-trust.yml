@@ -134,6 +134,8 @@ jobs:
           grep -Fq '05-customer-software-proof.json' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
           grep -Fq 'RequireCustomerSoftwareReady' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
           grep -Fq 'customer_software_ready' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
+          grep -Fq 'demo_app_source_sha' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
+          grep -Fq 'DemoAppSourceSha' "$root/UTM-E2E-RUNBOOK.md"
 
           echo "Disposable BKE customer-path evidence contract: PASS"
 
