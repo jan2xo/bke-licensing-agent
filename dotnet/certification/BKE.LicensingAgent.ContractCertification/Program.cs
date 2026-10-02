@@ -195,6 +195,18 @@ var hostSource = File.ReadAllText(
         "src",
         "BKE.LicensingAgent.Host",
         "Program.cs"));
+Require(
+    hostSource.Contains(
+        "LocalAgentContract.LauncherPluginAuthorizePath",
+        StringComparison.Ordinal) &&
+    hostSource.Contains(
+        "ILauncherPluginAuthorizationService",
+        StringComparison.Ordinal) &&
+    hostSource.Contains(
+        "LauncherPluginAuthorizeInvalidRequest",
+        StringComparison.Ordinal),
+    "Agent Host does not compose the Launcher-plugin authorization capability.");
+
 var accountMfaRemoteSource = File.ReadAllText(
     Path.Combine(
         "dotnet",
