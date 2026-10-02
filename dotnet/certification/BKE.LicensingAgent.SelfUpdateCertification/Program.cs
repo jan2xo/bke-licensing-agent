@@ -190,7 +190,7 @@ static void RunExternalFixture(string fixturePath)
 {
     using var source = JsonDocument.Parse(File.ReadAllText(fixturePath));
     var root = source.RootElement;
-    if (root.GetProperty("schema").GetString() != "bke.agent-self-update-cross-repository-fixture.v1")
+    if (root.GetProperty("schema").GetString() != "bke.agent-self-update-cross-repo-fixture.v1")
         throw new InvalidDataException("unexpected cross-repository fixture schema");
     if (root.GetProperty("source").GetString() != "bke-digital-solutions")
         throw new InvalidDataException("unexpected cross-repository fixture source");
