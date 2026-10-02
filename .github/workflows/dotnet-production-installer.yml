@@ -1,0 +1,430 @@
+name: .NET-only Gen2 production installer
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-production-installer-${{ inputs.source_sha }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  AGENT_VERSION: "2.0.0"
+  SERVICE_NAME: BKE-Licensing-Agent
+
+jobs:
+  dotnet-contracts:
+    name: Fast contract gate
+    uses: ./.github/workflows/_dotnet-contracts.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+
+  installer-package:
+    name: Build immutable x64 installer package
+    needs: dotnet-contracts
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact source checkout
+        shell: pwsh
+        run: |
+          $actual=(git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Agent source checkout drifted: $actual" }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Publish native .NET x64 support payloads
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture x64
+
+      - name: Generate disposable package trust with .NET
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id dotnet-installer-target-v1 --policy-id dotnet-installer-only --update-key-id dotnet-installer-update-v1
+          if ($LASTEXITCODE -ne 0) { throw "disposable trust generation failed" }
+
+      - name: Publish x64 service/runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-service | Out-Null
+          New-Item -ItemType Directory -Force dist/windows/bke-licensing-agent-runtime | Out-Null
+
+          dotnet publish dotnet/src/BKE.LicensingAgent.Bootstrap/BKE.LicensingAgent.Bootstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-service
+          if ($LASTEXITCODE -ne 0) { throw "x64 bootstrap publish failed" }
+          dotnet publish dotnet/src/BKE.LicensingAgent.Host/BKE.LicensingAgent.Host.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:BKEAgentRuntimeBridge=true -p:Version=$env:AGENT_VERSION --output dist/windows/bke-licensing-agent-runtime
+          if ($LASTEXITCODE -ne 0) { throw "x64 runtime publish failed" }
+
+      - name: Verify every packaged executable is x64
+        shell: pwsh
+        run: |
+          function Assert-PeMachine([string]$Path,[int]$Expected) {
+            $bytes=[IO.File]::ReadAllBytes((Resolve-Path $Path))
+            $offset=[BitConverter]::ToInt32($bytes,0x3c)
+            $signature="PE"+[char]0+[char]0
+            if ([Text.Encoding]::ASCII.GetString($bytes,$offset,4) -ne $signature) { throw "invalid PE: $Path" }
+            $machine=[BitConverter]::ToUInt16($bytes,$offset+4)
+            if ($machine -ne $Expected) { throw ("wrong PE machine {0}: 0x{1:X4}" -f $Path,$machine) }
+          }
+          foreach ($path in @(
+            "dist/windows/bke-licensing-agent-service/bke-licensing-agent-service.exe",
+            "dist/windows/bke-licensing-agent-runtime/bke-licensing-agent-runtime.exe",
+            "dist/windows/bke-license-center-x64/bke-license-center.exe",
+            "dist/windows/bke-updater-core-x64/bke-updater-core.exe",
+            "dist/windows/bke-privileged-provisioner-x64/bke-privileged-provisioner.exe",
+            "dist/windows/bke-root-cleanup-x64/bke-root-cleanup.exe"
+          )) { Assert-PeMachine $path 0x8664 }
+
+          $installerDefinition=Get-Content packaging/windows/bke-licensing-agent.iss -Raw
+          if (!$installerDefinition.Contains("ArchitecturesAllowed=x64compatible")) { throw "Agent installer is not x64-compatible gated." }
+          if (!$installerDefinition.Contains("ArchitecturesInstallIn64BitMode=x64compatible")) { throw "Agent installer 64-bit mode is not x64-compatible gated." }
+
+      - name: Compile canonical x64 installer
+        shell: pwsh
+        run: |
+          $iscc=Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Inno Setup 6\ISCC.exe"
+          & $iscc packaging/windows/bke-licensing-agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "x64 installer compile failed" }
+
+      - name: Build immutable installer package manifest
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/package | Out-Null
+          $installer = Get-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe"
+          $manifest = [ordered]@{
+            schema = "bke.agent-installer-package.v2"
+            status = "PREPRODUCTION"
+            production_ready = $false
+            source_sha = $env:SOURCE_SHA
+            version = $env:AGENT_VERSION
+            trust = "DISPOSABLE_PREPRODUCTION"
+            platform = "windows"
+            application_architecture = "x64"
+            hardware_architecture_selection = "NONE"
+            installer = [ordered]@{
+              file = $installer.Name
+              sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              bytes = $installer.Length
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content dist/package/PACKAGE-MANIFEST.json -Encoding utf8
+          Get-Content dist/package/PACKAGE-MANIFEST.json
+
+      - name: Upload immutable installer package boundary
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-installer-package
+          path: |
+            dist/installer/BKE-Licensing-Agent-${{ env.AGENT_VERSION }}-Windows-x64.exe
+            dist/package/PACKAGE-MANIFEST.json
+          if-no-files-found: error
+          retention-days: 2
+
+  defender-scan:
+    name: Defender scan
+    needs: installer-package
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Download immutable installer package
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-installer-package
+          path: dist
+
+      - name: Verify immutable installer package
+        uses: ./.github/actions/verify-installer-package
+        with:
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
+
+      - name: Defender scan installers
+        shell: pwsh
+        run: |
+          $platformRoot=Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform"
+          $mp=Get-ChildItem $platformRoot -Filter MpCmdRun.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $mp) { $fallback=Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"; if (Test-Path $fallback) { $mp=Get-Item $fallback } }
+          if ($null -eq $mp) { throw "Defender unavailable" }
+          $path = "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe"
+          & $mp.FullName -Scan -ScanType 3 -File (Resolve-Path $path).Path -DisableRemediation
+          if ($LASTEXITCODE -ne 0) { throw "Defender failed for $path" }
+
+  fresh-install:
+    name: Fresh install + runtime health
+    needs: installer-package
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Download immutable installer package
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-installer-package
+          path: dist
+
+      - name: Verify immutable installer package
+        uses: ./.github/actions/verify-installer-package
+        with:
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
+
+      - name: Fresh-install canonical x64 .NET-only Agent
+        shell: pwsh
+        run: |
+          $installer=(Resolve-Path "dist/installer/BKE-Licensing-Agent-2.0.0-Windows-x64.exe").Path
+          $log=Join-Path $env:RUNNER_TEMP "dotnet-only-install.log"
+          $p=Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { if (Test-Path $log) { Get-Content $log }; throw "installer failed: $($p.ExitCode)" }
+
+          $svc=Get-Service -Name $env:SERVICE_NAME -ErrorAction SilentlyContinue
+          if ($null -eq $svc) {
+            if (Test-Path $log) {
+              Write-Host "===== INNO INSTALL LOG ====="
+              Get-Content $log
+              Write-Host "===== END INNO INSTALL LOG ====="
+            }
+            throw "BKE-Licensing-Agent service is missing after installer exit zero"
+          }
+          $svc.WaitForStatus("Running",[TimeSpan]::FromSeconds(30))
+          $root=Join-Path $env:ProgramFiles "BKE Digital Solutions\Licensing Agent"
+
+          foreach ($path in @(
+            (Join-Path $root "service\bke-licensing-agent-service.exe"),
+            (Join-Path $root "runtime\bke-licensing-agent-runtime.exe"),
+            (Join-Path $root "license-center\bke-license-center.exe"),
+            (Join-Path $root "updater\bke-updater-core.exe"),
+            (Join-Path $root "provisioning\bke-privileged-provisioner.exe"),
+            (Join-Path $root "root-cleanup\bke-root-cleanup.exe")
+          )) { if (!(Test-Path $path)) { throw "installed .NET payload missing: $path" } }
+
+          $rootCleanupSmoke = Start-Process -FilePath (Join-Path $root "root-cleanup\bke-root-cleanup.exe") -ArgumentList "--smoke" -Wait -PassThru
+          if ($rootCleanupSmoke.ExitCode -ne 0) { throw "installed root cleanup smoke failed: $($rootCleanupSmoke.ExitCode)" }
+
+          $licenseCenterSmoke = Start-Process -FilePath (Join-Path $root "license-center\bke-license-center.exe") -ArgumentList "--smoke" -Wait -PassThru
+          if ($licenseCenterSmoke.ExitCode -ne 0) { throw "installed .NET License Center smoke failed: $($licenseCenterSmoke.ExitCode)" }
+
+          $deadline=(Get-Date).AddSeconds(45)
+          do {
+            try {
+              $response=Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:43873/license-center?product_id=dotnet-only-health&version=2.0.0&installation_id=installer-health" -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { break }
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          } while ((Get-Date) -lt $deadline)
+          if ($null -eq $response -or $response.StatusCode -ne 200) { throw ".NET-only local API did not become healthy" }
+
+          $record=Get-CimInstance Win32_Service -Filter "Name='$env:SERVICE_NAME'"
+          if ($record.StartMode -ne "Auto") { throw "service is not Automatic" }
+          if ($record.StartName -notin @("LocalSystem","NT AUTHORITY\SYSTEM")) { throw "service identity drifted" }
+
+          $privilegedConfigPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\privileged-update.json"
+          if (!(Test-Path $privilegedConfigPath)) {
+            throw ".NET provisioner did not create privileged-update.json"
+          }
+
+          $privilegedConfig = Get-Content $privilegedConfigPath -Raw | ConvertFrom-Json
+          $expectedUpdater = Join-Path $root "updater\bke-updater-core.exe"
+          if ([IO.Path]::GetFullPath([string]$privilegedConfig.helper_executable) -ne [IO.Path]::GetFullPath($expectedUpdater)) {
+            throw "privileged updater helper path drifted: $($privilegedConfig.helper_executable)"
+          }
+
+          $pythonResidue = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Stop |
+            Where-Object {
+              $_.Extension -in @(".py",".pyc",".pyd") -or
+              $_.Name -match "^python\d+(?:\.\d+)?\.dll$" -or
+              $_.Name -eq "base_library.zip"
+            }
+          if ($pythonResidue) {
+            $pythonResidue | ForEach-Object { Write-Error "Retired Python residue: $($_.FullName)" }
+            throw "Python/PyInstaller residue remains in canonical .NET-only installation"
+          }
+
+          Write-Host ".NET-only canonical x64 fresh install: PASS"
+
+  root-cleanup:
+    name: Managed cleanup + fail-closed legacy
+    needs: installer-package
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download immutable installer package
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-installer-package
+          path: dist
+
+      - name: Verify immutable installer package
+        uses: ./.github/actions/verify-installer-package
+        with:
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
+
+      - name: Install x64 Agent prerequisite for cleanup certification
+        shell: pwsh
+        run: |
+          $installer=(Resolve-Path "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe").Path
+          $log=Join-Path $env:RUNNER_TEMP "agent-cleanup-prerequisite-install.log"
+          $p=Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$log") -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log }
+            throw "cleanup prerequisite installer failed: $($p.ExitCode)"
+          }
+          $svc=Get-Service -Name $env:SERVICE_NAME -ErrorAction SilentlyContinue
+          if ($null -eq $svc) { throw "BKE-Licensing-Agent service is missing after cleanup prerequisite install." }
+          $svc.WaitForStatus("Running",[TimeSpan]::FromSeconds(30))
+
+      - name: Certify root cleanup managed removal and fail-closed legacy handling
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramFiles "BKE Digital Solutions\Licensing Agent"
+          $cleanup = Join-Path $root "root-cleanup\bke-root-cleanup.exe"
+          if (!(Test-Path $cleanup)) { throw "installed root cleanup helper is missing" }
+
+          $sentinelRoot = Join-Path $env:RUNNER_TEMP "bke-root-cleanup-user-data"
+          $sentinel = Join-Path $sentinelRoot "sentinel.txt"
+          New-Item -ItemType Directory -Force $sentinelRoot | Out-Null
+          "preserve-me" | Set-Content $sentinel -Encoding utf8
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --seed-managed-product
+          if ($LASTEXITCODE -ne 0) { throw "managed root-cleanup fixture seeding failed" }
+
+          $managedRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Certification Product"
+          if (!(Test-Path $managedRoot)) { throw "managed root-cleanup fixture was not created" }
+
+          & $cleanup --remove-managed-products
+          $managedCleanupExit = $LASTEXITCODE
+          if ($managedCleanupExit -ne 0) { throw "managed root cleanup failed: $managedCleanupExit" }
+          if (Test-Path $managedRoot) { throw "managed product root survived root cleanup" }
+          if (!(Test-Path $sentinel)) { throw "unrelated user-data sentinel was removed" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --assert-product-absent bke-certification-product
+          if ($LASTEXITCODE -ne 0) { throw "managed product inventory row survived root cleanup" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --seed-legacy-product
+          if ($LASTEXITCODE -ne 0) { throw "legacy root-cleanup fixture seeding failed" }
+
+          $legacyRoot = Join-Path $env:ProgramFiles "BKE Digital Solutions\Certification Legacy Product"
+          if (!(Test-Path $legacyRoot)) { throw "legacy root-cleanup fixture was not created" }
+
+          & $cleanup --remove-managed-products
+          $legacyCleanupExit = $LASTEXITCODE
+          if ($legacyCleanupExit -ne 20) { throw "LEGACY_UNKNOWN root cleanup did not fail closed with exit 20: $legacyCleanupExit" }
+          if (!(Test-Path $legacyRoot)) { throw "LEGACY_UNKNOWN product was modified by root cleanup" }
+          if (!(Test-Path $sentinel)) { throw "unrelated user-data sentinel was removed during fail-closed cleanup" }
+
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release -- --assert-product-present bke-certification-legacy
+          if ($LASTEXITCODE -ne 0) { throw "LEGACY_UNKNOWN inventory row was modified by root cleanup" }
+
+          Write-Host "BKE root cleanup functional certification: PASS"
+
+  evidence:
+    name: Evidence + final candidates
+    needs: [installer-package, defender-scan, fresh-install, root-cleanup]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Download immutable installer package
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-installer-package
+          path: dist
+
+      - name: Verify immutable installer package
+        uses: ./.github/actions/verify-installer-package
+        with:
+          source_sha: ${{ env.SOURCE_SHA }}
+          agent_version: ${{ env.AGENT_VERSION }}
+
+      - name: Assemble final PREPRODUCTION evidence
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/final-evidence | Out-Null
+          Copy-Item dist/package/PACKAGE-MANIFEST.json dist/final-evidence/
+          Copy-Item "dist/installer/BKE-Licensing-Agent-$($env:AGENT_VERSION)-Windows-x64.exe" dist/final-evidence/
+          @(
+            "PREPRODUCTION ONLY",
+            "Disposable trust / unsigned certification artifacts.",
+            "Do not publish to production catalog or represent as production-ready."
+          ) | Set-Content dist/final-evidence/NOT-PRODUCTION.txt -Encoding utf8
+
+      - name: Upload .NET-only candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: BKE-Licensing-Agent-2.0.0-Windows-x64-DOTNET-ONLY
+          path: dist/final-evidence/**
+          if-no-files-found: error
+          retention-days: 14
+
+  required-certification:
+    name: Required installer certification
+    if: ${{ always() }}
+    needs:
+      - dotnet-contracts
+      - installer-package
+      - defender-scan
+      - fresh-install
+      - root-cleanup
+      - evidence
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every installer module
+        env:
+          CONTRACTS: ${{ needs.dotnet-contracts.result }}
+          PACKAGE: ${{ needs.installer-package.result }}
+          DEFENDER: ${{ needs.defender-scan.result }}
+          FRESH_INSTALL: ${{ needs.fresh-install.result }}
+          ROOT_CLEANUP: ${{ needs.root-cleanup.result }}
+          EVIDENCE: ${{ needs.evidence.result }}
+        run: |
+          for value in "$CONTRACTS" "$PACKAGE" "$DEFENDER" "$FRESH_INSTALL" "$ROOT_CLEANUP" "$EVIDENCE"; do
+            test "$value" = "success" || { echo "Required installer module did not pass: $value"; exit 1; }
+          done
+          echo "Required Agent installer certification: PASS"

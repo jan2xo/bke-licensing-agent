@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-ci-${{ inputs.source_sha }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+  AGENT_VERSION: "2.0.0"
+
+jobs:
+  dotnet-contracts:
+    name: Fast contract gate
+    uses: ./.github/workflows/_dotnet-contracts.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+
+  windows-native:
+    name: Native Windows x64 payload
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify exact source checkout
+        shell: pwsh
+        run: |
+          $actual=(git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Agent source checkout drifted: $actual" }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Publish .NET-only support payload
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture x64
+
+      - name: Smoke native x64 helpers
+        shell: pwsh
+        run: |
+          $licenseCenter = Start-Process -FilePath ".\dist\windows\bke-license-center-x64\bke-license-center.exe" -ArgumentList "--smoke" -Wait -PassThru
+          if ($licenseCenter.ExitCode -ne 0) { throw ".NET License Center smoke failed: $($licenseCenter.ExitCode)" }
+          $cleanup = Start-Process -FilePath ".\dist\windows\bke-root-cleanup-x64\bke-root-cleanup.exe" -ArgumentList "--smoke" -Wait -PassThru
+          if ($cleanup.ExitCode -ne 0) { throw "root cleanup x64 smoke failed: $($cleanup.ExitCode)" }
+
+      - name: Certify privileged first-install helper
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release -- --helper ".\dist\windows\bke-updater-core-x64\bke-updater-core.exe"
+          if ($LASTEXITCODE -ne 0) { throw "privileged first-install certification failed" }
+
+      - name: Generate disposable trust using .NET tooling
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release -- generate-disposable-trust --root dist/windows --target-key-id ci-dotnet-target-v1 --policy-id ci-dotnet-only --update-key-id ci-dotnet-update-v1
+          if ($LASTEXITCODE -ne 0) { throw ".NET release tooling failed" }
+          if (!(Test-Path dist/windows/privileged-payload/target-keys/ci-dotnet-target-v1.pem)) { throw "target public key missing" }
+          if (!(Test-Path dist/windows/privileged-payload/target-policies/ci-dotnet-only.json)) { throw "target policy missing" }
+          if (!(Test-Path dist/windows/update-authority-keys/ci-dotnet-update-v1.json)) { throw "update authority public key missing" }
+
+      - name: Verify native PE architecture
+        shell: pwsh
+        run: |
+          function Assert-PeMachine([string]$Path, [int]$Expected) {
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Path))
+            $peOffset = [BitConverter]::ToInt32($bytes,0x3c)
+            $signature = "PE" + [char]0 + [char]0
+            if ([Text.Encoding]::ASCII.GetString($bytes,$peOffset,4) -ne $signature) { throw "invalid PE signature: $Path" }
+            $machine = [BitConverter]::ToUInt16($bytes,$peOffset+4)
+            if ($machine -ne $Expected) { throw ("unexpected PE machine for {0}: 0x{1:X4}" -f $Path,$machine) }
+          }
+          $expected = 0x8664
+          foreach ($name in @("bke-license-center","bke-updater-core","bke-privileged-provisioner","bke-root-cleanup")) {
+            $exeName = switch ($name) {
+              "bke-license-center" { "bke-license-center.exe" }
+              "bke-updater-core" { "bke-updater-core.exe" }
+              "bke-privileged-provisioner" { "bke-privileged-provisioner.exe" }
+              "bke-root-cleanup" { "bke-root-cleanup.exe" }
+            }
+            Assert-PeMachine "dist/windows/$name-x64/$exeName" $expected
+          }
+
+  required-certification:
+    name: Required certification
+    if: ${{ always() }}
+    needs: [dotnet-contracts, windows-native]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Agent CI modules
+        env:
+          CONTRACTS: ${{ needs.dotnet-contracts.result }}
+          WINDOWS_NATIVE: ${{ needs.windows-native.result }}
+        run: |
+          test "$CONTRACTS" = "success" || { echo "dotnet-contracts=$CONTRACTS"; exit 1; }
+          test "$WINDOWS_NATIVE" = "success" || { echo "windows-native=$WINDOWS_NATIVE"; exit 1; }
+          echo "Required Agent CI certification: PASS"

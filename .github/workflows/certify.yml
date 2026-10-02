@@ -1,0 +1,202 @@
+name: Intent Certification
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact commit SHA to certify
+        required: true
+        type: string
+      targets:
+        description: Space/comma-separated certification targets
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+concurrency:
+  group: agent-intent-certification-${{ (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/certify ') && github.event.issue.number) || inputs.source_sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Resolve certification intent
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/certify '))
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+      targets_json: ${{ steps.plan.outputs.targets_json }}
+    steps:
+      - id: plan
+        name: Resolve exact head and targets
+        uses: actions/github-script@v7
+        env:
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          DISPATCH_TARGETS: ${{ inputs.targets }}
+        with:
+          script: |
+            const allowedTargets = [
+              "contracts",
+              "windows-x64",
+              "installer",
+              "rollback",
+              "preflight",
+              "utm-trust",
+              "acquisition",
+            ];
+            let sourceSha;
+            let requested;
+
+            if (context.eventName === "issue_comment") {
+              const association = context.payload.comment?.author_association ?? "NONE";
+              const allowedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+              if (!allowedAssociations.has(association)) {
+                core.setFailed(`Certification command rejected for author association ${association}.`);
+                return;
+              }
+              const issue = context.payload.issue;
+              if (!issue?.pull_request) {
+                core.setFailed("/certify is valid only on pull requests.");
+                return;
+              }
+              const response = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: issue.number,
+              });
+              sourceSha = response.data.head.sha;
+              requested = (context.payload.comment?.body ?? "")
+                .replace(/^\/certify\s+/i, "")
+                .trim();
+            } else {
+              sourceSha = (process.env.DISPATCH_SHA ?? "").trim();
+              requested = (process.env.DISPATCH_TARGETS ?? "").trim();
+            }
+
+            if (!/^[0-9a-f]{40}$/i.test(sourceSha ?? "")) {
+              core.setFailed("Certification requires an exact 40-character source SHA.");
+              return;
+            }
+
+            const tokens = [...new Set(
+              requested.toLowerCase().split(/[\s,]+/).map(v => v.trim()).filter(Boolean),
+            )];
+            const expanded = tokens.includes("full")
+              ? ["contracts", "windows-x64", "installer", "rollback", "preflight"]
+              : tokens;
+            const unique = [...new Set(expanded)];
+            const unknown = unique.filter(target => !allowedTargets.includes(target));
+            if (unique.length === 0 || unknown.length > 0) {
+              core.setFailed(
+                `Allowed certification targets: ${allowedTargets.join(", ")} plus full. Requested: ${unique.join(", ") || "none"}.`,
+              );
+              return;
+            }
+
+            core.setOutput("source_sha", sourceSha);
+            core.setOutput("targets_json", JSON.stringify(unique));
+            await core.summary
+              .addHeading("BKE Agent certification plan")
+              .addRaw(`Exact source SHA: \`${sourceSha}\`\n\n`)
+              .addRaw(`Targets: \`${unique.join(", ")}\`\n`)
+              .write();
+
+  contracts:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'contracts')
+    uses: ./.github/workflows/_intent-contracts.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
+  windows-x64:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'windows-x64')
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
+  installer:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'installer')
+    uses: ./.github/workflows/dotnet-production-installer.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
+  rollback:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'rollback')
+    uses: ./.github/workflows/dotnet-broken-update-rollback.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
+  preflight:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'preflight')
+    uses: ./.github/workflows/dotnet-production-release-preflight.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
+  utm-trust:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'utm-trust')
+    uses: ./.github/workflows/utm-disposable-target-trust.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
+  acquisition:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'acquisition')
+    uses: ./.github/workflows/standalone-acquisition-certification.yml
+    with:
+      source_sha: ${{ needs.plan.outputs.source_sha }}
+
+  required-certification:
+    name: Required certification
+    if: always() && needs.plan.result == 'success'
+    needs: [plan, contracts, windows-x64, installer, rollback, preflight, utm-trust, acquisition]
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+      TARGETS_JSON: ${{ needs.plan.outputs.targets_json }}
+      CONTRACTS_RESULT: ${{ needs.contracts.result }}
+      WINDOWS_X64_RESULT: ${{ needs.windows-x64.result }}
+      INSTALLER_RESULT: ${{ needs.installer.result }}
+      ROLLBACK_RESULT: ${{ needs.rollback.result }}
+      PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+      UTM_TRUST_RESULT: ${{ needs.utm-trust.result }}
+      ACQUISITION_RESULT: ${{ needs.acquisition.result }}
+    steps:
+      - name: Verify declared certification plan
+        shell: bash
+        run: |
+          node <<'NODE'
+          const targets = JSON.parse(process.env.TARGETS_JSON);
+          const results = {
+            contracts: process.env.CONTRACTS_RESULT,
+            "windows-x64": process.env.WINDOWS_X64_RESULT,
+            installer: process.env.INSTALLER_RESULT,
+            rollback: process.env.ROLLBACK_RESULT,
+            preflight: process.env.PREFLIGHT_RESULT,
+            "utm-trust": process.env.UTM_TRUST_RESULT,
+            acquisition: process.env.ACQUISITION_RESULT,
+          };
+          const failed = targets
+            .filter(target => results[target] !== "success")
+            .map(target => `${target}=${results[target] ?? "missing"}`);
+          if (failed.length > 0) {
+            console.error(
+              `Required certification failed for ${process.env.SOURCE_SHA}: ${failed.join(", ")}`,
+            );
+            process.exit(1);
+          }
+          console.log(
+            `Required certification PASS for ${process.env.SOURCE_SHA}: ${targets.join(", ")}`,
+          );
+          NODE
