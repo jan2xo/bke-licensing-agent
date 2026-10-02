@@ -206,15 +206,16 @@ powershell -ExecutionPolicy Bypass -File .\Install-RenderDock-UtmTargetTrust.ps1
 ```
 
 Install the exact disposable Digital Solutions licensing-policy public key recorded
-from the macOS host. This is UTM TEST-ONLY trust and must never contain private-key
-material:
+from the macOS host through the same packaged UTM target-trust helper. This is UTM
+TEST-ONLY trust and must never contain private-key material:
 
 ```powershell
 powershell -ExecutionPolicy Bypass `
-  -File .\Install-Disposable-DigitalSolutionsSigningTrust.ps1 `
-  -PublicKeyPath .\license-signing-public.pem `
-  -KeyId "<LICENSE_SIGNING_KEY_ID>" `
-  -ExpectedSha256 "<PUBLIC-KEY-SHA256>"
+  -File .\Install-RenderDock-UtmTargetTrust.ps1 `
+  -Architecture x64 `
+  -DigitalSolutionsSigningPublicKeyPath .\license-signing-public.pem `
+  -DigitalSolutionsSigningKeyId "<LICENSE_SIGNING_KEY_ID>" `
+  -DigitalSolutionsSigningPublicKeySha256 "<PUBLIC-KEY-SHA256>"
 ```
 
 The helper must fail closed unless the Agent is in `BKE_ENVIRONMENT=utm`, must
@@ -552,8 +553,10 @@ private signing keys into evidence.
 Remove the disposable Digital Solutions signing trust and Render Dock target trust:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Remove-Disposable-DigitalSolutionsSigningTrust.ps1
-powershell -ExecutionPolicy Bypass -File .\Remove-RenderDock-UtmTargetTrust.ps1
+powershell -ExecutionPolicy Bypass `
+  -File .\Remove-RenderDock-UtmTargetTrust.ps1 `
+  -Architecture x64 `
+  -RemoveDigitalSolutionsSigningTrust
 ```
 
 Confirm the uniquely named UTM signing key, target key/policy, and markers are gone.
