@@ -26,6 +26,7 @@ internal static class Program
             {
                 "generate-disposable-trust" => GenerateDisposableTrust(args[1..]),
                 "generate-disposable-target-policy" => GenerateDisposableTargetPolicy(args[1..]),
+                "generate-preproduction-update-key" => GeneratePreproductionUpdateKey(args[1..]),
                 "generate-production-update-key" => GenerateProductionUpdateKey(args[1..]),
                 "build-signing-request" => BuildSigningRequest(args[1..]),
                 _ => throw new InvalidDataException($"unknown release tooling command: {args[0]}"),
@@ -95,22 +96,24 @@ internal static class Program
             JsonSerializer.Serialize(policy, JsonIndented) + Environment.NewLine,
             new UTF8Encoding(false));
 
-        var updateGenerator = new Ed25519KeyPairGenerator();
-        updateGenerator.Init(new Ed25519KeyGenerationParameters(new SecureRandom()));
-        var updatePair = updateGenerator.GenerateKeyPair();
-        var updatePublic = (Ed25519PublicKeyParameters)updatePair.Public;
-        var updateKeyId = options.GetValueOrDefault("--update-key-id") ?? "dotnet-packaging-update-v1";
-        var updateDocument = new SortedDictionary<string, object?>(StringComparer.Ordinal)
+        if (options.TryGetValue("--update-key-json", out var suppliedUpdateKeyPath))
         {
-            ["schema"] = "bke.update-authority-key.v1",
-            ["key_id"] = updateKeyId,
-            ["algorithm"] = "Ed25519",
-            ["public_key"] = Convert.ToBase64String(updatePublic.GetEncoded()),
-        };
-        File.WriteAllText(
-            Path.Combine(updateKeys, updateKeyId + ".json"),
-            JsonSerializer.Serialize(updateDocument) + Environment.NewLine,
-            new UTF8Encoding(false));
+            InstallUpdateAuthorityPublicKey(
+                Path.GetFullPath(suppliedUpdateKeyPath),
+                updateKeys);
+        }
+        else
+        {
+            var updateGenerator = new Ed25519KeyPairGenerator();
+            updateGenerator.Init(new Ed25519KeyGenerationParameters(new SecureRandom()));
+            var updatePair = updateGenerator.GenerateKeyPair();
+            var updatePublic = (Ed25519PublicKeyParameters)updatePair.Public;
+            var updateKeyId = options.GetValueOrDefault("--update-key-id") ?? "dotnet-packaging-update-v1";
+            WriteUpdateAuthorityPublicKey(
+                updateKeys,
+                updateKeyId,
+                updatePublic.GetEncoded());
+        }
 
         Console.WriteLine("Disposable .NET packaging trust generated.");
         return 0;
@@ -351,6 +354,68 @@ internal static class Program
         return 0;
     }
 
+    private static int GeneratePreproductionUpdateKey(string[] args)
+    {
+        var options = Parse(args);
+        if (Required(options, "--authorization") != "AUTHORIZE_OFFLINE_PREPRODUCTION_KEY_GENERATION")
+            throw new InvalidDataException("exact preproduction-key generation authorization token is required");
+
+        var keyId = Required(options, "--key-id");
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                keyId,
+                "^bke-agent-update-preproduction-[A-Za-z0-9._-]{1,96}$"))
+        {
+            throw new InvalidDataException(
+                "preproduction update key ID must use the bke-agent-update-preproduction- prefix");
+        }
+
+        var output = Path.GetFullPath(Required(options, "--output-dir"));
+        if (InsideGitTree(output))
+            throw new InvalidDataException(
+                "refusing to write preproduction private key material inside a Git repository");
+        if (Directory.Exists(output) || File.Exists(output))
+            throw new IOException("preproduction key output directory already exists");
+        Directory.CreateDirectory(output);
+
+        var generator = new Ed25519KeyPairGenerator();
+        generator.Init(new Ed25519KeyGenerationParameters(new SecureRandom()));
+        var pair = generator.GenerateKeyPair();
+        var privateKey = (Ed25519PrivateKeyParameters)pair.Private;
+        var publicKey = (Ed25519PublicKeyParameters)pair.Public;
+
+        var privateInfo = PrivateKeyInfoFactory.CreatePrivateKeyInfo(privateKey);
+        var privatePath = Path.Combine(output, "BKE-UPDATE-AUTHORITY-PRIVATE.pem");
+        using (var stream = File.CreateText(privatePath))
+        {
+            var writer = new OpenSslPemWriter(stream);
+            writer.WriteObject(new BouncyPemObject("PRIVATE KEY", privateInfo.GetEncoded()));
+        }
+
+        WriteUpdateAuthorityPublicKey(output, keyId, publicKey.GetEncoded());
+
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(publicKey.GetEncoded())).ToLowerInvariant();
+        File.WriteAllText(
+            Path.Combine(output, "PUBLIC-KEY-SHA256.txt"),
+            fingerprint + Environment.NewLine,
+            Encoding.ASCII);
+        File.WriteAllText(
+            Path.Combine(output, "PREPRODUCTION-PRIVATE-KEY.txt"),
+            $"PREPRODUCTION UPDATE AUTHORITY{Environment.NewLine}" +
+            $"Do not commit or package BKE-UPDATE-AUTHORITY-PRIVATE.pem.{Environment.NewLine}" +
+            $"Store the private PEM only in the disposable/preproduction Digital Solutions secret boundary.{Environment.NewLine}" +
+            $"key_id={keyId}{Environment.NewLine}" +
+            $"public_key_sha256={fingerprint}{Environment.NewLine}" +
+            $"NOT FOR PRODUCTION.{Environment.NewLine}",
+            new UTF8Encoding(false));
+
+        Console.WriteLine("PREPRODUCTION update-authority keypair generated offline.");
+        Console.WriteLine($"key_id={keyId}");
+        Console.WriteLine($"public_key_sha256={fingerprint}");
+        Console.WriteLine("PRIVATE KEY WAS NOT PRINTED.");
+        return 0;
+    }
+
     private static int GenerateProductionUpdateKey(string[] args)
     {
         var options = Parse(args);
@@ -484,6 +549,91 @@ internal static class Program
         File.WriteAllText(outputPath, JsonSerializer.Serialize(result, JsonIndented) + Environment.NewLine, new UTF8Encoding(false));
         Console.WriteLine(outputPath);
         return 0;
+    }
+
+    private static void InstallUpdateAuthorityPublicKey(
+        string sourcePath,
+        string updateKeysDirectory)
+    {
+        if (!File.Exists(sourcePath))
+            throw new FileNotFoundException(
+                "update-authority public key document is missing",
+                sourcePath);
+
+        using var document = JsonDocument.Parse(File.ReadAllText(sourcePath));
+        var root = document.RootElement;
+        var fields = root.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var expected = new HashSet<string>(
+            ["schema", "key_id", "algorithm", "public_key"],
+            StringComparer.Ordinal);
+        if (!fields.SetEquals(expected))
+            throw new InvalidDataException(
+                "update-authority public key fields do not match the strict contract");
+        if (RequiredString(root, "schema") != "bke.update-authority-key.v1")
+            throw new InvalidDataException("update-authority public key schema mismatch");
+        if (RequiredString(root, "algorithm") != "Ed25519")
+            throw new InvalidDataException("update-authority public key algorithm mismatch");
+
+        var keyId = RequiredString(root, "key_id");
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                keyId,
+                "^[A-Za-z0-9._-]{1,160}$"))
+            throw new InvalidDataException("update-authority key ID is malformed");
+
+        byte[] rawPublic;
+        try
+        {
+            rawPublic = Convert.FromBase64String(RequiredString(root, "public_key"));
+        }
+        catch (FormatException exception)
+        {
+            throw new InvalidDataException(
+                "update-authority public key is not valid base64",
+                exception);
+        }
+        if (rawPublic.Length != 32)
+            throw new InvalidDataException(
+                "update-authority Ed25519 public key must be 32 bytes");
+
+        WriteUpdateAuthorityPublicKey(
+            updateKeysDirectory,
+            keyId,
+            rawPublic);
+    }
+
+    private static void WriteUpdateAuthorityPublicKey(
+        string outputDirectory,
+        string keyId,
+        byte[] rawPublic)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                keyId,
+                "^[A-Za-z0-9._-]{1,160}$"))
+            throw new InvalidDataException("update-authority key ID is malformed");
+        if (rawPublic.Length != 32)
+            throw new InvalidDataException(
+                "update-authority Ed25519 public key must be 32 bytes");
+
+        Directory.CreateDirectory(outputDirectory);
+        var destination = Path.Combine(outputDirectory, keyId + ".json");
+        if (File.Exists(destination))
+            throw new IOException(
+                "refusing to overwrite update-authority public key");
+
+        var updateDocument =
+            new SortedDictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["schema"] = "bke.update-authority-key.v1",
+                ["key_id"] = keyId,
+                ["algorithm"] = "Ed25519",
+                ["public_key"] = Convert.ToBase64String(rawPublic),
+            };
+        File.WriteAllText(
+            destination,
+            JsonSerializer.Serialize(updateDocument) + Environment.NewLine,
+            new UTF8Encoding(false));
     }
 
     private static Dictionary<string, string> Parse(string[] args)
