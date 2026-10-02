@@ -15,8 +15,22 @@ param(
     [string]$AgentSourceSha,
 
     [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[0-9a-fA-F]{40}$")]
+    [string]$DemoAppSourceSha,
+
+    [Parameter(Mandatory = $true)]
     [ValidatePattern("^[0-9a-fA-F]{64}$")]
-    [string]$ParentInstallerSha256
+    [string]$ParentInstallerSha256,
+
+    [string]$RenderDockProductId = "bke-render-dock",
+
+    [string]$RenderDockVersion = "1.0.3",
+
+    [string]$LauncherPluginProductId = "bke-trial-product",
+
+    [string]$LauncherPluginVersion = "2.0.0",
+
+    [switch]$RequireCustomerSoftwareReady
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +62,7 @@ Write-JsonEvidence "00-stack-provenance.json" ([ordered]@{
     digital_solutions_source_sha = $DigitalSolutionsSourceSha.ToLowerInvariant()
     launcher_source_sha = $LauncherSourceSha.ToLowerInvariant()
     agent_source_sha = $AgentSourceSha.ToLowerInvariant()
+    demo_app_source_sha = $DemoAppSourceSha.ToLowerInvariant()
     parent_installer_sha256 = $ParentInstallerSha256.ToLowerInvariant()
     certification_state = "PREPRODUCTION_DISPOSABLE_UTM"
 })
@@ -101,6 +116,95 @@ $catalog = Invoke-AgentPost "/v1/software/catalog" ([ordered]@{
     correlation_id = "utm-catalog-" + [Guid]::NewGuid().ToString("N")
 })
 Write-JsonEvidence "05-software-catalog.json" $catalog
+
+$catalogItems = if ($null -ne $catalog.items) {
+    @($catalog.items)
+} else {
+    @()
+}
+
+$renderDockMatches = @(
+    $catalogItems | Where-Object {
+        [string]$_.product_id -ceq $RenderDockProductId
+    }
+)
+$pluginMatches = @(
+    $catalogItems | Where-Object {
+        [string]$_.product_id -ceq $LauncherPluginProductId
+    }
+)
+
+$renderDockItem = if ($renderDockMatches.Count -eq 1) {
+    $renderDockMatches[0]
+} else {
+    $null
+}
+$pluginItem = if ($pluginMatches.Count -eq 1) {
+    $pluginMatches[0]
+} else {
+    $null
+}
+
+$pluginAuthorization = Invoke-AgentPost "/v1/software/launcher-plugin/authorize" ([ordered]@{
+    correlation_id = "utm-plugin-authorize-" + [Guid]::NewGuid().ToString("N")
+    product_id = $LauncherPluginProductId
+    version = $LauncherPluginVersion
+})
+Write-JsonEvidence "05-launcher-plugin-authorization.json" $pluginAuthorization
+
+$renderDockReady =
+    [string]$catalog.status -ceq "READY" -and
+    $renderDockMatches.Count -eq 1 -and
+    [string]$renderDockItem.execution_type -ceq "STANDALONE" -and
+    [bool]$renderDockItem.entitled -and
+    [string]$renderDockItem.latest_version -ceq $RenderDockVersion
+
+$launcherPluginCatalogReady =
+    [string]$catalog.status -ceq "READY" -and
+    $pluginMatches.Count -eq 1 -and
+    [string]$pluginItem.execution_type -ceq "LAUNCHER_PLUGIN" -and
+    [bool]$pluginItem.entitled -and
+    [string]$pluginItem.latest_version -ceq $LauncherPluginVersion
+
+$launcherPluginAuthorized =
+    [string]$pluginAuthorization.status -ceq "AUTHORIZED" -and
+    [bool]$pluginAuthorization.authorized -and
+    [string]$pluginAuthorization.reason -ceq "authorized"
+
+$customerSoftwareReady =
+    $renderDockReady -and
+    $launcherPluginCatalogReady -and
+    $launcherPluginAuthorized
+
+Write-JsonEvidence "05-customer-software-proof.json" ([ordered]@{
+    render_dock = [ordered]@{
+        product_id = $RenderDockProductId
+        expected_version = $RenderDockVersion
+        match_count = $renderDockMatches.Count
+        execution_type = if ($renderDockItem) { [string]$renderDockItem.execution_type } else { $null }
+        entitled = if ($renderDockItem) { [bool]$renderDockItem.entitled } else { $false }
+        latest_version = if ($renderDockItem) { [string]$renderDockItem.latest_version } else { $null }
+        ready = $renderDockReady
+    }
+    launcher_plugin = [ordered]@{
+        product_id = $LauncherPluginProductId
+        expected_version = $LauncherPluginVersion
+        match_count = $pluginMatches.Count
+        execution_type = if ($pluginItem) { [string]$pluginItem.execution_type } else { $null }
+        entitled = if ($pluginItem) { [bool]$pluginItem.entitled } else { $false }
+        latest_version = if ($pluginItem) { [string]$pluginItem.latest_version } else { $null }
+        authorization_status = [string]$pluginAuthorization.status
+        authorized = [bool]$pluginAuthorization.authorized
+        authorization_reason = [string]$pluginAuthorization.reason
+        catalog_ready = $launcherPluginCatalogReady
+        authorization_ready = $launcherPluginAuthorized
+    }
+    customer_software_ready = $customerSoftwareReady
+})
+
+if ($RequireCustomerSoftwareReady -and -not $customerSoftwareReady) {
+    throw "Customer software proof is not ready. Inspect 05-software-catalog.json, 05-launcher-plugin-authorization.json, and 05-customer-software-proof.json."
+}
 
 $configPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\privileged-update.json"
 $configEvidence = [ordered]@{

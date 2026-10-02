@@ -1,4 +1,4 @@
-# BKE + Render Dock — Disposable UTM End-to-End Runbook
+# BKE + Demo Plugin + Render Dock — Disposable UTM End-to-End Runbook
 
 TEST ONLY / PREPRODUCTION ONLY.
 
@@ -6,9 +6,10 @@ This run proves the current customer-facing architecture as one system:
 
 ```text
 BKE Launcher
+  -> bundled bke-trial-product@2.0.0 (after Agent authorization)
   -> BKE Licensing Agent (loopback + machine trust)
   -> disposable Digital Solutions (identity / catalog / entitlement / notifications)
-  -> GitHub stable product release
+  -> GitHub stable Render Dock product release
 ```
 
 It must not use the production Digital Solutions deployment, production database,
@@ -23,6 +24,7 @@ Before the VM test, record all of these:
 - exact BKE Launcher source SHA that produced the parent installer;
 - exact Licensing Agent source SHA;
 - SHA-256 of the BKE parent installer;
+- exact bundled Demo App source SHA pinned by that Launcher source;
 - exact Render Dock release tag and artifact hashes.
 
 Use the BKE **parent installer** as the customer-facing installation unit. Do not
@@ -184,6 +186,7 @@ powershell -ExecutionPolicy Bypass -File .\Collect-BkeLauncher-UtmEvidence.ps1 `
   -DigitalSolutionsSourceSha "<digital-solutions-sha>" `
   -LauncherSourceSha "<launcher-source-sha>" `
   -AgentSourceSha "<agent-source-sha>" `
+  -DemoAppSourceSha "<demo-app-source-sha>" `
   -ParentInstallerSha256 "$installerHash"
 ```
 
@@ -199,6 +202,7 @@ Expected before login:
 - production authority is false;
 - disposable target-trust marker exists;
 - account session is not authenticated yet;
+- Launcher-plugin authorization for `bke-trial-product@2.0.0` is `AUTH_REQUIRED`;
 - Render Dock is not installed.
 
 ## Phase D — create/verify a disposable CUSTOMER account
@@ -266,46 +270,123 @@ Agent-projected account feed but no account-session secret material.
 
 Refresh **My Software**.
 
-Render Dock must eventually project as:
+Render Dock must project as:
 
 ```text
 product_id: bke-render-dock
 execution type: STANDALONE
-latest version: 1.0.2
+latest version: 1.0.3
 entitled: true
 state: Installable
 ```
 
+The bundled Demo plugin must project as:
+
+```text
+product_id: bke-trial-product
+execution type: LAUNCHER_PLUGIN
+latest version: 2.0.0
+entitled: true
+Launcher state: Available
+Open: enabled
+Install / Update / Repair / Remove: hidden or disabled
+```
+
 Required Digital Solutions catalog state:
 
-- product active, published, not archived;
-- `launcherExecutionType = STANDALONE`;
-- stable/LTS ProductVersion `1.0.2`;
-- operating system compatible with Windows;
-- architecture compatible with the canonical Windows x64 product release;
-- active current entitlement for the selected disposable account.
+- both products active, published, and not archived;
+- Render Dock `launcherExecutionType = STANDALONE`;
+- Render Dock stable ProductVersion `1.0.3`;
+- Render Dock operating system compatible with Windows;
+- Render Dock architecture compatible with the canonical Windows x64 product release;
+- Demo App `launcherExecutionType = LAUNCHER_PLUGIN`;
+- Demo App exact ProductVersion `2.0.0`;
+- active current entitlements for both products on the selected disposable account.
 
-Do not create duplicate `ProductVersion 1.0.2` rows for architectures.
+Do not create duplicate `ProductVersion 1.0.3` rows for architectures.
 `ProductVersion` is unique by product + version.
 
-If `1.0.2` is published with incompatible metadata, unpublish it first, edit
+If `1.0.3` is published with incompatible metadata, unpublish it first, edit
 compatibility through the owner surface, then republish through the normal release
 gates. Do not bypass `RELEASE_COMPATIBILITY_EDIT_REQUIRES_UNPUBLISH`.
 
-## Phase H — GitHub release gate
+## Phase H — bundled Launcher plugin authorization and Open proof
 
-The stable GitHub release `v1.0.2` in `jan2xo/BKE_RENDER_DOCK` must contain the
+After the account is authenticated and **My Software** shows the exact Demo plugin,
+prove the Agent gate directly from PowerShell:
+
+```powershell
+$body = @{
+  correlation_id = "utm-plugin-" + [Guid]::NewGuid().ToString("N")
+  product_id = "bke-trial-product"
+  version = "2.0.0"
+} | ConvertTo-Json -Compress
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:43873/v1/software/launcher-plugin/authorize" `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Required response:
+
+```text
+status: AUTHORIZED
+authorized: true
+reason: authorized
+```
+
+Then in BKE click **Open** for **BKE Demo App**.
+
+Expected:
+
+- a window titled **BKE Demo App** opens inside the Launcher-hosted plugin runtime;
+- the window shows **Protected demo is ready.**;
+- the plugin identity remains `bke-trial-product@2.0.0`;
+- the plugin receives no cloud credential, Agent refresh token, executable path, or privileged lifecycle authority;
+- there is no standalone Install / Update / Repair / Remove action for the plugin;
+- the standalone `/v1/software/open` path is not used for this product.
+
+Close the Demo window and click **Open** again. The Launcher must re-enter the
+Agent-mediated plugin authorization path before running plugin code.
+
+Capture an evidence bundle after this proof. The collector writes:
+
+```text
+05-software-catalog.json
+05-launcher-plugin-authorization.json
+05-customer-software-proof.json
+```
+
+For an authenticated final proof, `05-customer-software-proof.json` must report:
+
+```text
+render_dock.ready: true
+launcher_plugin.catalog_ready: true
+launcher_plugin.authorization_ready: true
+customer_software_ready: true
+```
+
+## Phase I — GitHub release gate
+
+The stable GitHub release `v1.0.3` in `jan2xo/BKE_RENDER_DOCK` must contain the
 canonical Windows x64 updater metadata and ZIP:
 
 ```text
-Render-Dock-1.0.2-Windows-x64.update.json
-Render-Dock-1.0.2-Windows-x64.update.zip
+Render-Dock-1.0.3-Windows-x64.update.json
+Render-Dock-1.0.3-Windows-x64.update.zip
+```
+
+Current immutable x64 updater ZIP SHA-256:
+
+```text
+916931fb2efe5fb26720e0f150bdef290f064780f534dcfd96577e1fda45ffa0
 ```
 
 The Agent resolves the exact GitHub Release tag. A workflow artifact alone is not a
 substitute for the stable product release.
 
-## Phase I — privileged first install
+## Phase J — privileged first install
 
 In BKE, click **Install** once.
 
@@ -313,7 +394,7 @@ Expected Agent path:
 
 1. verify current account entitlement and requested product/version with Digital
    Solutions;
-2. resolve exact GitHub release `v1.0.2`;
+2. resolve exact GitHub release `v1.0.3`;
 3. resolve x64 metadata + ZIP;
 4. verify release metadata identity;
 5. verify artifact size + SHA-256;
@@ -338,7 +419,7 @@ Open button visible
 A normal service-hosted Agent path must not require a second Launcher-side UAC
 elevation.
 
-## Phase J — interactive Open proof
+## Phase K — interactive standalone Open proof
 
 Click **Open** in BKE.
 
@@ -354,7 +435,7 @@ Expected:
 If no interactive Windows user is logged in, the expected denial is
 `NO_ACTIVE_USER_SESSION`.
 
-## Phase K — lifecycle proof
+## Phase L — standalone lifecycle proof
 
 After first install:
 
@@ -371,7 +452,7 @@ After first install:
 Do not widen managed lifecycle behavior to `PRODUCT_INSTALLER` or
 `LEGACY_UNKNOWN`.
 
-## Phase L — negative checks
+## Phase M — negative checks
 
 At minimum:
 
@@ -384,7 +465,7 @@ At minimum:
 5. replacing the Agent authority with `jl-bke.com` or any `*.jl-bke.com` host in
    `BKE_ENVIRONMENT=utm` must fail closed.
 
-## Phase M — final evidence
+## Phase N — final evidence
 
 With the intended final installed state, run:
 
@@ -394,7 +475,9 @@ powershell -ExecutionPolicy Bypass -File .\Collect-BkeLauncher-UtmEvidence.ps1 `
   -DigitalSolutionsSourceSha "<digital-solutions-sha>" `
   -LauncherSourceSha "<launcher-source-sha>" `
   -AgentSourceSha "<agent-source-sha>" `
-  -ParentInstallerSha256 "$installerHash"
+  -DemoAppSourceSha "<demo-app-source-sha>" `
+  -ParentInstallerSha256 "$installerHash" `
+  -RequireCustomerSoftwareReady
 ```
 
 Keep:
@@ -405,6 +488,8 @@ Keep:
 - loopback health;
 - selected account-session projection;
 - software catalog projection;
+- Launcher-plugin authorization projection;
+- machine-readable dual-product customer software proof;
 - privileged configuration projection;
 - disposable target-trust marker;
 - safe Agent environment projection;
@@ -417,7 +502,7 @@ Keep:
 Do not copy Agent account-session secret files, DPAPI material, production secrets, or
 private signing keys into evidence.
 
-## Phase N — cleanup
+## Phase O — cleanup
 
 Remove only the disposable Render Dock target trust:
 
