@@ -33,10 +33,24 @@ candidate for this certification.
 
 The parent installer is PREPRODUCTION and must bundle the intended Agent source SHA.
 
-## Phase 0 — disposable Digital Solutions authority
+## Phase 0 — disposable Digital Solutions authority on the macOS host
 
-Use the current merged Digital Solutions source in the disposable Linux/Ubuntu UTM
-host.
+Run the current merged Digital Solutions source directly on the operator's MacBook
+host. The Windows ARM64 UTM guest connects to this disposable Digital Solutions
+authority over the local network.
+
+There is no Ubuntu/Linux Digital Solutions VM in this certification topology.
+
+The physical topology is:
+
+```text
+macOS host
+  -> disposable Digital Solutions at https://bke-v3.test:8443
+  -> Windows ARM64 UTM guest
+       -> BKE Launcher (Windows x64 compatibility)
+       -> BKE Licensing Agent (Windows x64 compatibility)
+       -> bundled Demo plugin / standalone Render Dock
+```
 
 The canonical disposable authority is:
 
@@ -86,13 +100,16 @@ if grep -Eq '^V[0-9]+_(CLAIM_CODE_CHECKOUT_ENABLED|AGENT_ACCOUNT_SESSION_ENABLED
 fi
 ```
 
-Determine the disposable host LAN IP:
+Determine the Mac host LAN IP from macOS, for example:
 
 ```bash
-hostname -I
+ipconfig getifaddr en0
 ```
 
-Windows must reach that host on TCP 8443.
+If the active network interface is not `en0`, use the active macOS interface instead.
+
+The Windows UTM guest must resolve `bke-v3.test` to that Mac host LAN IP and reach
+TCP 8443 on the Mac.
 
 ## Phase A — Windows disposable trust boundary
 
