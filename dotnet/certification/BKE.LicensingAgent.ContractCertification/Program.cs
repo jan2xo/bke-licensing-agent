@@ -45,6 +45,7 @@ var expectedActiveWorkflowNames = new[]
     "dotnet-broken-update-rollback.yml",
     "dotnet-production-installer.yml",
     "dotnet-production-release-preflight.yml",
+    "dotnet-signed-self-update.yml",
     "standalone-acquisition-certification.yml",
     "utm-disposable-target-trust.yml",
 }.OrderBy(name => name, StringComparer.Ordinal).ToArray();
@@ -91,7 +92,6 @@ foreach (var legacyOnly in new[]
 {
     "pr-guard.yml",
     "dotnet-production-signing.yml",
-    "dotnet-signed-self-update.yml",
     "dotnet-desktop-ui.yml",
 })
 {
@@ -116,14 +116,35 @@ Require(
         "Verify exact source checkout",
         StringComparison.Ordinal),
     "Agent reusable .NET contracts are not exact-source-SHA certified.");
+var selfUpdateWorkflowSource = File.ReadAllText(
+    Path.Combine(activeWorkflowDirectory, "dotnet-signed-self-update.yml"));
 Require(
-    !intentCertificationSource.Contains(
-        "dotnet-signed-self-update.yml",
-        StringComparison.Ordinal) &&
-    !intentCertificationSource.Contains(
+    intentCertificationSource.Contains(
         "\"self-update\"",
+        StringComparison.Ordinal) &&
+    intentCertificationSource.Contains(
+        "digital_solutions_sha",
         StringComparison.Ordinal),
-    "Stale hard-pinned self-update certification must remain legacy-only.");
+    "Agent certifier does not expose explicit cross-repo self-update proof.");
+Require(
+    selfUpdateWorkflowSource.Contains(
+        "digital_solutions_sha:",
+        StringComparison.Ordinal) &&
+    selfUpdateWorkflowSource.Contains(
+        "repository: jan2xo/bke-digital-solutions",
+        StringComparison.Ordinal) &&
+    selfUpdateWorkflowSource.Contains(
+        "ref: ${{ inputs.digital_solutions_sha }}",
+        StringComparison.Ordinal) &&
+    selfUpdateWorkflowSource.Contains(
+        "Verify exact Digital Solutions source",
+        StringComparison.Ordinal),
+    "Agent self-update proof does not pin and verify exact Digital Solutions authority.");
+Require(
+    !selfUpdateWorkflowSource.Contains(
+        "edfee191b25815cd58ea8d7a5fc8741e6f08865b",
+        StringComparison.Ordinal),
+    "Agent self-update proof still hard-pins the retired Digital Solutions authority SHA.");
 
 var privilegedUpdateCenterSource = File.ReadAllText(
     Path.Combine(

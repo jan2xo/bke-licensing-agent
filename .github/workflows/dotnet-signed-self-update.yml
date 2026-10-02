@@ -1,0 +1,103 @@
+name: Signed Agent self-update cross-repo certification
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
+      digital_solutions_sha:
+        description: Exact Digital Solutions commit SHA whose signed policy is consumed
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Agent commit SHA to certify
+        required: true
+        type: string
+      digital_solutions_sha:
+        description: Exact Digital Solutions commit SHA whose signed policy is consumed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-signed-self-update-${{ inputs.source_sha }}-${{ inputs.digital_solutions_sha }}
+  cancel-in-progress: true
+
+jobs:
+  signed-self-update:
+    name: DS signed-policy -> Agent verifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact Agent source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+
+      - name: Verify exact Agent source
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+
+      - name: Checkout exact Digital Solutions authority source
+        uses: actions/checkout@v4
+        with:
+          repository: jan2xo/bke-digital-solutions
+          ref: ${{ inputs.digital_solutions_sha }}
+          path: .ci/bke-digital-solutions
+          fetch-depth: 0
+
+      - name: Verify exact Digital Solutions source
+        shell: bash
+        env:
+          EXPECTED_DS_SHA: ${{ inputs.digital_solutions_sha }}
+        run: test "$(git -C .ci/bke-digital-solutions rev-parse HEAD)" = "$EXPECTED_DS_SHA"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .ci/bke-digital-solutions/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install Digital Solutions dependencies
+        working-directory: .ci/bke-digital-solutions
+        run: npm ci
+
+      - name: Certify Agent signed-policy verifier locally
+        run: |
+          dotnet run \
+            --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj \
+            --configuration Release
+
+      - name: Export signed policy fixture from exact Digital Solutions authority
+        working-directory: .ci/bke-digital-solutions
+        run: |
+          npx tsx scripts/certify-licensing-agent-signed-update.ts "${RUNNER_TEMP}/agent-self-update-authority-fixture.json"
+          test -s "${RUNNER_TEMP}/agent-self-update-authority-fixture.json"
+
+      - name: Verify exact Digital Solutions signatures in Agent
+        run: |
+          dotnet run \
+            --project dotnet/certification/BKE.LicensingAgent.SelfUpdateCertification/BKE.LicensingAgent.SelfUpdateCertification.csproj \
+            --configuration Release \
+            -- --fixture "${RUNNER_TEMP}/agent-self-update-authority-fixture.json"
+
+      - name: Upload cross-repo proof evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-self-update-cross-repo-proof
+          path: ${{ runner.temp }}/agent-self-update-authority-fixture.json
+          if-no-files-found: error
+          retention-days: 7

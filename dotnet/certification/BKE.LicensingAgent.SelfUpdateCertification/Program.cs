@@ -9,7 +9,7 @@ if (args.Length == 2 && args[0] == "--fixture")
     return;
 }
 
-var root = Path.Combine(Path.GetTempPath(), "bke-phase9-self-update-" + Guid.NewGuid().ToString("N"));
+var root = Path.Combine(Path.GetTempPath(), "bke-agent-self-update-self-update-" + Guid.NewGuid().ToString("N"));
 var trust = Path.Combine(root, "trust");
 var data = Path.Combine(root, "data");
 Directory.CreateDirectory(trust);
@@ -25,7 +25,7 @@ try
         ExportPolicy = KeyExportPolicies.AllowPlaintextExport,
     });
     var publicKey = key.PublicKey.Export(KeyBlobFormat.RawPublicKey);
-    const string keyId = "phase9-certification-v1";
+    const string keyId = "agent-self-update-certification-v1";
     File.WriteAllText(
         Path.Combine(trust, keyId + ".json"),
         JsonSerializer.Serialize(new Dictionary<string, object?>
@@ -36,7 +36,7 @@ try
             ["public_key"] = Convert.ToBase64String(publicKey),
         }));
 
-    var artifact = Encoding.ASCII.GetBytes("MZphase9-certified-installer");
+    var artifact = Encoding.ASCII.GetBytes("MZagent-self-update-certified-installer");
     var artifactPath = Path.Combine(root, "BKE-Licensing-Agent-2.0.1-Windows-x64.exe");
     File.WriteAllBytes(artifactPath, artifact);
     var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(artifact)).ToLowerInvariant();
@@ -75,7 +75,7 @@ try
     ExpectFailure(
         () =>
         {
-            using var document = JsonDocument.Parse(SerializePolicy(valid).Replace(keyId, "unknown-phase9-key", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(SerializePolicy(valid).Replace(keyId, "unknown-agent-self-update-key", StringComparison.Ordinal));
             _ = UpdatePolicyVerifier.ParseAndVerify(document.RootElement, "2.0.0", "x86_64");
         },
         "unknown update authority key was accepted");
@@ -118,7 +118,7 @@ try
         () => UpdatePolicyVerifier.VerifyArtifact(artifactPath, verified),
         "tampered installer bytes were accepted");
 
-    Console.WriteLine("BKE Licensing Agent Phase 9 signed self-update certification: PASS");
+    Console.WriteLine("BKE Licensing Agent Agent self-update signed self-update certification: PASS");
     Console.WriteLine("Checks: signature, exact fields, trusted key, architecture, revision, derived catalog identity, SHA-256, size");
 }
 finally
@@ -190,12 +190,12 @@ static void RunExternalFixture(string fixturePath)
 {
     using var source = JsonDocument.Parse(File.ReadAllText(fixturePath));
     var root = source.RootElement;
-    if (root.GetProperty("schema").GetString() != "bke.phase9-cross-repository-fixture.v1")
+    if (root.GetProperty("schema").GetString() != "bke.agent-self-update-cross-repository-fixture.v1")
         throw new InvalidDataException("unexpected cross-repository fixture schema");
-    if (root.GetProperty("source").GetString() != "bke-digital-solutions-v2")
+    if (root.GetProperty("source").GetString() != "bke-digital-solutions")
         throw new InvalidDataException("unexpected cross-repository fixture source");
 
-    var temp = Path.Combine(Path.GetTempPath(), "bke-phase9-cross-repo-" + Guid.NewGuid().ToString("N"));
+    var temp = Path.Combine(Path.GetTempPath(), "bke-agent-self-update-cross-repo-" + Guid.NewGuid().ToString("N"));
     var trust = Path.Combine(temp, "trust");
     var data = Path.Combine(temp, "data");
     Directory.CreateDirectory(trust);
@@ -251,8 +251,8 @@ static void RunExternalFixture(string fixturePath)
         if (count != 2)
             throw new InvalidDataException($"expected x64 + ARM64 fixtures, got {count}");
 
-        Console.WriteLine("BKE Licensing Agent Phase 9 cross-repository signature certification: PASS");
-        Console.WriteLine("Authority: BKE Digital Solutions V2");
+        Console.WriteLine("BKE Licensing Agent Agent self-update cross-repository signature certification: PASS");
+        Console.WriteLine("Authority: BKE Digital Solutions");
         Console.WriteLine("Architectures: x86_64, arm64");
     }
     finally
