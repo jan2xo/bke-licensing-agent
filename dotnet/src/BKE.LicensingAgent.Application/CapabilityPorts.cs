@@ -68,3 +68,10 @@ public interface ISoftwareCatalogService
         SoftwareCatalogRequest request,
         CancellationToken cancellationToken);
 }
+
+public interface ILauncherPluginAuthorizationService
+{
+    Task<LauncherPluginAuthorizeResponse> AuthorizeAsync(
+        LauncherPluginAuthorizeRequest request,
+        CancellationToken cancellationToken);
+}
