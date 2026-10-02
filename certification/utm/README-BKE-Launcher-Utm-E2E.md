@@ -133,6 +133,17 @@ Use a disposable Windows UTM snapshot.
 
 Do not import the disposable CA on a production machine.
 
+Also record the disposable Digital Solutions licensing-policy **public key only** on
+the macOS host. Do not copy the private key:
+
+```bash
+grep '^LICENSE_SIGNING_KEY_ID=' .env.certification
+shasum -a 256 .bke-disposable/signing/license-signing-public.pem
+```
+
+Copy only `.bke-disposable/signing/license-signing-public.pem` to the disposable
+Windows guest and keep the printed key id + SHA-256 for the trust-install step.
+
 ## Phase B — configure the Agent before BKE installation
 
 Extract the exact UTM trust bundle produced for the intended Agent source SHA.
@@ -194,6 +205,23 @@ disposable Render Dock target trust:
 powershell -ExecutionPolicy Bypass -File .\Install-RenderDock-UtmTargetTrust.ps1 -Architecture x64
 ```
 
+Install the exact disposable Digital Solutions licensing-policy public key recorded
+from the macOS host through the same packaged UTM target-trust helper. This is UTM
+TEST-ONLY trust and must never contain private-key material:
+
+```powershell
+powershell -ExecutionPolicy Bypass `
+  -File .\Install-RenderDock-UtmTargetTrust.ps1 `
+  -Architecture x64 `
+  -DigitalSolutionsSigningPublicKeyPath .\license-signing-public.pem `
+  -DigitalSolutionsSigningKeyId "<LICENSE_SIGNING_KEY_ID>" `
+  -DigitalSolutionsSigningPublicKeySha256 "<PUBLIC-KEY-SHA256>"
+```
+
+The helper must fail closed unless the Agent is in `BKE_ENVIRONMENT=utm`, must
+reject `jl-bke.com` and every `*.jl-bke.com` authority, must reject private-key
+material, and must pin the exact operator-recorded public-key SHA-256.
+
 Capture pre-login evidence with the exact stack provenance:
 
 ```powershell
@@ -217,6 +245,7 @@ Expected before login:
 - the recorded Agent authority matches the canonical ProgramData `.env`;
 - production authority is false;
 - disposable target-trust marker exists;
+- disposable Digital Solutions signing-trust marker exists and its installed public-key hash matches the recorded marker;
 - account session is not authenticated yet;
 - Launcher-plugin authorization for `bke-trial-product@2.0.0` is `AUTH_REQUIRED`;
 - Render Dock is not installed.
@@ -508,6 +537,7 @@ Keep:
 - machine-readable dual-product customer software proof;
 - privileged configuration projection;
 - disposable target-trust marker;
+- disposable Digital Solutions signing-trust key id/hash projection;
 - safe Agent environment projection;
 - Agent platform-authority loopback projection + equality with the ProgramData environment;
 - Render Dock local existence + entry-point SHA-256;
@@ -520,13 +550,16 @@ private signing keys into evidence.
 
 ## Phase O — cleanup
 
-Remove only the disposable Render Dock target trust:
+Remove the disposable Digital Solutions signing trust and Render Dock target trust:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Remove-RenderDock-UtmTargetTrust.ps1
+powershell -ExecutionPolicy Bypass `
+  -File .\Remove-RenderDock-UtmTargetTrust.ps1 `
+  -Architecture x64 `
+  -RemoveDigitalSolutionsSigningTrust
 ```
 
-Confirm the uniquely named UTM key/policy and marker are gone.
+Confirm the uniquely named UTM signing key, target key/policy, and markers are gone.
 
 The VM snapshot and evidence remain PREPRODUCTION certification material. Never
 promote the disposable CA, disposable target trust, or disposable service authority

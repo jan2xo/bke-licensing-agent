@@ -233,6 +233,50 @@ Write-JsonEvidence "07-utm-target-trust.json" ([ordered]@{
     marker = $markerContent
 })
 
+$dsSigningMarker = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\UTM-TEST-ONLY-Digital-Solutions-signing-trust.txt"
+$dsSigningMarkerExists = [IO.File]::Exists($dsSigningMarker)
+$dsSigningKeyId = $null
+$dsSigningExpectedSha256 = $null
+if ($dsSigningMarkerExists) {
+    foreach ($line in Get-Content -LiteralPath $dsSigningMarker) {
+        $separator = $line.IndexOf("=")
+        if ($separator -le 0) {
+            continue
+        }
+        $name = $line.Substring(0, $separator).Trim()
+        $value = $line.Substring($separator + 1).Trim()
+        if ($name -ceq "key_id") {
+            $dsSigningKeyId = $value
+        } elseif ($name -ceq "key_sha256") {
+            $dsSigningExpectedSha256 = $value.ToLowerInvariant()
+        }
+    }
+}
+$dsSigningKeyPath = if (-not [string]::IsNullOrWhiteSpace($dsSigningKeyId)) {
+    Join-Path (Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\trusted-keys") ($dsSigningKeyId + ".pem")
+} else {
+    $null
+}
+$dsSigningKeyExists =
+    -not [string]::IsNullOrWhiteSpace($dsSigningKeyPath) -and
+    (Test-Path -LiteralPath $dsSigningKeyPath -PathType Leaf)
+$dsSigningActualSha256 = if ($dsSigningKeyExists) {
+    (Get-FileHash -LiteralPath $dsSigningKeyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+} else {
+    $null
+}
+Write-JsonEvidence "07-utm-ds-signing-trust.json" ([ordered]@{
+    marker_exists = $dsSigningMarkerExists
+    key_id = $dsSigningKeyId
+    key_exists = $dsSigningKeyExists
+    expected_sha256 = $dsSigningExpectedSha256
+    actual_sha256 = $dsSigningActualSha256
+    hash_matches =
+        $dsSigningKeyExists -and
+        -not [string]::IsNullOrWhiteSpace($dsSigningExpectedSha256) -and
+        $dsSigningActualSha256 -ceq $dsSigningExpectedSha256
+})
+
 $agentEnvPath = Join-Path $env:ProgramData "BKE Digital Solutions\Licensing Agent\.env"
 $expectedPlatformBaseUrl = $null
 $environmentEvidence = [ordered]@{
