@@ -26,10 +26,8 @@ var utmPrepareSource = File.ReadAllText(
     Path.Combine("certification", "utm", "Prepare-BkeAgent-UtmEnvironment.ps1"));
 var utmInstallTrustSource = File.ReadAllText(
     Path.Combine("certification", "utm", "Install-RenderDock-UtmTargetTrust.ps1"));
-var utmInstallDsSigningTrustSource = File.ReadAllText(
-    Path.Combine("certification", "utm", "Install-Disposable-DigitalSolutionsSigningTrust.ps1"));
-var utmRemoveDsSigningTrustSource = File.ReadAllText(
-    Path.Combine("certification", "utm", "Remove-Disposable-DigitalSolutionsSigningTrust.ps1"));
+var utmRemoveTrustSource = File.ReadAllText(
+    Path.Combine("certification", "utm", "Remove-RenderDock-UtmTargetTrust.ps1"));
 var utmWorkflowSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
 var intentCertificationSource = File.ReadAllText(
@@ -270,18 +268,22 @@ Require(
     utmPrepareSource.Contains("production jl-bke.com authority", StringComparison.OrdinalIgnoreCase),
     "UTM Agent environment no longer fails closed against production authority.");
 Require(
-    utmInstallDsSigningTrustSource.Contains("BKE_ENVIRONMENT=utm", StringComparison.Ordinal) &&
-    utmInstallDsSigningTrustSource.Contains("jl-bke.com", StringComparison.OrdinalIgnoreCase) &&
-    utmInstallDsSigningTrustSource.Contains("BEGIN PRIVATE KEY", StringComparison.Ordinal) &&
-    utmInstallDsSigningTrustSource.Contains("ExpectedSha256", StringComparison.Ordinal) &&
-    utmInstallDsSigningTrustSource.Contains("trusted-keys", StringComparison.Ordinal) &&
-    utmRemoveDsSigningTrustSource.Contains("BKE_ENVIRONMENT=utm", StringComparison.Ordinal) &&
-    utmRemoveDsSigningTrustSource.Contains("UTM-TEST-ONLY-Digital-Solutions-signing-trust.txt", StringComparison.Ordinal),
-    "UTM Digital Solutions signing trust is not fail-closed and disposable-only.");
+    utmInstallTrustSource.Contains("DigitalSolutionsSigningPublicKeyPath", StringComparison.Ordinal) &&
+    utmInstallTrustSource.Contains("DigitalSolutionsSigningKeyId", StringComparison.Ordinal) &&
+    utmInstallTrustSource.Contains("DigitalSolutionsSigningPublicKeySha256", StringComparison.Ordinal) &&
+    utmInstallTrustSource.Contains("BKE_ENVIRONMENT=utm", StringComparison.Ordinal) &&
+    utmInstallTrustSource.Contains("jl-bke.com", StringComparison.OrdinalIgnoreCase) &&
+    utmInstallTrustSource.Contains("BEGIN PRIVATE KEY", StringComparison.Ordinal) &&
+    utmInstallTrustSource.Contains("trusted-keys", StringComparison.Ordinal) &&
+    utmRemoveTrustSource.Contains("RemoveDigitalSolutionsSigningTrust", StringComparison.Ordinal) &&
+    utmRemoveTrustSource.Contains("BKE_ENVIRONMENT=utm", StringComparison.Ordinal) &&
+    utmRemoveTrustSource.Contains("UTM-TEST-ONLY-Digital-Solutions-signing-trust.txt", StringComparison.Ordinal),
+    "Packaged UTM target-trust helpers no longer bridge disposable Digital Solutions signing trust fail-closed.");
 Require(
     utmEvidenceSource.Contains("07-utm-ds-signing-trust.json", StringComparison.Ordinal) &&
     utmEvidenceSource.Contains("hash_matches", StringComparison.Ordinal) &&
-    utmRunbookSource.Contains("Install-Disposable-DigitalSolutionsSigningTrust.ps1", StringComparison.Ordinal) &&
+    utmRunbookSource.Contains("DigitalSolutionsSigningPublicKeyPath", StringComparison.Ordinal) &&
+    utmRunbookSource.Contains("DigitalSolutionsSigningPublicKeySha256", StringComparison.Ordinal) &&
     utmRunbookSource.Contains("license-signing-public.pem", StringComparison.Ordinal),
     "UTM evidence/runbook no longer proves disposable Digital Solutions policy-signing trust.");
 Require(
