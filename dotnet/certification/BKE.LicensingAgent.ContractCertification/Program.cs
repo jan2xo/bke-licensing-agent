@@ -146,6 +146,43 @@ Require(
         StringComparison.Ordinal),
     "Agent self-update proof still hard-pins the retired Digital Solutions authority SHA.");
 
+var releaseToolingSource = File.ReadAllText(
+    Path.Combine(
+        "dotnet",
+        "tools",
+        "BKE.LicensingAgent.ReleaseTooling",
+        "Program.cs"));
+Require(
+    releaseToolingSource.Contains(
+        "\"generate-preproduction-update-key\"",
+        StringComparison.Ordinal) &&
+    releaseToolingSource.Contains(
+        "AUTHORIZE_OFFLINE_PREPRODUCTION_KEY_GENERATION",
+        StringComparison.Ordinal) &&
+    releaseToolingSource.Contains(
+        "bke-agent-update-preproduction-",
+        StringComparison.Ordinal),
+    "Agent release tooling is missing the isolated PREPRODUCTION update-authority key generator.");
+Require(
+    releaseToolingSource.Contains(
+        "--update-key-json",
+        StringComparison.Ordinal) &&
+    releaseToolingSource.Contains(
+        "InstallUpdateAuthorityPublicKey",
+        StringComparison.Ordinal) &&
+    releaseToolingSource.Contains(
+        "update-authority public key fields do not match the strict contract",
+        StringComparison.Ordinal),
+    "Agent packaging cannot consume an externally-custodied PREPRODUCTION update-authority public key.");
+Require(
+    releaseToolingSource.Contains(
+        "refusing to write preproduction private key material inside a Git repository",
+        StringComparison.Ordinal) &&
+    releaseToolingSource.Contains(
+        "PRIVATE KEY WAS NOT PRINTED.",
+        StringComparison.Ordinal),
+    "PREPRODUCTION update-key tooling no longer fails closed around private-key custody.");
+
 var privilegedUpdateCenterSource = File.ReadAllText(
     Path.Combine(
         "dotnet",
