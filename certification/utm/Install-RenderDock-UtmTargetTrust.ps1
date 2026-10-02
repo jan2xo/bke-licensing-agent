@@ -1,6 +1,16 @@
 param(
     [ValidateSet("x64")]
-    [string]$Architecture = "x64"
+    [string]$Architecture = "x64",
+
+    [string]$DigitalSolutionsSigningPublicKeyPath = "",
+
+    [ValidatePattern("^$|^[A-Za-z0-9._-]{1,128}$")]
+    [string]$DigitalSolutionsSigningKeyId = "",
+
+    [ValidatePattern("^$|^[0-9a-fA-F]{64}$")]
+    [string]$DigitalSolutionsSigningPublicKeySha256 = "",
+
+    [switch]$ForceDigitalSolutionsSigningTrust
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,3 +81,110 @@ Write-Host "UTM TEST-ONLY Render Dock target trust installed."
 Write-Host "architecture=$Architecture"
 Write-Host "key_sha256=$((Get-FileHash (Join-Path $keyDir $keyName) -Algorithm SHA256).Hash.ToLowerInvariant())"
 Write-Host "policy_sha256=$((Get-FileHash (Join-Path $policyDir $policyName) -Algorithm SHA256).Hash.ToLowerInvariant())"
+
+
+$hasDigitalSolutionsSigningTrustInput =
+    -not [string]::IsNullOrWhiteSpace($DigitalSolutionsSigningPublicKeyPath) -or
+    -not [string]::IsNullOrWhiteSpace($DigitalSolutionsSigningKeyId) -or
+    -not [string]::IsNullOrWhiteSpace($DigitalSolutionsSigningPublicKeySha256)
+
+if ($hasDigitalSolutionsSigningTrustInput) {
+    if ([string]::IsNullOrWhiteSpace($DigitalSolutionsSigningPublicKeyPath) -or
+        [string]::IsNullOrWhiteSpace($DigitalSolutionsSigningKeyId) -or
+        [string]::IsNullOrWhiteSpace($DigitalSolutionsSigningPublicKeySha256)) {
+        throw "Disposable Digital Solutions signing trust requires public-key path, key id, and SHA-256 together."
+    }
+
+    $envPath = Join-Path $dataRoot ".env"
+    if (!(Test-Path -LiteralPath $envPath)) {
+        throw "Agent UTM environment is unavailable. Prepare the disposable Agent environment first."
+    }
+
+    $safe = @{}
+    foreach ($line in Get-Content -LiteralPath $envPath) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith("#")) {
+            continue
+        }
+        $separator = $trimmed.IndexOf("=")
+        if ($separator -le 0) {
+            continue
+        }
+        $name = $trimmed.Substring(0, $separator).Trim()
+        if ($name -in @("BKE_ENVIRONMENT", "BKE_PLATFORM_BASE_URL")) {
+            $safe[$name] = $trimmed.Substring($separator + 1).Trim().Trim('"').Trim("'")
+        }
+    }
+
+    if ([string]$safe["BKE_ENVIRONMENT"] -cne "utm") {
+        throw "Disposable Digital Solutions signing trust may be installed only when BKE_ENVIRONMENT=utm."
+    }
+
+    $platformUri = $null
+    if (-not $safe.ContainsKey("BKE_PLATFORM_BASE_URL") -or
+        -not [Uri]::TryCreate([string]$safe["BKE_PLATFORM_BASE_URL"], [UriKind]::Absolute, [ref]$platformUri)) {
+        throw "Agent UTM platform authority is invalid."
+    }
+
+    $platformHost = $platformUri.Host.TrimEnd(".")
+    if ($platformHost -ieq "jl-bke.com" -or
+        $platformHost.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing disposable signing trust while the Agent points at production authority."
+    }
+
+    $sourceSigningKey = (Resolve-Path -LiteralPath $DigitalSolutionsSigningPublicKeyPath).Path
+    $sourceSigningContent = [IO.File]::ReadAllText($sourceSigningKey)
+    if ($sourceSigningContent.Contains("BEGIN PRIVATE KEY") -or
+        $sourceSigningContent.Contains("BEGIN ED25519 PRIVATE KEY")) {
+        throw "Refusing signing trust input that contains private-key material."
+    }
+    if (-not $sourceSigningContent.Contains("BEGIN PUBLIC KEY") -or
+        -not $sourceSigningContent.Contains("END PUBLIC KEY")) {
+        throw "Disposable signing trust input must be a PEM public key."
+    }
+
+    $actualSigningSha256 = (Get-FileHash -LiteralPath $sourceSigningKey -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSigningSha256 -cne $DigitalSolutionsSigningPublicKeySha256.ToLowerInvariant()) {
+        throw "Disposable signing public-key SHA-256 does not match the pinned operator value."
+    }
+
+    $trustedKeysDir = [IO.Path]::GetFullPath((Join-Path $dataRoot "trusted-keys"))
+    $agentDataRoot = [IO.Path]::GetFullPath($dataRoot)
+    if (-not $trustedKeysDir.StartsWith(
+            $agentDataRoot + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Agent trusted-key path escaped the expected protected ProgramData root."
+    }
+
+    New-Item -ItemType Directory -Force -Path $trustedKeysDir | Out-Null
+    $signingDestination = Join-Path $trustedKeysDir ($DigitalSolutionsSigningKeyId + ".pem")
+
+    if ((Test-Path -LiteralPath $signingDestination) -and -not $ForceDigitalSolutionsSigningTrust) {
+        $existingSigningSha256 = (Get-FileHash -LiteralPath $signingDestination -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($existingSigningSha256 -cne $actualSigningSha256) {
+            throw "A different trusted public key already exists for '$DigitalSolutionsSigningKeyId'. Use -ForceDigitalSolutionsSigningTrust only for an intentional disposable UTM replacement."
+        }
+    } else {
+        Copy-Item -LiteralPath $sourceSigningKey -Destination $signingDestination -Force
+    }
+
+    $installedSigningSha256 = (Get-FileHash -LiteralPath $signingDestination -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedSigningSha256 -cne $actualSigningSha256) {
+        throw "Installed disposable signing public key failed SHA-256 verification."
+    }
+
+    $signingMarker = Join-Path $dataRoot "UTM-TEST-ONLY-Digital-Solutions-signing-trust.txt"
+    @"
+UTM TEST ONLY
+key_id=$DigitalSolutionsSigningKeyId
+key_sha256=$installedSigningSha256
+platform_authority=$($platformUri.AbsoluteUri.TrimEnd('/'))
+installed_at=$([DateTimeOffset]::UtcNow.ToString("O"))
+DO NOT USE THIS SIGNING TRUST FOR PRODUCTION.
+"@ | Set-Content -LiteralPath $signingMarker -Encoding utf8
+
+    Write-Host "UTM TEST-ONLY Digital Solutions signing trust installed."
+    Write-Host "key_id=$DigitalSolutionsSigningKeyId"
+    Write-Host "key_sha256=$installedSigningSha256"
+    Write-Host "production_authority_blocked=true"
+}
