@@ -208,9 +208,11 @@ Require(
     utmWorkflowSource.Contains("\"$SOURCE_SHA\" > \"$root/SOURCE-SHA.txt\"", StringComparison.Ordinal),
     "UTM trust bundle is not exact-source bound.");
 Require(
-    utmWorkflowSource.Contains("branches: [main]", StringComparison.Ordinal) &&
-    utmWorkflowSource.Contains("certification/utm/**", StringComparison.Ordinal),
-    "UTM trust bundle is not emitted from relevant merged-main changes.");
+    utmWorkflowSource.Contains("workflow_call:", StringComparison.Ordinal) &&
+    utmWorkflowSource.Contains("workflow_dispatch:", StringComparison.Ordinal) &&
+    !utmWorkflowSource.Contains("\n  push:", StringComparison.Ordinal) &&
+    !utmWorkflowSource.Contains("branches: [main]", StringComparison.Ordinal),
+    "UTM trust certification must be explicitly invoked, not emitted from merged-main changes.");
 Require(
     utmWorkflowSource.Contains("Generate Render Dock x64 disposable trust", StringComparison.Ordinal) &&
     utmWorkflowSource.Contains("--architecture \"x86_64\"", StringComparison.Ordinal) &&
