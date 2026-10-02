@@ -60,6 +60,7 @@ public static class LocalAgentContract
     public const string AccountOrganizationOwnershipTransferPath = "/v1/account/organization/ownership/transfer";
     public const string AccountOrganizationLeavePath = "/v1/account/organization/leave";
     public const string SoftwareCatalogPath = "/v1/software/catalog";
+    public const string LauncherPluginAuthorizePath = "/v1/software/launcher-plugin/authorize";
     public const string SoftwareInstallPath = "/v1/software/install";
     public const string SoftwareUpdatePath = "/v1/software/update";
     public const string SoftwareRepairPath = "/v1/software/repair";
@@ -109,6 +110,8 @@ public static class LocalAgentContract
     public const int AccountOrganizationContractVersion = 1;
     public const string SoftwareCatalogCapabilityId = "bke.software-catalog";
     public const int SoftwareCatalogContractVersion = 1;
+    public const string LauncherPluginAuthorizeCapabilityId = "bke.launcher-plugin-authorize";
+    public const int LauncherPluginAuthorizeContractVersion = 1;
     public const string SoftwareInstallCapabilityId = "bke.software-install";
     public const int SoftwareInstallContractVersion = 1;
     public const string SoftwareUpdateCapabilityId = "bke.software-update";
