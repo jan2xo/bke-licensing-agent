@@ -186,6 +186,7 @@ powershell -ExecutionPolicy Bypass -File .\Collect-BkeLauncher-UtmEvidence.ps1 `
   -DigitalSolutionsSourceSha "<digital-solutions-sha>" `
   -LauncherSourceSha "<launcher-source-sha>" `
   -AgentSourceSha "<agent-source-sha>" `
+  -DemoAppSourceSha "<demo-app-source-sha>" `
   -ParentInstallerSha256 "$installerHash"
 ```
 
@@ -474,6 +475,7 @@ powershell -ExecutionPolicy Bypass -File .\Collect-BkeLauncher-UtmEvidence.ps1 `
   -DigitalSolutionsSourceSha "<digital-solutions-sha>" `
   -LauncherSourceSha "<launcher-source-sha>" `
   -AgentSourceSha "<agent-source-sha>" `
+  -DemoAppSourceSha "<demo-app-source-sha>" `
   -ParentInstallerSha256 "$installerHash" `
   -RequireCustomerSoftwareReady
 ```
