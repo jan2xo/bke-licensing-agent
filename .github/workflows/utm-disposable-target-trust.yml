@@ -123,6 +123,20 @@ jobs:
             .algorithm == "Ed25519"
           ' "$root/x64/target-policies/utm-render-dock-windows-x64-v1.json" >/dev/null
 
+          grep -Fq 'bke-render-dock' "$root/UTM-E2E-RUNBOOK.md"
+          grep -Fq '1.0.3' "$root/UTM-E2E-RUNBOOK.md"
+          grep -Fq 'bke-trial-product' "$root/UTM-E2E-RUNBOOK.md"
+          grep -Fq '2.0.0' "$root/UTM-E2E-RUNBOOK.md"
+          grep -Fq '916931fb2efe5fb26720e0f150bdef290f064780f534dcfd96577e1fda45ffa0' "$root/UTM-E2E-RUNBOOK.md"
+
+          grep -Fq '/v1/software/launcher-plugin/authorize' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
+          grep -Fq '05-launcher-plugin-authorization.json' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
+          grep -Fq '05-customer-software-proof.json' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
+          grep -Fq 'RequireCustomerSoftwareReady' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
+          grep -Fq 'customer_software_ready' "$root/Collect-BkeLauncher-UtmEvidence.ps1"
+
+          echo "Disposable BKE customer-path evidence contract: PASS"
+
           (
             cd "$root"
             find . -type f ! -name SHA256SUMS.txt -print0 |
