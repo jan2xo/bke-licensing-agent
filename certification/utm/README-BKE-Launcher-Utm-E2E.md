@@ -186,8 +186,7 @@ powershell -ExecutionPolicy Bypass -File .\Collect-BkeLauncher-UtmEvidence.ps1 `
   -DigitalSolutionsSourceSha "<digital-solutions-sha>" `
   -LauncherSourceSha "<launcher-source-sha>" `
   -AgentSourceSha "<agent-source-sha>" `
-  -ParentInstallerSha256 "$installerHash" `
-  -RequireCustomerSoftwareReady
+  -ParentInstallerSha256 "$installerHash"
 ```
 
 Expected before login:
@@ -475,7 +474,8 @@ powershell -ExecutionPolicy Bypass -File .\Collect-BkeLauncher-UtmEvidence.ps1 `
   -DigitalSolutionsSourceSha "<digital-solutions-sha>" `
   -LauncherSourceSha "<launcher-source-sha>" `
   -AgentSourceSha "<agent-source-sha>" `
-  -ParentInstallerSha256 "$installerHash"
+  -ParentInstallerSha256 "$installerHash" `
+  -RequireCustomerSoftwareReady
 ```
 
 Keep:
