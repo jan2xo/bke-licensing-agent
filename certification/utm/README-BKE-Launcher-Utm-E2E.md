@@ -115,8 +115,7 @@ TCP 8443 on the Mac.
 
 Use a disposable Windows UTM snapshot.
 
-1. Map `bke-v3.test` to the current disposable Linux/Ubuntu LAN IP in the Windows
-   hosts file.
+1. Map `bke-v3.test` to the current Mac host LAN IP in the Windows hosts file.
 2. Copy only the disposable CA certificate
    `.bke-disposable/tls/bke-v3-disposable-ca.crt.pem` to Windows.
 3. From elevated PowerShell, import it into the test machine root store:
