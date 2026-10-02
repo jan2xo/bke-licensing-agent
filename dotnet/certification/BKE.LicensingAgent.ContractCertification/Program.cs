@@ -411,6 +411,7 @@ var contractRoutes = new HashSet<string>(StringComparer.Ordinal)
     $"POST {LocalAgentContract.AccountSessionStatusPath}",
     $"POST {LocalAgentContract.AccountSessionLogoutPath}",
     $"POST {LocalAgentContract.SoftwareCatalogPath}",
+    $"POST {LocalAgentContract.LauncherPluginAuthorizePath}",
     $"POST {LocalAgentContract.SoftwareInstallPath}",
     $"POST {LocalAgentContract.SoftwareUpdatePath}",
     $"POST {LocalAgentContract.SoftwareRepairPath}",
@@ -455,6 +456,23 @@ Require(softwareCatalog.GetProperty("installation_state_owner").GetString() == "
 Require(softwareCatalog.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "software-catalog cloud secret exposure drifted");
 Require(softwareCatalog.GetProperty("execution_types").EnumerateArray().Select(value => value.GetString()).ToHashSet(StringComparer.Ordinal)
     .SetEquals(["LAUNCHER_PLUGIN", "STANDALONE"]), "software-catalog execution types drifted");
+
+var launcherPluginAuthorization = capabilities.GetProperty("launcher_plugin_authorization");
+Require(launcherPluginAuthorization.GetProperty("capability_id").GetString() == LocalAgentContract.LauncherPluginAuthorizeCapabilityId, "launcher-plugin authorization capability id mismatch");
+Require(launcherPluginAuthorization.GetProperty("contract_version").GetInt32() == LocalAgentContract.LauncherPluginAuthorizeContractVersion, "launcher-plugin authorization contract version mismatch");
+Require(launcherPluginAuthorization.GetProperty("account_session_required").GetBoolean(), "launcher-plugin authorization lost account-session requirement");
+Require(launcherPluginAuthorization.GetProperty("catalog_recheck_required").GetBoolean(), "launcher-plugin authorization stopped rechecking Digital Solutions catalog authority");
+Require(launcherPluginAuthorization.GetProperty("execution_type_owner").GetString() == "bke-digital-solutions", "launcher-plugin execution-type ownership drifted");
+Require(launcherPluginAuthorization.GetProperty("execution_type_required").GetString() == "LAUNCHER_PLUGIN", "launcher-plugin execution-type gate drifted");
+Require(launcherPluginAuthorization.GetProperty("entitlement_owner").GetString() == "bke-digital-solutions", "launcher-plugin entitlement ownership drifted");
+Require(launcherPluginAuthorization.GetProperty("version_match_required").GetBoolean(), "launcher-plugin exact-version gate was disabled");
+Require(launcherPluginAuthorization.GetProperty("host_owner").GetString() == "bke-launcher", "launcher-plugin host ownership drifted");
+Require(launcherPluginAuthorization.GetProperty("local_request_fields").EnumerateArray().Select(value => value.GetString()).ToArray()
+    .SequenceEqual(["correlation_id", "product_id", "version"]), "launcher-plugin local authorization request widened");
+Require(launcherPluginAuthorization.GetProperty("local_responses_expose_cloud_tokens").GetBoolean() == false, "launcher-plugin authorization leaked cloud tokens");
+Require(launcherPluginAuthorization.GetProperty("local_responses_expose_account_id").GetBoolean() == false, "launcher-plugin authorization leaked account identity");
+Require(launcherPluginAuthorization.GetProperty("local_responses_expose_download_urls").GetBoolean() == false, "launcher-plugin authorization leaked release URLs");
+Require(launcherPluginAuthorization.GetProperty("local_responses_expose_install_paths").GetBoolean() == false, "launcher-plugin authorization leaked install paths");
 
 var softwareInstall = capabilities.GetProperty("software_install");
 Require(softwareInstall.GetProperty("capability_id").GetString() == LocalAgentContract.SoftwareInstallCapabilityId, "software-install capability id mismatch");
@@ -620,6 +638,10 @@ Require(JsonName<StoreCheckoutStatusResponse>(nameof(StoreCheckoutStatusResponse
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
+Require(JsonName<LauncherPluginAuthorizeRequest>(nameof(LauncherPluginAuthorizeRequest.CorrelationId)) == "correlation_id", "launcher-plugin authorization correlation_id wire name mismatch");
+Require(JsonName<LauncherPluginAuthorizeRequest>(nameof(LauncherPluginAuthorizeRequest.ProductId)) == "product_id", "launcher-plugin authorization product_id wire name mismatch");
+Require(JsonName<LauncherPluginAuthorizeRequest>(nameof(LauncherPluginAuthorizeRequest.Version)) == "version", "launcher-plugin authorization version wire name mismatch");
+Require(JsonName<LauncherPluginAuthorizeResponse>(nameof(LauncherPluginAuthorizeResponse.Authorized)) == "authorized", "launcher-plugin authorization authorized wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.CorrelationId)) == "correlation_id", "software-install correlation_id wire name mismatch");
 Require(JsonName<SoftwareInstallRequest>(nameof(SoftwareInstallRequest.ProductId)) == "product_id", "software-install product_id wire name mismatch");
 Require(JsonName<SoftwareUpdateRequest>(nameof(SoftwareUpdateRequest.CorrelationId)) == "correlation_id", "software-update correlation_id wire name mismatch");
@@ -709,6 +731,7 @@ Require(MethodNames<IStoreTrialStartService>().SetEquals(["StartAsync"]), "Store
 Require(MethodNames<IStoreGiftClaimsService>().SetEquals(["ListAsync", "RevealAsync"]), "persistent Gift Claim Code port drifted");
 Require(MethodNames<IStoreCheckoutStatusService>().SetEquals(["CheckAsync"]), "Store checkout-status port drifted");
 Require(MethodNames<ISoftwareCatalogService>().SetEquals(["GetAsync"]), "software-catalog port drifted");
+Require(MethodNames<ILauncherPluginAuthorizationService>().SetEquals(["AuthorizeAsync"]), "launcher-plugin authorization port drifted");
 Require(MethodNames<ISoftwareUpdateService>().SetEquals(["UpdateAsync"]), "software-update port drifted");
 Require(MethodNames<ISoftwareRepairService>().SetEquals(["RepairAsync"]), "software-repair port drifted");
 Require(MethodNames<ISoftwareInstallService>().SetEquals(["InstallAsync"]), "software-install port drifted");
@@ -738,6 +761,7 @@ await CertifyStoreCheckoutStatusBoundary();
 await StoreGiftClaimRevealCertification.RunAsync();
 await PersistentGiftClaimCertification.RunAsync();
 await CertifySoftwareCatalogBoundary();
+await CertifyLauncherPluginAuthorizationBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
 await CertifySoftwareRepairBoundary();
@@ -764,6 +788,7 @@ Console.WriteLine("Account license-seat read/mutation session-custody, opaque-ha
 Console.WriteLine("Account organization read/profile/invitation issuance/acceptance/member-management/ownership-transfer/self-leave session-custody, opaque-handle, role-filter, single-attempt, transient-secret, reauthentication, and identifier boundary certified");
 Console.WriteLine("Claim Code redemption session, secret, and single-attempt boundary certified");
 Console.WriteLine("Store catalog pricing-presentation, strict-parser, and secret boundary certified");
+Console.WriteLine("Launcher-hosted plugin authorization account-session, execution-type, entitlement, exact-version, and secret boundary certified");
 Console.WriteLine("Store checkout-review pricing, Legal, retry, strict-parser, and secret boundary certified");
 Console.WriteLine("Store checkout-start intent, no-retry mutation, strict-parser, and secret boundary certified");
 Console.WriteLine("Store self-service trial-start session-custody, selected-edition, single-attempt ambiguity, strict-parser, and identifier boundary certified");
@@ -2890,6 +2915,168 @@ static async Task CertifySoftwareCatalogBoundary()
     var wire = JsonSerializer.Serialize(response);
     Require(!wire.Contains("catalog-access-secret", StringComparison.Ordinal), "catalog access token leaked to local response");
     Require(!wire.Contains("catalog-refresh-secret", StringComparison.Ordinal), "catalog refresh token leaked to local response");
+}
+
+static async Task CertifyLauncherPluginAuthorizationBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-plugin",
+        "plugin@example.com",
+        "account-plugin",
+        "INDIVIDUAL",
+        "Plugin Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(
+        new ActiveAccountSessionState(
+            "plugin-access-secret",
+            "plugin-refresh-secret",
+            "plugin-session",
+            DateTimeOffset.UtcNow.AddMinutes(15),
+            DateTimeOffset.UtcNow.AddDays(30),
+            account),
+        CancellationToken.None);
+
+    var remote = new FakeSoftwareCatalogRemote([
+        new RemoteSoftwareCatalogItem(
+            "bke-plugin-tool",
+            "Plugin Tool",
+            "Launcher-hosted tool",
+            "LAUNCHER_PLUGIN",
+            true,
+            true,
+            "1.2.3"),
+        new RemoteSoftwareCatalogItem(
+            "bke-plugin-locked",
+            "Locked Plugin",
+            "Launcher-hosted tool without entitlement",
+            "LAUNCHER_PLUGIN",
+            false,
+            false,
+            "1.0.0"),
+        new RemoteSoftwareCatalogItem(
+            "bke-render-dock",
+            "Render Dock",
+            "Standalone rendering product",
+            "STANDALONE",
+            true,
+            true,
+            "2.0.0"),
+    ]);
+    var catalog = new SoftwareCatalogService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        remote,
+        new FakeLocalProductInventory(
+            new Dictionary<string, LocalInstalledProduct>(
+                StringComparer.Ordinal)));
+    var service = new LauncherPluginAuthorizationService(catalog);
+
+    var authorized = await service.AuthorizeAsync(
+        new LauncherPluginAuthorizeRequest(
+            "cert-plugin-authorize",
+            "bke-plugin-tool",
+            "1.2.3"),
+        CancellationToken.None);
+    Require(authorized.Status == "AUTHORIZED", "launcher plugin exact-version authorization did not succeed");
+    Require(authorized.Authorized, "launcher plugin exact-version authorization was not granted");
+    Require(authorized.Reason == "authorized", "launcher plugin authorization reason drifted");
+    Require(remote.AccessToken == "plugin-access-secret", "launcher plugin authorization bypassed Agent-owned account-session secret");
+
+    var stale = await service.AuthorizeAsync(
+        new LauncherPluginAuthorizeRequest(
+            "cert-plugin-stale",
+            "bke-plugin-tool",
+            "1.2.2"),
+        CancellationToken.None);
+    Require(stale.Status == "DENIED" && !stale.Authorized && stale.Reason == "version_mismatch",
+        "launcher plugin stale bundled version did not fail closed");
+
+    var standalone = await service.AuthorizeAsync(
+        new LauncherPluginAuthorizeRequest(
+            "cert-plugin-standalone",
+            "bke-render-dock",
+            "2.0.0"),
+        CancellationToken.None);
+    Require(standalone.Status == "DENIED" && !standalone.Authorized && standalone.Reason == "unsupported_execution_type",
+        "launcher plugin authorization accepted a STANDALONE product");
+
+    var notEntitled = await service.AuthorizeAsync(
+        new LauncherPluginAuthorizeRequest(
+            "cert-plugin-not-entitled",
+            "bke-plugin-locked",
+            "1.0.0"),
+        CancellationToken.None);
+    Require(notEntitled.Status == "DENIED" && !notEntitled.Authorized && notEntitled.Reason == "not_entitled",
+        "launcher plugin authorization ignored Digital Solutions entitlement");
+
+    var missing = await service.AuthorizeAsync(
+        new LauncherPluginAuthorizeRequest(
+            "cert-plugin-missing",
+            "bke-plugin-missing",
+            "1.0.0"),
+        CancellationToken.None);
+    Require(missing.Status == "DENIED" && !missing.Authorized && missing.Reason == "not_found",
+        "launcher plugin authorization did not fail closed for an unknown product");
+
+    var unauthenticatedCatalog = new SoftwareCatalogService(
+        new FakeUnauthenticatedAccountSessionService(),
+        store,
+        remote,
+        new FakeLocalProductInventory(
+            new Dictionary<string, LocalInstalledProduct>(
+                StringComparer.Ordinal)));
+    var unauthenticatedService =
+        new LauncherPluginAuthorizationService(unauthenticatedCatalog);
+    var unauthenticated = await unauthenticatedService.AuthorizeAsync(
+        new LauncherPluginAuthorizeRequest(
+            "cert-plugin-auth-required",
+            "bke-plugin-tool",
+            "1.2.3"),
+        CancellationToken.None);
+    Require(unauthenticated.Status == "AUTH_REQUIRED" && !unauthenticated.Authorized,
+        "launcher plugin authorization did not require the Agent-owned account session");
+
+    var duplicateCatalog = new SoftwareCatalogService(
+        new FakeAuthenticatedAccountSessionService(account),
+        store,
+        new FakeSoftwareCatalogRemote([
+            new RemoteSoftwareCatalogItem(
+                "bke-plugin-duplicate",
+                "Plugin Duplicate A",
+                "Duplicate fixture",
+                "LAUNCHER_PLUGIN",
+                true,
+                true,
+                "1.0.0"),
+            new RemoteSoftwareCatalogItem(
+                "bke-plugin-duplicate",
+                "Plugin Duplicate B",
+                "Duplicate fixture",
+                "LAUNCHER_PLUGIN",
+                true,
+                true,
+                "1.0.0"),
+        ]),
+        new FakeLocalProductInventory(
+            new Dictionary<string, LocalInstalledProduct>(
+                StringComparer.Ordinal)));
+    var duplicateService =
+        new LauncherPluginAuthorizationService(duplicateCatalog);
+    var duplicate = await duplicateService.AuthorizeAsync(
+        new LauncherPluginAuthorizeRequest(
+            "cert-plugin-duplicate",
+            "bke-plugin-duplicate",
+            "1.0.0"),
+        CancellationToken.None);
+    Require(duplicate.Status == "FAILED" && !duplicate.Authorized && duplicate.Reason == "catalog_ambiguous",
+        "launcher plugin authorization did not fail closed on duplicate catalog identity");
+
+    var wire = JsonSerializer.Serialize(authorized);
+    Require(!wire.Contains("plugin-access-secret", StringComparison.Ordinal), "launcher plugin authorization leaked access token");
+    Require(!wire.Contains("plugin-refresh-secret", StringComparison.Ordinal), "launcher plugin authorization leaked refresh token");
+    Require(!wire.Contains("account-plugin", StringComparison.Ordinal), "launcher plugin authorization leaked selected account id");
+    Require(!wire.Contains("github.com", StringComparison.OrdinalIgnoreCase), "launcher plugin authorization leaked a release URL");
+    Require(!wire.Contains("Program Files", StringComparison.OrdinalIgnoreCase), "launcher plugin authorization leaked an install path");
 }
 
 static async Task CertifySoftwareInstallBoundary()
