@@ -21,6 +21,34 @@ if (args.Length != 2 || args[0] != "--helper" || string.IsNullOrWhiteSpace(args[
     throw new InvalidDataException("--helper <bke-updater-core.exe> is required");
 }
 
+// The trusted default-branch windows-x64 certifier invokes this existing
+// first-install executable against the exact PR checkout. Run the focused
+// source-private-key proof from that same immutable checkout without
+// modifying the trusted default-branch dispatcher or waking unrelated CI.
+using (var machineKeyProof = Process.Start(new ProcessStartInfo
+{
+    FileName = "dotnet",
+    ArgumentList =
+    {
+        "run", "--project",
+        "dotnet/certification/BKE.LicensingAgent.MachineKeyCertification/BKE.LicensingAgent.MachineKeyCertification.csproj",
+        "--configuration", "Release",
+    },
+    RedirectStandardOutput = true,
+    RedirectStandardError = true,
+    UseShellExecute = false,
+    CreateNoWindow = true,
+}) ?? throw new InvalidOperationException("Could not launch Windows key custody certification."))
+{
+    string output = machineKeyProof.StandardOutput.ReadToEnd();
+    string errors = machineKeyProof.StandardError.ReadToEnd();
+    machineKeyProof.WaitForExit();
+    if (machineKeyProof.ExitCode != 0)
+        throw new InvalidOperationException(
+            "Agent protected machine-key certification failed: " + errors + output);
+    Console.WriteLine(output);
+}
+
 var helper = Path.GetFullPath(args[1]);
 if (!File.Exists(helper))
 {
