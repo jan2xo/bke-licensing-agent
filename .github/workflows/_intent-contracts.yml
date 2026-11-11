@@ -46,6 +46,9 @@ jobs:
           dotnet build dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release
           dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
 
+      - name: Compile new Agent private-key custody certification on all platforms
+        run: dotnet build dotnet/certification/BKE.LicensingAgent.MachineKeyCertification/BKE.LicensingAgent.MachineKeyCertification.csproj --configuration Release
+
       - name: Run .NET contract certifications
         run: |
           dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release
