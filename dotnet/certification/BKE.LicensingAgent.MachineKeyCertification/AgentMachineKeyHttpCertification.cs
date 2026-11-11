@@ -106,6 +106,7 @@ internal static class AgentMachineKeyHttpCertification
             }
             catch (InvalidOperationException) { refused = true; }
             Pass(refused, "Non-HTTPS public endpoint rejected");
+            await RunReceiptAsync(root, session, bearer, sessionId, accountId, userId, deviceId);
             Console.WriteLine("BKE Agent real DS-shaped enrollment transport PASS (" + passed +
                 " assertions, in-memory HTTP without production/network).");
         }
@@ -123,6 +124,11 @@ internal static class AgentMachineKeyHttpCertification
         private readonly string _nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');
         private string? _message, _publicPem;
+        private readonly DateTimeOffset _validUntil = DateTimeOffset.UtcNow.AddHours(12);
+        private bool _active, _pending, _revoked;
+        public bool DropVerifyAcknowledgementOnce { get; set; }
+        public bool FailRevoke { get; set; }
+        public int EnrollRequests { get; private set; }
         public bool WrongAccount { get; init; }
         public bool Redirect { get; init; }
         public bool WrongVersion { get; init; }
@@ -157,8 +163,33 @@ internal static class AgentMachineKeyHttpCertification
             var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
             using (json)
             {
+                if (path.EndsWith("/status", StringComparison.Ordinal))
+                {
+                    string? lookup = json.RootElement.TryGetProperty("registration_id", out var field)
+                        ? field.GetString() : null;
+                    if (lookup is not null && lookup != _registration)
+                        return Json(HttpStatusCode.OK, "{\"status\":\"none\"}");
+                    if (!_pending && !_active && !(lookup is not null && _revoked))
+                        return Json(HttpStatusCode.OK, "{\"status\":\"none\"}");
+                    string pemBody = _publicPem!.Replace("-----BEGIN PUBLIC KEY-----", "")
+                        .Replace("-----END PUBLIC KEY-----", "").Trim();
+                    string thumbprint = Convert.ToBase64String(
+                        SHA256.HashData(Convert.FromBase64String(pemBody)))
+                        .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+                    return Json(HttpStatusCode.OK, JsonSerializer.Serialize(new
+                    {
+                        status = "registration",
+                        registration_id = _registration,
+                        registration_state = _revoked ? "revoked" : _active ? "active" : "pending",
+                        key_thumbprint = thumbprint,
+                        key_protection = "software",
+                        valid_until = _validUntil.UtcDateTime.ToString("O"),
+                    }));
+                }
                 if (path.EndsWith("/enroll", StringComparison.Ordinal))
                 {
+                    EnrollRequests++;
+                    _pending = true;
                     _publicPem = json.RootElement.GetProperty("public_key_pem").GetString()!;
                     _message = string.Join("\n",
                         "bke.agent-key-proof.v1", "ENROLL", _challenge, _registration,
@@ -200,6 +231,13 @@ internal static class AgentMachineKeyHttpCertification
                     if (Encoding.UTF8.GetString(signedBytes) != _message ||
                         !verifier.VerifySignature(signature))
                         throw new InvalidDataException("Agent did not sign the exact DS challenge.");
+                    _active = true;
+                    _pending = false;
+                    if (DropVerifyAcknowledgementOnce)
+                    {
+                        DropVerifyAcknowledgementOnce = false;
+                        throw new HttpRequestException("Disposable lost final enrollment ACK.");
+                    }
                     return Json(HttpStatusCode.OK, JsonSerializer.Serialize(new
                     {
                         status = "enrolled",
@@ -210,6 +248,11 @@ internal static class AgentMachineKeyHttpCertification
                 {
                     if (json.RootElement.GetProperty("registration_id").GetString() != _registration)
                         throw new InvalidDataException("Revoke registration mismatch.");
+                    if (FailRevoke)
+                        return Json(HttpStatusCode.ServiceUnavailable, "{\"error\":\"DISPOSABLE_OFFLINE\"}");
+                    _revoked = true;
+                    _active = false;
+                    _pending = false;
                     return Json(HttpStatusCode.OK, "{\"status\":\"revoked\"}");
                 }
             }
