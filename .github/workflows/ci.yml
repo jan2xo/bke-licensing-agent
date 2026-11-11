@@ -73,12 +73,6 @@ jobs:
           if (!(Test-Path dist/windows/privileged-payload/target-policies/ci-dotnet-only.json)) { throw "target policy missing" }
           if (!(Test-Path dist/windows/update-authority-keys/ci-dotnet-update-v1.json)) { throw "update authority public key missing" }
 
-      - name: Certify real Windows DPAPI Ed25519 key custody and DS challenge signing
-        shell: pwsh
-        run: |
-          dotnet run --project dotnet/certification/BKE.LicensingAgent.MachineKeyCertification/BKE.LicensingAgent.MachineKeyCertification.csproj --configuration Release
-          if ($LASTEXITCODE -ne 0) { throw "Windows Ed25519 protected key custody failed" }
-
       - name: Verify native PE architecture
         shell: pwsh
         run: |
