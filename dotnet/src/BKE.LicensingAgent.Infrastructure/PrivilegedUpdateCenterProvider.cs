@@ -91,7 +91,7 @@ public sealed class PrivilegedUpdateCenterProvider :
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "bke_licensing_agent");
         _databasePath = Path.Combine(_dataDir, "agent.db");
         _stateRoot = Path.Combine(_dataDir, "updates");
-        var baseUrl = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
+        var baseUrl = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl).TrimEnd('/');
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
         {
             throw new InvalidOperationException("BKE_PLATFORM_BASE_URL is invalid");
