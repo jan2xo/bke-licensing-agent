@@ -61,11 +61,18 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         CancellationToken cancellationToken)
     {
         var binding = _trustedBinding(authenticatedSession);
+        // Raw device-code/native-handoff proof is separately received during
+        // the original sign-in and retained only in the DPAPI account state.
+        // A stolen access bearer alone must never create a machine key.
+        string? authorizationCode = authenticatedSession.EnrollmentDeviceCode;
+        if (authorizationCode is null || authorizationCode.Length != 43 ||
+            authorizationCode.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
+            throw new InvalidDataException("Original Agent device authorization proof is required.");
         var identity = _keys.GetOrCreateIdentity(binding);
 
         using var enrollment = await SendAsync(
             "/api/agent-sessions/keys/enroll",
-            new { public_key_pem = identity.PublicKeyPem },
+            new { public_key_pem = identity.PublicKeyPem, device_code = authorizationCode },
             authenticatedSession.AccessToken,
             HttpStatusCode.Created,
             cancellationToken);
