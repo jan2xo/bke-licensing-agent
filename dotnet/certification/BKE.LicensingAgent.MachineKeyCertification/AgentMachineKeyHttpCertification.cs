@@ -116,6 +116,136 @@ internal static class AgentMachineKeyHttpCertification
         }
     }
 
+    private static async Task RunReceiptAsync(
+        string root, ActiveAccountSessionState session, string bearer,
+        string sessionId, string accountId, string userId, string deviceId)
+    {
+        int passed = 0;
+        void Check(bool accepted, string message)
+        {
+            if (!accepted) throw new InvalidOperationException("FAIL: " + message);
+            Console.WriteLine("PASS: " + message);
+            passed++;
+        }
+        var directory = Path.Combine(root, "durable-receipt");
+        var local = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var binding = new AgentEd25519SessionBinding(
+            sessionId, accountId, userId, deviceId);
+        var handler = new ProofHandler(bearer, sessionId, accountId, userId, deviceId)
+        {
+            DropVerifyAcknowledgementOnce = true,
+        };
+        using var remote = new AgentMachineKeyEnrollmentRemote(
+            local, "https://ds.bke.test", handler);
+        var coordinator = new AgentMachineKeyRegistrationCoordinator(local, remote);
+        bool ackLost = false;
+        try { await coordinator.EnsureEnrolledAsync(session, CancellationToken.None); }
+        catch (HttpRequestException) { ackLost = true; }
+        Check(ackLost, "Simulated server activated key but final response was lost");
+        Check(local.ReadReceipt(binding) is null,
+            "Unconfirmed response never persists local registration receipt");
+        var recovered = await coordinator.EnsureEnrolledAsync(session, CancellationToken.None);
+        Check(recovered.RegistrationId.Length == 36 && recovered.ValidUntil is not null,
+            "Lost acknowledgment recovered from authenticated ACTIVE server metadata");
+        Check(handler.EnrollRequests == 1,
+            "Recovery never creates another DS registration or overwrites key");
+        var reloaded = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var second = new AgentMachineKeyRegistrationCoordinator(reloaded, remote);
+        var afterRestart = await second.EnsureEnrolledAsync(session, CancellationToken.None);
+        Check(afterRestart.RegistrationId == recovered.RegistrationId &&
+              afterRestart.KeyThumbprint == recovered.KeyThumbprint,
+            "Agent restart restores exact DPAPI-protected receipt");
+        Check(handler.EnrollRequests == 1, "Restart never duplicates enrollment");
+
+        bool wrong = false;
+        try { _ = reloaded.ReadReceipt(binding with { AccountId = "foreign-account" }); }
+        catch (InvalidDataException) { wrong = true; }
+        Check(wrong, "Foreign account cannot read protected registration receipt");
+
+        bool guarded = false;
+        try { reloaded.RemoveLocalKey(); }
+        catch (InvalidOperationException) { guarded = true; }
+        Check(guarded, "Local private key reset forbidden while receipt exists");
+
+        string receiptPath = Directory.GetFiles(directory, "*.receipt.dpapi",
+            SearchOption.AllDirectories).Single();
+        byte[] previous = File.ReadAllBytes(receiptPath);
+        byte[] corrupt = (byte[])previous.Clone();
+        corrupt[corrupt.Length / 2] ^= 0x7F;
+        File.WriteAllBytes(receiptPath, corrupt);
+        bool damaged = false;
+        try { _ = reloaded.ReadReceipt(binding); }
+        catch (InvalidDataException) { damaged = true; }
+        catch (System.ComponentModel.Win32Exception) { damaged = true; }
+        Check(damaged, "Corrupt encrypted receipt cannot be accepted or regenerated");
+        File.WriteAllBytes(receiptPath, previous);
+        Check(reloaded.ReadReceipt(binding)?.RegistrationId == recovered.RegistrationId,
+            "Unmodified encrypted receipt remains readable after corruption rejection");
+
+        handler.FailRevoke = true;
+        var accountStore = new MemorySessionStore(session);
+        var fakeAccountRemote = new MemoryAccountRemote();
+        var sessions = new AccountSessionService(
+            fakeAccountRemote, accountStore, keyLifecycle: second);
+        var failed = await sessions.LogoutAsync(
+            new AccountSessionLogoutRequest("receipt-revocation"),
+            CancellationToken.None);
+        Check(failed.Status == "FAILED" && failed.Error?.Code == "KEY_REVOCATION_PENDING",
+            "Server revocation outage blocks local session erasure");
+        Check(accountStore.State is ActiveAccountSessionState &&
+              fakeAccountRemote.RevokeCalls == 0 &&
+              reloaded.ReadReceipt(binding) is not null,
+            "Failed cleanup preserves authenticated bearer and protected receipt for retry");
+
+        handler.FailRevoke = false;
+        var logout = await sessions.LogoutAsync(
+            new AccountSessionLogoutRequest("receipt-retry"),
+            CancellationToken.None);
+        Check(logout.Status == "SIGNED_OUT" &&
+              accountStore.State is null && fakeAccountRemote.RevokeCalls == 1,
+            "Confirmed DS key revocation precedes final AccountSession logout");
+        Check(Directory.GetFiles(directory, "*.dpapi",
+            SearchOption.AllDirectories).Length == 0,
+            "Confirmed terminal revocation clears both receipt and software private key");
+        Check(handler.EnrollRequests == 1, "No silent key regeneration across logout lifecycle");
+        Console.WriteLine("BKE Agent protected receipt/restart/revocation lifecycle PASS (" +
+            passed + " assertions, disposable Windows DPAPI + HTTP handler).");
+    }
+
+    private sealed class MemorySessionStore : IAccountSessionSecretStore
+    {
+        public AccountSessionStoredState? State { get; private set; }
+        public MemorySessionStore(AccountSessionStoredState state) => State = state;
+        public Task<AccountSessionStoredState?> ReadAsync(CancellationToken ct)
+        { ct.ThrowIfCancellationRequested(); return Task.FromResult(State); }
+        public Task WriteAsync(AccountSessionStoredState state, CancellationToken ct)
+        { ct.ThrowIfCancellationRequested(); State = state; return Task.CompletedTask; }
+        public Task ClearAsync(CancellationToken ct)
+        { ct.ThrowIfCancellationRequested(); State = null; return Task.CompletedTask; }
+    }
+
+    private sealed class MemoryAccountRemote : IAccountSessionRemote
+    {
+        public int RevokeCalls { get; private set; }
+        public Task<RemoteAccountSessionStart> StartAsync(CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<RemoteAccountSessionPoll> PollAsync(string code, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<RemoteAccountSessionPoll> ExchangeNativeAsync(string code, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<RemoteAccountSessionRefresh> RefreshAsync(string token, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task AcknowledgeAsync(string token, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task RevokeAsync(string? sessionId, string? refreshToken,
+            string? deviceCode, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            RevokeCalls++;
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class ProofHandler : HttpMessageHandler
     {
         private readonly string _bearer, _session, _account, _user, _device;
