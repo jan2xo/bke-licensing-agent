@@ -32,6 +32,13 @@ var utmWorkflowSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
 var intentCertificationSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "certify.yml"));
+var bootstrapSelfUpdateSource = File.ReadAllText(
+    Path.Combine("src", "BKE.LicensingAgent.Bootstrap", "AgentSelfUpdateWorker.cs"));
+Require(
+    bootstrapSelfUpdateSource.Contains(
+        "\\"" + AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl + "\\"",
+        StringComparison.Ordinal),
+    "Agent self-update Bootstrap default drifted from core production authority.");
 var activeWorkflowDirectory = Path.Combine(".github", "workflows");
 var activeWorkflowNames = Directory
     .GetFiles(activeWorkflowDirectory, "*.yml")
@@ -896,8 +903,8 @@ static void CertifyRuntimeEnvironmentBoundary()
         })
         {
             File.WriteAllText(envPath,
-                "BKE_ENVIRONMENT=utm\\n".Replace("\\n", "\n") +
-                "BKE_PLATFORM_BASE_URL=https://" + productionHost + "\\n".Replace("\\n", "\n"));
+                "BKE_ENVIRONMENT=utm\n" +
+                "BKE_PLATFORM_BASE_URL=https://" + productionHost + "\n");
             RequireThrows<InvalidOperationException>(
                 () => AgentRuntimeEnvironmentLoader.Load(envPath),
                 "UTM environment accepted production Digital Solutions host " + productionHost);
