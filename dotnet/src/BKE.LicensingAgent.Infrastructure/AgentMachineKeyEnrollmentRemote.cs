@@ -19,6 +19,9 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
 {
     public const string ProtocolVersion = "bke.account-session.v1";
     private readonly IAgentMachineKeySigner _keys;
+    // Only internal friend-assembly certification can substitute a Linux disposable binding.
+    // Production constructors always derive the Windows device from protected Agent state.
+    private readonly Func<ActiveAccountSessionState, AgentEd25519SessionBinding> _trustedBinding;
     private readonly HttpClient _http;
     private readonly Uri _base;
 
@@ -52,12 +55,25 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
 
     internal IAgentMachineKeySigner TrustedSigner => _keys;
 
+    // Test-only seam: never public, never reachable through production DI or IPC.
+    // The signer still validates the complete server-signed enrollment challenge.
+    internal AgentMachineKeyEnrollmentRemote(
+        IAgentMachineKeySigner keys,
+        Func<ActiveAccountSessionState, AgentEd25519SessionBinding> trustedBinding,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+        : this(keys, baseUrl, handler)
+    {
+        _trustedBinding = trustedBinding ?? throw new ArgumentNullException(nameof(trustedBinding));
+    }
+
     internal AgentMachineKeyEnrollmentRemote(
         IAgentMachineKeySigner keys,
         string? baseUrl = null,
         HttpMessageHandler? handler = null)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
+        _trustedBinding = Binding;
         var url = (baseUrl ??
             Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
             AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl).TrimEnd('/');
@@ -77,7 +93,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         ActiveAccountSessionState authenticatedSession,
         CancellationToken cancellationToken)
     {
-        var binding = Binding(authenticatedSession);
+        var binding = _trustedBinding(authenticatedSession);
         var identity = _keys.GetOrCreateIdentity(binding);
         if (identity.Algorithm is not ("EdDSA" or "ES256") ||
             identity.KeyProtection is not ("software" or "tpm-unverified"))
@@ -132,7 +148,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         AgentMachineKeyRegistrationReceipt registration,
         CancellationToken cancellationToken)
     {
-        var binding = Binding(authenticatedSession);
+        var binding = _trustedBinding(authenticatedSession);
         ArgumentNullException.ThrowIfNull(registration);
         if (!Guid.TryParseExact(registration.RegistrationId, "D", out var guid) ||
             guid.ToString("D") != registration.RegistrationId)
@@ -179,7 +195,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         string? registrationId,
         CancellationToken cancellationToken)
     {
-        _ = Binding(authenticatedSession);
+        _ = _trustedBinding(authenticatedSession);
         if (registrationId is not null &&
             (!Guid.TryParseExact(registrationId, "D", out var parsed) ||
              parsed.ToString("D") != registrationId))
@@ -223,7 +239,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         string keyThumbprint,
         CancellationToken cancellationToken)
     {
-        var binding = Binding(authenticatedSession);
+        var binding = _trustedBinding(authenticatedSession);
         if (!Guid.TryParseExact(registrationId, "D", out var parsed) ||
             parsed.ToString("D") != registrationId)
             throw new InvalidDataException("Agent registration revocation ID is invalid.");
