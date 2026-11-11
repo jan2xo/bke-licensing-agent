@@ -226,7 +226,7 @@ public sealed class WindowsTpmEcdsaP256MachineKeyStore : IAgentMachineKeySigner
 
     private static AgentEd25519PublicIdentity PublicIdentity(CngKey key)
     {
-        if (key.Provider.Provider != Provider.Provider ||
+        if (key.Provider?.Provider != Provider.Provider ||
             key.Algorithm.Algorithm != CngAlgorithm.ECDsaP256.Algorithm ||
             key.ExportPolicy != CngExportPolicies.None)
             throw new InvalidDataException("TPM provider, curve or export policy invalid.");
