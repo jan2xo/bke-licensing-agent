@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 
@@ -11,6 +12,7 @@ namespace BKE.LicensingAgent.Infrastructure;
 /// retain SOFTWARE-level assurance until a separate attestation is certified.
 /// No private key bytes are ever imported or exported by this class.
 /// </summary>
+[SupportedOSPlatform("windows")]
 public sealed class WindowsTpmEcdsaP256MachineKeyStore : IAgentMachineKeySigner
 {
     private const string Protocol = "bke.agent-key-proof.v1";
@@ -308,6 +310,7 @@ public sealed class AgentTpmUnavailableException : CryptographicException
 /// and permit Ed25519 DPAPI fallback only when the caller deliberately allows
 /// it and first TPM provision was unavailable. Never downgrade an enrolled TPM.
 /// </summary>
+[SupportedOSPlatform("windows")]
 public static class WindowsPreferredAgentMachineKey
 {
     public static IAgentMachineKeySigner Open(
