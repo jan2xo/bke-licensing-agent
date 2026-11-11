@@ -157,8 +157,14 @@ internal static class AgentMachineKeyHttpCertification
             throw new InvalidOperationException("ES256 receipt failed protected restart recovery");
         var restarted = new AgentMachineKeyRegistrationCoordinator(signer, restored, remote);
         var again = await restarted.EnsureEnrolledAsync(session, CancellationToken.None);
-        if (again != accepted || fake.EnrollRequests != 1)
-            throw new InvalidOperationException("ES256 restart silently replaced existing registration");
+        if (fake.EnrollRequests != 1)
+            throw new InvalidOperationException("ES256 restart made a second server enrollment");
+        if (again.RegistrationId != accepted.RegistrationId ||
+            again.KeyThumbprint != accepted.KeyThumbprint ||
+            again.Algorithm != accepted.Algorithm ||
+            again.ValidUntil?.ToUnixTimeSeconds() != accepted.ValidUntil?.ToUnixTimeSeconds())
+            throw new InvalidOperationException(
+                "ES256 protected restart changed registration ID, public key, algorithm or canonical expiry");
         bool wrongAlgRejected = false;
         try
         {
