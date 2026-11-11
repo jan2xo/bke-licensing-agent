@@ -15,7 +15,23 @@ public sealed record AgentEd25519SessionBinding(
     string SessionId, string AccountId, string UserId, string DeviceId);
 
 public sealed record AgentEd25519PublicIdentity(
-    string PublicKeyPem, string KeyThumbprint, string KeyProtection);
+    string PublicKeyPem, string KeyThumbprint, string KeyProtection,
+    string Algorithm = "EdDSA");
+
+/// <summary>
+/// Trusted Agent-owned signer. Selection is pinned for the life of one local
+/// account/device session; the caller never supplies an IPC signing payload.
+/// TPM P-256 keys and software Ed25519 expose the same strict challenge API.
+/// </summary>
+public interface IAgentMachineKeySigner
+{
+    AgentEd25519PublicIdentity GetOrCreateIdentity(
+        AgentEd25519SessionBinding binding, bool createIfMissing = true);
+    string SignChallenge(
+        AgentEd25519SessionBinding binding, string registrationId, string challengeId,
+        string messageBase64url, DateTimeOffset expiresAt,
+        string? productId = null, string? action = null);
+}
 
 /// <summary>
 /// Windows user-DPAPI protected SOFTWARE Ed25519 key. The seed is exportable to
@@ -23,7 +39,7 @@ public sealed record AgentEd25519PublicIdentity(
 /// nonexportable hardware-backed identity. No public HTTP/IPC route exposes it.
 /// Unsupported platforms and damaged/foreign stores fail closed.
 /// </summary>
-public sealed class WindowsDpapiEd25519MachineKeyStore
+public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeySigner
 {
     private const string Protocol = "bke.agent-key-proof.v1";
     private const int SeedLength = 32;
@@ -49,10 +65,12 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
             "agent-ed25519.dpapi");
     }
 
+    public bool HasStoredIdentity => File.Exists(_path);
+
     public AgentEd25519PublicIdentity GetOrCreateIdentity(
-        AgentEd25519SessionBinding binding)
+        AgentEd25519SessionBinding binding, bool createIfMissing = true)
     {
-        byte[] seed = LoadOrCreateSeed(binding);
+        byte[] seed = createIfMissing ? LoadOrCreateSeed(binding) : ReadExistingSeed(binding);
         try
         {
             var key = new Ed25519PrivateKeyParameters(seed, 0);
