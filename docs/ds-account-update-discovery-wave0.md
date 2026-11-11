@@ -12,6 +12,14 @@ The Agent's user-facing `/v1/updates/check` and `/v1/update-center/open` still u
 - Agent base main exact `e41cf1f2d69378f9ff326bab2a85dc7ba26dea1f`.
 - Existing independent [Agent PR #118](https://github.com/jan2xo/bke-licensing-agent/pull/118) remains DRAFT/UNMERGED and is **not** a dependency for this patch. This branch targets current main independently; do not merge either PR.
 
+## Implemented source behavior (pending exact-head CI)
+
+- `Gen2UpdateService.CheckAsync` now uses the Agent's protected account session and existing `StandaloneUpdateAuthorizationRemote` (bearer + account-session protocol + HTTPS no-redirect) to project DS's signed-v2 update *hint* into the legacy local response. Product ID, exact installed version and BKE-managed provenance are required. Checking does not run installer code and does not export tokens or policy blobs.
+- `Gen2UpdateService.OpenCenterAsync` validates exact inventory/version, then delegates actual software update to `SoftwareUpdateService.UpdateAsync`; that existing service re-fetches authorization, and `PrivilegedUpdateCenterProvider.UpdateAsync` cryptographically verifies signed v2 policy and GitHub release trust before privileged handoff. Recheck prevents cached check results becoming authorization.
+- Host DI no longer creates `UpdateProvider` or routes the local check/open entry points into the legacy `/api/agent/updates/check` flow. Old source remains as unbound historical code; removing that code completely can be a separate mechanical cleanup after client compatibility evidence.
+- `StandaloneUpdateAuthorizationRemote` now converts malformed JSON into typed fail-closed `InvalidDataException`, preventing an unhandled remote parse error from escaping the local lifecycle path.
+- Contract tests include authorized discovery, read-only/no secret leak, exact product/version/provenance, denied entitlement, expired/revoked session, up-to-date, and Update Center delegation to modern verified updater. Source wiring assertions prohibit reintroduction of legacy update-check endpoint into the active bridge.
+
 ## Safety / rejection requirements
 - Sign-in is required; the Agent alone reads access token via DPAPI secret-store API and never exposes refresh token to Launcher.
 - Only BKE-managed installed standalone products and exact *inventory-verified* `productId/currentVersion` may be checked. Refuse unsupported requested version, legacy installation provenance, mismatched version and missing product before contacting DS.
