@@ -71,7 +71,7 @@ public sealed class NotificationProvider : INotificationService
                 Timeout = TimeSpan.FromSeconds(5),
             },
             Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
-                "https://jl-bke.com")
+                AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl)
     {
     }
 

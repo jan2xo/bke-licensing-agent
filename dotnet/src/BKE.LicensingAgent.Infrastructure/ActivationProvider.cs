@@ -36,7 +36,7 @@ public sealed class ActivationProvider : IActivationService
         _authorization = authorization;
         _dataDir = Environment.GetEnvironmentVariable("BKE_AGENT_DATA_DIR")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "bke_licensing_agent");
-        _platformBaseUrl = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
+        _platformBaseUrl = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl).TrimEnd('/');
         ValidatePlatformBaseUrl(_platformBaseUrl);
         _http = new HttpClient
         {
