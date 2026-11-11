@@ -36,8 +36,10 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
         _receipts = receipts ?? throw new ArgumentNullException(nameof(receipts));
         _remote = remote ?? throw new ArgumentNullException(nameof(remote));
-        if (!ReferenceEquals(remote.TrustedSigner, keys))
-            throw new InvalidDataException("Receipt and remote must use the same protected signer instance.");
+        // Object identity is NOT key identity: a restarted Agent legitimately
+        // opens the same protected key using another store instance. Verify
+        // immutable public-key algorithm/thumbprint on each trusted session
+        // instead of requiring ReferenceEquals across process restarts.
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
@@ -58,6 +60,18 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
             lifecycle, new WindowsDpapiEd25519MachineKeyStore(dataDirectory), remote);
     }
 
+    private void RequireMatchingSigner(AgentEd25519SessionBinding binding)
+    {
+        if (!_keys.HasStoredIdentity) return; // New session: receipt/write will prove key.
+        var local = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
+        var transport = _remote.TrustedSigner.GetOrCreateIdentity(
+            binding, createIfMissing: false);
+        if (local.KeyThumbprint != transport.KeyThumbprint ||
+            local.Algorithm != transport.Algorithm)
+            throw new InvalidDataException(
+                "Agent HTTP signer differs from the exact protected lifecycle key.");
+    }
+
     public async Task<AgentMachineKeyRegistrationReceipt> EnsureEnrolledAsync(
         ActiveAccountSessionState authenticatedSession,
         CancellationToken cancellationToken)
@@ -66,6 +80,7 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
         try
         {
             var binding = AgentMachineKeyEnrollmentRemote.Binding(authenticatedSession);
+            RequireMatchingSigner(binding);
             var receipt = _receipts.ReadReceipt(binding, _keys);
             // Exact receipt lookup detects revocation and server-side drift.
             var remote = await _remote.StatusAsync(authenticatedSession,
@@ -155,6 +170,7 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
         try
         {
             var binding = AgentMachineKeyEnrollmentRemote.Binding(authenticatedSession);
+            RequireMatchingSigner(binding);
             var receipt = _receipts.ReadReceipt(binding, _keys);
             var remote = await _remote.StatusAsync(authenticatedSession,
                 receipt?.RegistrationId, cancellationToken);
