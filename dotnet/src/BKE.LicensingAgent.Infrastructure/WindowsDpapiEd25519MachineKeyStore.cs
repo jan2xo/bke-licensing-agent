@@ -23,7 +23,7 @@ public sealed record AgentEd25519PublicIdentity(
 /// nonexportable hardware-backed identity. No public HTTP/IPC route exposes it.
 /// Unsupported platforms and damaged/foreign stores fail closed.
 /// </summary>
-public sealed class WindowsDpapiEd25519MachineKeyStore
+public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeyChallengeSigning
 {
     private const string Protocol = "bke.agent-key-proof.v1";
     private const int SeedLength = 32;
