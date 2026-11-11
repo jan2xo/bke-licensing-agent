@@ -198,6 +198,13 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
         }
     }
 
+    private static bool ReceiptMatches(AgentMachineKeyRegistrationReceipt? a,
+        AgentMachineKeyRegistrationReceipt b) =>
+        a is not null && a.RegistrationId == b.RegistrationId &&
+        a.KeyThumbprint == b.KeyThumbprint &&
+        a.ValidUntil is { } first && b.ValidUntil is { } second &&
+        first.ToUnixTimeSeconds() == second.ToUnixTimeSeconds();
+
     public void WriteReceipt(AgentEd25519SessionBinding binding,
         AgentMachineKeyRegistrationReceipt receipt)
     {
@@ -217,7 +224,7 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
         if (File.Exists(_receiptPath))
         {
             var previous = ReadReceipt(binding);
-            if (previous != receipt)
+            if (!ReceiptMatches(previous, receipt))
                 throw new InvalidDataException("Conflicting protected Agent registration receipt.");
             return;
         }
@@ -250,7 +257,7 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
             }
             catch (IOException) when (File.Exists(_receiptPath))
             {
-                if (ReadReceipt(binding) != receipt)
+                if (!ReceiptMatches(ReadReceipt(binding), receipt))
                     throw new InvalidDataException("Concurrent Agent registration receipt mismatch.");
             }
         }
