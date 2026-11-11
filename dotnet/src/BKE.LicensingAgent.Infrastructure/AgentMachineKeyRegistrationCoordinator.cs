@@ -10,16 +10,51 @@ namespace BKE.LicensingAgent.Infrastructure;
 /// </summary>
 public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyLifecycle
 {
-    private readonly WindowsDpapiEd25519MachineKeyStore _keys;
+    private readonly IAgentMachineKeyLifecycleSigner _keys;
+    // DPAPI-protected algorithm-neutral receipt; no software key is created for TPM.
+    private readonly WindowsDpapiEd25519MachineKeyStore _receipts;
     private readonly AgentMachineKeyEnrollmentRemote _remote;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public AgentMachineKeyRegistrationCoordinator(
         WindowsDpapiEd25519MachineKeyStore keys,
         AgentMachineKeyEnrollmentRemote remote)
+        : this(keys, keys, remote) { }
+
+    public AgentMachineKeyRegistrationCoordinator(
+        WindowsTpmEcdsaP256MachineKeyStore keys,
+        WindowsDpapiEd25519MachineKeyStore receiptStore,
+        AgentMachineKeyEnrollmentRemote remote)
+        : this(keys, receiptStore, remote) { }
+
+    private AgentMachineKeyRegistrationCoordinator(
+        IAgentMachineKeyLifecycleSigner keys,
+        WindowsDpapiEd25519MachineKeyStore receipts,
+        AgentMachineKeyEnrollmentRemote remote)
     {
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
+        _receipts = receipts ?? throw new ArgumentNullException(nameof(receipts));
         _remote = remote ?? throw new ArgumentNullException(nameof(remote));
+        if (!ReferenceEquals(remote.TrustedSigner, keys))
+            throw new InvalidDataException("Receipt and remote must use the same protected signer instance.");
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static AgentMachineKeyRegistrationCoordinator CreatePreferred(
+        ActiveAccountSessionState trustedSession,
+        string? dataDirectory = null,
+        bool allowSoftwareFallback = false,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+    {
+        var binding = AgentMachineKeyEnrollmentRemote.Binding(trustedSession);
+        var signer = WindowsPreferredAgentMachineKey.Open(
+            binding, dataDirectory, allowSoftwareFallback);
+        if (signer is not IAgentMachineKeyLifecycleSigner lifecycle)
+            throw new InvalidDataException("Unsupported protected Agent lifecycle owner.");
+        var remote = new AgentMachineKeyEnrollmentRemote(signer, baseUrl, handler);
+        return new AgentMachineKeyRegistrationCoordinator(
+            lifecycle, new WindowsDpapiEd25519MachineKeyStore(dataDirectory), remote);
     }
 
     public async Task<AgentMachineKeyRegistrationReceipt> EnsureEnrolledAsync(
@@ -30,7 +65,7 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
         try
         {
             var binding = AgentMachineKeyEnrollmentRemote.Binding(authenticatedSession);
-            var receipt = _keys.ReadReceipt(binding);
+            var receipt = _receipts.ReadReceipt(binding, _keys);
             // Exact receipt lookup detects revocation and server-side drift.
             var remote = await _remote.StatusAsync(authenticatedSession,
                 receipt?.RegistrationId, cancellationToken);
@@ -40,6 +75,7 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
                 if (remote.Status != "active" ||
                     receipt.RegistrationId != remote.RegistrationId ||
                     receipt.KeyThumbprint != remote.KeyThumbprint ||
+                    receipt.Algorithm != remote.Algorithm ||
                     receipt.ValidUntil is not { } receiptUntil ||
                     remote.ValidUntil is not { } remoteUntil ||
                     receiptUntil.ToUnixTimeSeconds() != remoteUntil.ToUnixTimeSeconds() ||
@@ -55,24 +91,25 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
                 // no second enrollment and no regeneration of a missing key.
                 var existing = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
                 if (remote.KeyThumbprint != existing.KeyThumbprint ||
+                    remote.Algorithm != existing.Algorithm ||
                     remote.RegistrationId is null || remote.ValidUntil is null)
                     throw new InvalidDataException("Cannot recover a registration with an unproven local key.");
                 var recovered = new AgentMachineKeyRegistrationReceipt(
-                    remote.RegistrationId, existing.KeyThumbprint, remote.ValidUntil);
-                _keys.WriteReceipt(binding, recovered);
+                    remote.RegistrationId, existing.KeyThumbprint, remote.ValidUntil,
+                    existing.Algorithm);
+                _receipts.WriteReceipt(binding, recovered, _keys);
                 return recovered;
             }
 
             if (remote.Status == "pending")
             {
-                // Interrupted challenge: revoke it first, using current protected
-                // key thumbprint, before any new ENROLL registration is created.
+                // Interrupted PENDING registration may only be re-challenged
+                // for SAME local key with original device authorization proof.
                 var existing = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
                 if (remote.KeyThumbprint != existing.KeyThumbprint ||
+                    remote.Algorithm != existing.Algorithm ||
                     remote.RegistrationId is null)
-                    throw new InvalidDataException("Cannot replace a foreign pending registration.");
-                await _remote.RevokeRegistrationAsync(authenticatedSession,
-                    remote.RegistrationId, existing.KeyThumbprint, cancellationToken);
+                    throw new InvalidDataException("Cannot replace foreign pending key.");
             }
             else if (remote.Status != "none")
             {
@@ -115,7 +152,7 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
         try
         {
             var binding = AgentMachineKeyEnrollmentRemote.Binding(authenticatedSession);
-            var receipt = _keys.ReadReceipt(binding);
+            var receipt = _receipts.ReadReceipt(binding, _keys);
             var remote = await _remote.StatusAsync(authenticatedSession,
                 receipt?.RegistrationId, cancellationToken);
 
