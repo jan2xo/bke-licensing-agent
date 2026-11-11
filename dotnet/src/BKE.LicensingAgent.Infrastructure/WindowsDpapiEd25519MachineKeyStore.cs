@@ -19,9 +19,8 @@ public sealed record AgentEd25519PublicIdentity(
     string Algorithm = "EdDSA");
 
 /// <summary>
-/// Trusted Agent-owned signer. Selection is pinned for the life of one local
-/// account/device session; the caller never supplies an IPC signing payload.
-/// TPM P-256 keys and software Ed25519 expose the same strict challenge API.
+/// Trusted OS-protected machine key signer, one exact authenticated Agent binding.
+/// TPM P-256 and software EdDSA share exact protocol sign operation.
 /// </summary>
 public interface IAgentMachineKeySigner
 {

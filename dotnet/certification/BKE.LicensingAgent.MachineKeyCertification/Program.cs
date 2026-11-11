@@ -288,3 +288,5 @@ Console.WriteLine("TPM-specific hardware execution: " +
     "NOT AVAILABLE ON HOSTED RUNNER — SOFTWARE FALLBACK CERTIFIED"));
 
 Console.WriteLine("BKE Agent Windows DPAPI Ed25519 source custody PASS (" + passed + " assertions).");
+
+await AgentMachineKeyHttpCertification.RunAsync();

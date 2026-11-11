@@ -1,0 +1,293 @@
+using System.Globalization;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Runtime.Versioning;
+using System.Text;
+using System.Text.Json;
+using BKE.LicensingAgent.Application;
+
+namespace BKE.LicensingAgent.Infrastructure;
+
+/// <summary>
+/// Internal, source-only Agent↔Digital Solutions key enrollment transport.
+/// Reads the existing authenticated Agent session and invokes ONLY key
+/// ENROLL / VERIFY / REVOKE. Does not issue product rights or expose loopback.
+/// A registration receipt MUST be retained by trusted Agent lifecycle code;
+/// this fraction does not yet install an automatic registration lifecycle.
+/// </summary>
+public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
+{
+    public const string ProtocolVersion = "bke.account-session.v1";
+    private readonly IAgentMachineKeySigner _keys;
+    private readonly HttpClient _http;
+    private readonly Uri _base;
+
+    // Public constructors never let a caller substitute an arbitrary signing
+    // implementation. Only a trusted named certification assembly may inject
+    // an ephemeral test signer through the internal constructor.
+    public AgentMachineKeyEnrollmentRemote(
+        WindowsDpapiEd25519MachineKeyStore keys,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+        : this((IAgentMachineKeySigner)keys, baseUrl, handler) { }
+
+    public AgentMachineKeyEnrollmentRemote(
+        WindowsTpmEcdsaP256MachineKeyStore keys,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+        : this((IAgentMachineKeySigner)keys, baseUrl, handler) { }
+
+    /// <summary>
+    /// First Agent login: use nonexportable Platform Crypto Provider P-256
+    /// if available. Fallback to DPAPI EdDSA ONLY when caller explicitly
+    /// approves it; existing persisted identity is never silently rotated.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    public static AgentMachineKeyEnrollmentRemote CreatePreferred(
+        ActiveAccountSessionState trustedSession,
+        string? dataDirectory = null,
+        bool allowSoftwareFallback = false,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+    {
+        var binding = Binding(trustedSession);
+        var key = WindowsPreferredAgentMachineKey.Open(
+            binding, dataDirectory, allowSoftwareFallback);
+        return new AgentMachineKeyEnrollmentRemote(key, baseUrl, handler);
+    }
+
+    internal AgentMachineKeyEnrollmentRemote(
+        IAgentMachineKeySigner keys,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+    {
+        _keys = keys ?? throw new ArgumentNullException(nameof(keys));
+        var url = (baseUrl ??
+            Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
+            AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl).TrimEnd('/');
+        _base = ValidatePlatformUrl(url);
+        if (handler is HttpClientHandler supplied && supplied.AllowAutoRedirect)
+            throw new InvalidOperationException("Agent key transport forbids HTTP redirect following.");
+        _http = new HttpClient(handler ?? new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+        }, disposeHandler: true)
+        {
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+    }
+
+    public async Task<AgentMachineKeyRegistrationReceipt> EnrollAsync(
+        ActiveAccountSessionState authenticatedSession,
+        CancellationToken cancellationToken)
+    {
+        var binding = Binding(authenticatedSession);
+        var identity = _keys.GetOrCreateIdentity(binding);
+        if (identity.Algorithm is not ("EdDSA" or "ES256") ||
+            identity.KeyProtection is not ("software" or "tpm-unverified"))
+            throw new InvalidDataException("Agent local signer identity cannot be trusted.");
+
+        using var enrollment = await SendAsync(
+            "/api/agent-sessions/keys/enroll",
+            new { public_key_pem = identity.PublicKeyPem },
+            authenticatedSession.AccessToken,
+            HttpStatusCode.Created,
+            cancellationToken);
+        var challenge = enrollment.RootElement;
+        if (Required(challenge, "status") != "challenge")
+            throw new InvalidDataException("Invalid Agent enrollment response state.");
+        var registrationId = RequiredUuid(challenge, "registration_id");
+        var challengeId = RequiredUuid(challenge, "challenge_id");
+        var encodedMessage = Required(challenge, "message_base64url");
+        var expiresAt = RequiredExpiry(challenge, "expires_at");
+
+        // SignChallenge verifies all 11 exact server-provided fields, including
+        // authenticated account/session/device, purpose, nonce, and expiration.
+        string signature = _keys.SignChallenge(binding, registrationId, challengeId,
+            encodedMessage, expiresAt);
+
+        using var verification = await SendAsync(
+            "/api/agent-sessions/keys/verify",
+            new
+            {
+                challenge_id = challengeId,
+                message_base64url = encodedMessage,
+                signature_base64url = signature,
+            },
+            authenticatedSession.AccessToken,
+            HttpStatusCode.OK,
+            cancellationToken);
+        var result = verification.RootElement;
+        if (Required(result, "status") != "enrolled" ||
+            RequiredUuid(result, "registration_id") != registrationId)
+            throw new InvalidDataException("Agent key enrollment was not server-confirmed.");
+
+        return new AgentMachineKeyRegistrationReceipt(registrationId, identity.KeyThumbprint);
+    }
+
+    /// <summary>
+    /// Server revocation must succeed BEFORE a caller considers key rotation
+    /// or local reset. Caller must possess an authenticated session and its
+    /// previously recorded registration receipt. No silent offline revocation.
+    /// </summary>
+    public async Task RevokeAsync(
+        ActiveAccountSessionState authenticatedSession,
+        AgentMachineKeyRegistrationReceipt registration,
+        CancellationToken cancellationToken)
+    {
+        var binding = Binding(authenticatedSession);
+        ArgumentNullException.ThrowIfNull(registration);
+        if (!Guid.TryParseExact(registration.RegistrationId, "D", out var guid) ||
+            guid.ToString("D") != registration.RegistrationId)
+            throw new InvalidDataException("Agent registration ID is invalid.");
+        var identity = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
+        if (!string.Equals(identity.KeyThumbprint, registration.KeyThumbprint,
+            StringComparison.Ordinal))
+            throw new InvalidDataException("Agent registration key does not match current private key.");
+
+        using var reply = await SendAsync(
+            "/api/agent-sessions/keys/revoke",
+            new { registration_id = registration.RegistrationId },
+            authenticatedSession.AccessToken,
+            HttpStatusCode.OK,
+            cancellationToken);
+        string status = Required(reply.RootElement, "status");
+        if (status != "revoked" && status != "already_revoked")
+            throw new InvalidDataException("Server did not acknowledge key revocation.");
+    }
+
+    private static AgentEd25519SessionBinding Binding(ActiveAccountSessionState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (state.AccessTokenExpiresAt <= DateTimeOffset.UtcNow.AddSeconds(30) ||
+            string.IsNullOrWhiteSpace(state.AccessToken) ||
+            string.IsNullOrWhiteSpace(state.SessionId) ||
+            state.Account is null ||
+            string.IsNullOrWhiteSpace(state.Account.AccountId) ||
+            string.IsNullOrWhiteSpace(state.Account.UserId))
+            throw new InvalidDataException("Authenticated Agent account session is unavailable or expiring.");
+        var device = MachineIdentityProvider.Calculate();
+        if (MachineIdentityProvider.ProtocolPlatform(device.Platform) != "windows")
+            throw new PlatformNotSupportedException("Windows protected key custody is required.");
+        return new AgentEd25519SessionBinding(state.SessionId,
+            state.Account.AccountId, state.Account.UserId, device.DeviceId);
+    }
+
+    private async Task<JsonDocument> SendAsync(
+        string relativePath,
+        object body,
+        string token,
+        HttpStatusCode requiredStatus,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_base, relativePath));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.TryAddWithoutValidation(
+            "x-bke-account-session-version", ProtocolVersion);
+        request.Headers.UserAgent.ParseAdd("bke-licensing-agent");
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        using var response = await _http.SendAsync(request,
+            HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if ((int)response.StatusCode is >= 300 and <= 399)
+            throw new InvalidDataException("Agent key authority may not redirect credentials.");
+        if (response.StatusCode != requiredStatus)
+            throw new HttpRequestException(
+                "Agent key authority refused the request.",
+                null, response.StatusCode);
+        if (!response.Headers.TryGetValues(
+            "x-bke-account-session-version", out var versions) ||
+            versions.Count() != 1 ||
+            versions.Single() != ProtocolVersion)
+            throw new InvalidDataException("Agent key authority protocol version mismatch.");
+        if (!response.Headers.CacheControl?.NoStore ?? true)
+            throw new InvalidDataException("Agent key authority response may not be cached.");
+        if (response.Content.Headers.ContentType?.MediaType != "application/json")
+            throw new InvalidDataException("Agent key authority response is not JSON.");
+        await response.Content.LoadIntoBufferAsync(8192, cancellationToken);
+        byte[] data = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        try
+        {
+            using var json = JsonDocument.Parse(data);
+            ValidateUniqueProperties(json.RootElement);
+            // Detach from the temporary byte buffer before zeroing it.
+            return JsonDocument.Parse(json.RootElement.GetRawText());
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException("Agent key authority response is malformed.", error);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(data);
+        }
+    }
+
+    private static void ValidateUniqueProperties(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var member in element.EnumerateObject())
+            {
+                if (!names.Add(member.Name))
+                    throw new InvalidDataException("Ambiguous Agent key authority response.");
+                ValidateUniqueProperties(member.Value);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+            foreach (var child in element.EnumerateArray())
+                ValidateUniqueProperties(child);
+    }
+
+    private static string Required(JsonElement json, string property)
+    {
+        if (json.ValueKind != JsonValueKind.Object ||
+            !json.TryGetProperty(property, out var value) ||
+            value.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(value.GetString()) ||
+            value.GetString()!.Length > 4096)
+            throw new InvalidDataException("Agent key authority response is missing " + property + ".");
+        return value.GetString()!;
+    }
+
+    private static string RequiredUuid(JsonElement json, string property)
+    {
+        string value = Required(json, property);
+        if (!Guid.TryParseExact(value, "D", out var parsed) ||
+            parsed.ToString("D") != value)
+            throw new InvalidDataException("Agent key authority identifier is invalid.");
+        return value;
+    }
+
+    private static DateTimeOffset RequiredExpiry(JsonElement json, string property)
+    {
+        string encoded = Required(json, property);
+        if (!encoded.EndsWith('Z') ||
+            !DateTimeOffset.TryParse(encoded, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal, out var expiry))
+            throw new InvalidDataException("Agent key authority challenge expiration is invalid.");
+        return expiry;
+    }
+
+    private static Uri ValidatePlatformUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrWhiteSpace(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            uri.AbsolutePath != "/")
+            throw new InvalidOperationException(
+                "Agent key exchange requires an HTTPS root with no credentials, query, or fragment.");
+        return uri;
+    }
+
+    public void Dispose() => _http.Dispose();
+}
+
+public sealed record AgentMachineKeyRegistrationReceipt(
+    string RegistrationId, string KeyThumbprint);
