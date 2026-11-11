@@ -166,7 +166,8 @@ public sealed class WindowsDpapiAccountSessionSecretStore : IAccountSessionSecre
                 active.SessionId,
                 active.AccessTokenExpiresAt,
                 active.RefreshTokenExpiresAt,
-                active.Account),
+                active.Account,
+                active.EnrollmentDeviceCode),
 
             _ => throw new InvalidDataException("Unsupported account-session secret state."),
         };
@@ -201,7 +202,8 @@ public sealed class WindowsDpapiAccountSessionSecretStore : IAccountSessionSecre
                     envelope.SessionId,
                     envelope.AccessTokenExpiresAt.Value,
                     envelope.RefreshTokenExpiresAt.Value,
-                    envelope.Account),
+                    envelope.Account,
+                    envelope.EnrollmentDeviceCode),
 
             _ => throw new InvalidDataException("Account-session secret state is invalid."),
         };
@@ -349,7 +351,8 @@ public sealed class WindowsDpapiAccountSessionSecretStore : IAccountSessionSecre
         string? SessionId,
         DateTimeOffset? AccessTokenExpiresAt,
         DateTimeOffset? RefreshTokenExpiresAt,
-        AccountSessionAccount? Account);
+        AccountSessionAccount? Account,
+        string? EnrollmentDeviceCode = null);
 
     [DllImport(
         "Crypt32.dll",
