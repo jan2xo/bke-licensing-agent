@@ -33,7 +33,7 @@ var utmWorkflowSource = File.ReadAllText(
 var intentCertificationSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "certify.yml"));
 var bootstrapSelfUpdateSource = File.ReadAllText(
-    Path.Combine("src", "BKE.LicensingAgent.Bootstrap", "AgentSelfUpdateWorker.cs"));
+    Path.Combine("dotnet", "src", "BKE.LicensingAgent.Bootstrap", "AgentSelfUpdateWorker.cs"));
 Require(
     bootstrapSelfUpdateSource.Contains(
         AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl,
@@ -43,7 +43,7 @@ Require(
     !bootstrapSelfUpdateSource.Contains("\"https://jl-bke.com\"", StringComparison.Ordinal),
     "Bootstrap retained a legacy production API default.");
 foreach (var remoteSourcePath in Directory.GetFiles(
-    Path.Combine("src", "BKE.LicensingAgent.Infrastructure"), "*.cs", SearchOption.TopDirectoryOnly))
+    Path.Combine("dotnet", "src", "BKE.LicensingAgent.Infrastructure"), "*.cs", SearchOption.TopDirectoryOnly))
 {
     Require(
         !File.ReadAllText(remoteSourcePath).Contains("\"https://jl-bke.com\"", StringComparison.Ordinal),
