@@ -60,6 +60,21 @@ internal static class AgentMachineKeyHttpCertification
                     receipt with { KeyThumbprint = "wrong" }, CancellationToken.None),
                     "Wrong key thumbprint cannot revoke");
             }
+            // Exercise actual ECDSA P-256 HTTP client on runners without
+            // hardware TPM. The fixture is an ephemeral named-assembly-only
+            // signer; hardware CNG is separately certified when available.
+            using (var es256 = new EphemeralEs256Signer())
+            using (var service = new AgentMachineKeyEnrollmentRemote(
+                es256, "https://ds.bke.test", new ProofHandler(bearer,
+                    sessionId, accountId, userId, deviceId)))
+            {
+                var receipt = await service.EnrollAsync(session, CancellationToken.None);
+                Pass(receipt.KeyThumbprint == es256.GetOrCreateIdentity(
+                    new AgentEd25519SessionBinding(sessionId, accountId, userId, deviceId))
+                    .KeyThumbprint, "Real ES256 P1363 HTTP enrollment binds its exact public SPKI");
+                await service.RevokeAsync(session, receipt, CancellationToken.None);
+                Pass(true, "Actual EdDSA/ES256 HTTP routes accept verified P-256 sign/revoke");
+            }
             using (var service = new AgentMachineKeyEnrollmentRemote(
                 store, "https://ds.bke.test", new ProofHandler(bearer,
                     sessionId, accountId, userId, deviceId) { WrongAccount = true }))
@@ -246,6 +261,62 @@ internal static class AgentMachineKeyHttpCertification
         }
     }
 
+    private sealed class EphemeralEs256Signer : IAgentMachineKeyLifecycleSigner, IDisposable
+    {
+        private readonly ECDsa _key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        private bool _present = true;
+        public bool HasStoredIdentity => _present;
+        public void RemoveLocalKey(AgentEd25519SessionBinding binding) { _present = false; }
+        public AgentEd25519PublicIdentity GetOrCreateIdentity(
+            AgentEd25519SessionBinding binding, bool createIfMissing = true)
+        {
+            if (!_present) throw new InvalidDataException("Ephemeral P256 signing key removed.");
+            byte[] spki = _key.ExportSubjectPublicKeyInfo();
+            string encoded = Convert.ToBase64String(spki);
+            string pem = "-----BEGIN PUBLIC KEY-----\n" +
+                string.Join("\n", Enumerable.Range(0, (encoded.Length + 63) / 64)
+                    .Select(i => encoded.Substring(i * 64, Math.Min(64, encoded.Length - i * 64)))) +
+                "\n-----END PUBLIC KEY-----\n";
+            return new AgentEd25519PublicIdentity(pem,
+                Convert.ToBase64String(SHA256.HashData(spki)).TrimEnd('=')
+                    .Replace('+', '-').Replace('/', '_'), "software", "ES256");
+        }
+
+        public string SignChallenge(AgentEd25519SessionBinding binding, string registrationId,
+            string challengeId, string messageBase64url, DateTimeOffset expiresAt,
+            string? productId = null, string? action = null)
+        {
+            if (expiresAt <= DateTimeOffset.UtcNow ||
+                expiresAt > DateTimeOffset.UtcNow.AddSeconds(35))
+                throw new InvalidDataException("Disposable ES256 challenge expiry invalid.");
+            string normalized = messageBase64url.Replace('-', '+').Replace('_', '/');
+            byte[] bytes = Convert.FromBase64String(normalized.PadRight(
+                ((normalized.Length + 3) / 4) * 4, '='));
+            string message = new UTF8Encoding(false, true).GetString(bytes);
+            string[] fields = message.Split('\n');
+            if (fields.Length != 11 || fields[0] != "bke.agent-key-proof.v1" ||
+                fields[1] != "ENROLL" || fields[2] != challengeId ||
+                fields[3] != registrationId || fields[4] != binding.SessionId ||
+                fields[5] != binding.AccountId || fields[6] != binding.UserId ||
+                fields[7] != binding.DeviceId || fields[8] != "-" ||
+                fields[9] != "-" || productId is not null || action is not null)
+                throw new InvalidDataException("Disposable ES256 challenge binding changed.");
+            byte[] signed = _key.SignData(bytes, HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+            try
+            {
+                return Convert.ToBase64String(signed).TrimEnd('=')
+                    .Replace('+', '-').Replace('/', '_');
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+                CryptographicOperations.ZeroMemory(signed);
+            }
+        }
+        public void Dispose() => _key.Dispose();
+    }
+
     private sealed class ProofHandler : HttpMessageHandler
     {
         private readonly string _bearer, _session, _account, _user, _device;
@@ -313,6 +384,8 @@ internal static class AgentMachineKeyHttpCertification
                         registration_state = _revoked ? "revoked" : _active ? "active" : "pending",
                         key_thumbprint = thumbprint,
                         key_protection = "software",
+                        key_algorithm = Convert.FromBase64String(pemBody).Length == 44
+                            ? "EdDSA" : "ES256",
                         valid_until = _validUntil.UtcDateTime.ToString("O"),
                     }));
                 }
@@ -355,12 +428,26 @@ internal static class AgentMachineKeyHttpCertification
                     string pemBody = _publicPem.Replace("-----BEGIN PUBLIC KEY-----", "")
                         .Replace("-----END PUBLIC KEY-----", "").Trim();
                     var der = Convert.FromBase64String(pemBody);
-                    var verifier = new Ed25519Signer();
-                    verifier.Init(false, new Ed25519PublicKeyParameters(der, 12));
-                    verifier.BlockUpdate(signedBytes, 0, signedBytes.Length);
-                    if (Encoding.UTF8.GetString(signedBytes) != _message ||
-                        !verifier.VerifySignature(signature))
-                        throw new InvalidDataException("Agent did not sign the exact DS challenge.");
+                    bool verified;
+                    if (der.Length == 44 &&
+                        Convert.ToHexString(der.AsSpan(0, 12)) == "302A300506032B6570032100")
+                    {
+                        var verifier = new Ed25519Signer();
+                        verifier.Init(false, new Ed25519PublicKeyParameters(der, 12));
+                        verifier.BlockUpdate(signedBytes, 0, signedBytes.Length);
+                        verified = signature.Length == 64 && verifier.VerifySignature(signature);
+                    }
+                    else
+                    {
+                        using var verifier = ECDsa.Create();
+                        verifier.ImportSubjectPublicKeyInfo(der, out var read);
+                        verified = read == der.Length && verifier.KeySize == 256 &&
+                            signature.Length == 64 && verifier.VerifyData(signedBytes, signature,
+                                HashAlgorithmName.SHA256,
+                                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+                    }
+                    if (Encoding.UTF8.GetString(signedBytes) != _message || !verified)
+                        throw new InvalidDataException("Agent did not sign the exact EdDSA/ES256 DS challenge.");
                     _active = true;
                     _pending = false;
                     if (DropVerifyAcknowledgementOnce)
