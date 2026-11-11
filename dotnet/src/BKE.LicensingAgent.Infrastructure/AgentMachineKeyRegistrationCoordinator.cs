@@ -25,7 +25,7 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
         WindowsTpmEcdsaP256MachineKeyStore keys,
         WindowsDpapiEd25519MachineKeyStore receiptStore,
         AgentMachineKeyEnrollmentRemote remote)
-        : this(keys, receiptStore, remote) { }
+        : this((IAgentMachineKeyLifecycleSigner)keys, receiptStore, remote) { }
 
     // Named certification friend may use an ephemeral ES256 fixture.
     internal AgentMachineKeyRegistrationCoordinator(
