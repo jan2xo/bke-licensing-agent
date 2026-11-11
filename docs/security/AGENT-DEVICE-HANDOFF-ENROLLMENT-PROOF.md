@@ -11,3 +11,8 @@ Upstream SHA: `bcf2616bd7ead980c905a4acf130df4eca5df385` and master checkpoint h
 **Cross-repo proof:** pin exact DS/Agent source SHA; run actual disposable DS PostgreSQL and HTTPS route with isolated test signer plus Windows real DPAPI regression. No product/Launcher/installer/UTM/real providers/release/production. Not required: Commerce/Payments/PayMongo/Resend; JWS issuer; signing/package publication.
 
 **Lock:** DRAFT/no merge/production locked until upstream dependencies and integrated installation risk reviewed. A thief with BOTH bearer+device code or local DPAPI compromise is not mitigated; no hardware nonexportability is claimed.
+
+
+## 2026-11-12 PHT — reconciled with dual-algorithm Agent #125
+
+Parent SHA `b4ca67fc4624693afa324ac4f4fa3a78bb76fab0`. First enrollment requires the original DPAPI-protected 32-byte high-entropy device/native-handoff code for **EdDSA or ES256**. Existing protected CNG TPM P-256 / DPAPI Ed25519 signing, algorithm-bound receipt/restart and revocation stay unchanged from #125; no obsolete signer interface was overlaid. The Windows test retains earlier ES256 protected receipt tests and adds actual device/native login, refresh, persistent DPAPI original code, wrong/missing-code denial. New cross-process fixture uses explicit EdDSA and 64-byte IEEE-P1363 ES256 and a separate synthetic approved device code. No deployed/TPM hardware claim. CI remains source/disposable only.
