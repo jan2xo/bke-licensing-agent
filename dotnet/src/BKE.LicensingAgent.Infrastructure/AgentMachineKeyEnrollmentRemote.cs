@@ -118,7 +118,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
             throw new InvalidDataException("Server did not acknowledge key revocation.");
     }
 
-    private static AgentEd25519SessionBinding Binding(ActiveAccountSessionState state)
+    internal static AgentEd25519SessionBinding Binding(ActiveAccountSessionState state)
     {
         ArgumentNullException.ThrowIfNull(state);
         if (state.AccessTokenExpiresAt <= DateTimeOffset.UtcNow.AddSeconds(30) ||
@@ -133,6 +133,74 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
             throw new PlatformNotSupportedException("Windows protected key custody is required.");
         return new AgentEd25519SessionBinding(state.SessionId,
             state.Account.AccountId, state.Account.UserId, device.DeviceId);
+    }
+
+    /// <summary>
+    /// Status is authenticated metadata only; it is NOT an Ed25519 proof or
+    /// a license. The caller must compare the exact local protected key.
+    /// </summary>
+    public async Task<AgentMachineKeyRemoteState> StatusAsync(
+        ActiveAccountSessionState authenticatedSession,
+        string? registrationId,
+        CancellationToken cancellationToken)
+    {
+        _ = Binding(authenticatedSession);
+        if (registrationId is not null &&
+            (!Guid.TryParseExact(registrationId, "D", out var parsed) ||
+             parsed.ToString("D") != registrationId))
+            throw new InvalidDataException("Agent registration lookup ID is invalid.");
+
+        using var reply = await SendAsync(
+            "/api/agent-sessions/keys/status",
+            registrationId is null ? new { } : (object)new { registration_id = registrationId },
+            authenticatedSession.AccessToken,
+            HttpStatusCode.OK,
+            cancellationToken);
+
+        var root = reply.RootElement;
+        string status = Required(root, "status");
+        if (status == "none")
+        {
+            if (root.EnumerateObject().Count() != 1)
+                throw new InvalidDataException("Agent key server returned ambiguous empty registration.");
+            return new AgentMachineKeyRemoteState("none");
+        }
+        if (status != "registration")
+            throw new InvalidDataException("Agent key server returned invalid registration status.");
+        string registration = RequiredUuid(root, "registration_id");
+        string state = Required(root, "registration_state");
+        string thumbprint = Required(root, "key_thumbprint");
+        if (state is not ("pending" or "active" or "revoked" or "expired") ||
+            Required(root, "key_protection") != "software" ||
+            thumbprint.Length != 43 ||
+            thumbprint.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_') ||
+            (registrationId is not null && registration != registrationId))
+            throw new InvalidDataException("Agent server registration state is not trustworthy.");
+        DateTimeOffset expiry = RequiredExpiry(root, "valid_until");
+        return new AgentMachineKeyRemoteState(state, registration, thumbprint, expiry);
+    }
+
+    public async Task RevokeRegistrationAsync(
+        ActiveAccountSessionState authenticatedSession,
+        string registrationId,
+        string keyThumbprint,
+        CancellationToken cancellationToken)
+    {
+        var binding = Binding(authenticatedSession);
+        if (!Guid.TryParseExact(registrationId, "D", out var parsed) ||
+            parsed.ToString("D") != registrationId)
+            throw new InvalidDataException("Agent registration revocation ID is invalid.");
+        var local = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
+        if (local.KeyThumbprint != keyThumbprint)
+            throw new InvalidDataException("Cannot revoke a foreign machine-key registration.");
+        using var reply = await SendAsync(
+            "/api/agent-sessions/keys/revoke",
+            new { registration_id = registrationId },
+            authenticatedSession.AccessToken,
+            HttpStatusCode.OK, cancellationToken);
+        string status = Required(reply.RootElement, "status");
+        if (status is not ("revoked" or "already_revoked"))
+            throw new InvalidDataException("DS machine-key revocation was not confirmed.");
     }
 
     private async Task<JsonDocument> SendAsync(
@@ -252,4 +320,8 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
 }
 
 public sealed record AgentMachineKeyRegistrationReceipt(
-    string RegistrationId, string KeyThumbprint);
+    string RegistrationId, string KeyThumbprint, DateTimeOffset? ValidUntil = null);
+
+public sealed record AgentMachineKeyRemoteState(
+    string Status, string? RegistrationId = null, string? KeyThumbprint = null,
+    DateTimeOffset? ValidUntil = null);
