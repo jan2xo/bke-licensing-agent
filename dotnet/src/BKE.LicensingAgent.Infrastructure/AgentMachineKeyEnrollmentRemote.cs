@@ -102,7 +102,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         if (!Guid.TryParseExact(registration.RegistrationId, "D", out var guid) ||
             guid.ToString("D") != registration.RegistrationId)
             throw new InvalidDataException("Agent registration ID is invalid.");
-        var identity = _keys.GetOrCreateIdentity(binding);
+        var identity = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
         if (!string.Equals(identity.KeyThumbprint, registration.KeyThumbprint,
             StringComparison.Ordinal))
             throw new InvalidDataException("Agent registration key does not match current private key.");
@@ -175,8 +175,8 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         {
             using var json = JsonDocument.Parse(data);
             ValidateUniqueProperties(json.RootElement);
-            // Caller owns independent parsed document and checks required schema.
-            return JsonDocument.Parse(data);
+            // Detach from the temporary byte buffer before zeroing it.
+            return JsonDocument.Parse(json.RootElement.GetRawText());
         }
         catch (JsonException error)
         {

@@ -50,9 +50,9 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
     }
 
     public AgentEd25519PublicIdentity GetOrCreateIdentity(
-        AgentEd25519SessionBinding binding)
+        AgentEd25519SessionBinding binding, bool createIfMissing = true)
     {
-        byte[] seed = LoadOrCreateSeed(binding);
+        byte[] seed = createIfMissing ? LoadOrCreateSeed(binding) : ReadExistingSeed(binding);
         try
         {
             var key = new Ed25519PrivateKeyParameters(seed, 0);

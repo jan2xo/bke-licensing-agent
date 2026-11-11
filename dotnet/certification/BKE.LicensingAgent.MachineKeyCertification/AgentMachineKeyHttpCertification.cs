@@ -175,7 +175,7 @@ internal static class AgentMachineKeyHttpCertification
                         registration_id = _registration,
                         challenge_id = _challenge,
                         message_base64url = encoded,
-                        expires_at = DateTimeOffset.UtcNow.AddSeconds(25).ToString("O"),
+                        expires_at = DateTimeOffset.UtcNow.AddSeconds(25).UtcDateTime.ToString("O"),
                     }));
                 }
                 if (path.EndsWith("/verify", StringComparison.Ordinal))

@@ -147,3 +147,4 @@ finally
     if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
 }
 Console.WriteLine("BKE Agent Windows DPAPI Ed25519 source custody PASS (" + passed + " assertions).");
+await AgentMachineKeyHttpCertification.RunAsync();
