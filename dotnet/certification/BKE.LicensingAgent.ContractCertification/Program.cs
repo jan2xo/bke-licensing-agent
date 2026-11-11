@@ -36,7 +36,7 @@ var bootstrapSelfUpdateSource = File.ReadAllText(
     Path.Combine("src", "BKE.LicensingAgent.Bootstrap", "AgentSelfUpdateWorker.cs"));
 Require(
     bootstrapSelfUpdateSource.Contains(
-        "\\"" + AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl + "\\"",
+        AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl,
         StringComparison.Ordinal),
     "Agent self-update Bootstrap default drifted from core production authority.");
 var activeWorkflowDirectory = Path.Combine(".github", "workflows");
