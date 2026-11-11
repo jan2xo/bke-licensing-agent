@@ -125,7 +125,7 @@ try
 
     string protectedFile = Directory.GetFiles(root, "*.dpapi", SearchOption.AllDirectories).Single();
     byte[] protectedBytes = File.ReadAllBytes(protectedFile);
-    Check(!protectedBytes.AsSpan().Contains(Encoding.ASCII.GetBytes("BKE-AGENT-ED25519-DPAPI-1")),
+    Check(protectedBytes.AsSpan().IndexOf(Encoding.ASCII.GetBytes("BKE-AGENT-ED25519-DPAPI-1")) < 0,
         "Private-key envelope is encrypted at rest");
     protectedBytes[protectedBytes.Length / 2] ^= 0x7F;
     File.WriteAllBytes(protectedFile, protectedBytes);
