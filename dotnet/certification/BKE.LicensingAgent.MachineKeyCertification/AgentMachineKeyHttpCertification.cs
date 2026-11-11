@@ -49,6 +49,16 @@ internal static class AgentMachineKeyHttpCertification
 
         try
         {
+            var secretStore = new WindowsDpapiAccountSessionSecretStore(
+                Path.Combine(root, "handoff-secret"));
+            await secretStore.WriteAsync(session, CancellationToken.None);
+            var restored = await secretStore.ReadAsync(CancellationToken.None)
+                as ActiveAccountSessionState;
+            Pass(restored is not null &&
+                 restored.EnrollmentDeviceCode == ProofDeviceCode &&
+                 restored.AccessToken == bearer,
+                "Original device handoff proof survives real Windows DPAPI restart");
+            await secretStore.ClearAsync(CancellationToken.None);
             using (var service = new AgentMachineKeyEnrollmentRemote(
                 store, "https://ds.bke.test", new ProofHandler(bearer,
                     sessionId, accountId, userId, deviceId)))
