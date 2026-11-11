@@ -94,6 +94,12 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         CancellationToken cancellationToken)
     {
         var binding = _trustedBinding(authenticatedSession);
+        // A stolen Agent access bearer alone cannot initiate machine-key enrollment.
+        // The high-entropy original device/native-handoff code stays in protected Agent state.
+        string? deviceCode = authenticatedSession.EnrollmentDeviceCode;
+        if (deviceCode is null || deviceCode.Length != 43 ||
+            deviceCode.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
+            throw new InvalidDataException("Original Agent device authorization proof is required.");
         var identity = _keys.GetOrCreateIdentity(binding);
         if (identity.Algorithm is not ("EdDSA" or "ES256") ||
             identity.KeyProtection is not ("software" or "tpm-unverified"))
@@ -101,7 +107,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
 
         using var enrollment = await SendAsync(
             "/api/agent-sessions/keys/enroll",
-            new { public_key_pem = identity.PublicKeyPem },
+            new { public_key_pem = identity.PublicKeyPem, device_code = deviceCode },
             authenticatedSession.AccessToken,
             HttpStatusCode.Created,
             cancellationToken);

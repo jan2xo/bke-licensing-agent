@@ -11,6 +11,9 @@ using Org.BouncyCastle.Crypto.Signers;
 
 internal static class AgentMachineKeyHttpCertification
 {
+    private static readonly string ProofDeviceCode =
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
     public static async Task RunAsync()
     {
         if (!OperatingSystem.IsWindows())
@@ -26,7 +29,8 @@ internal static class AgentMachineKeyHttpCertification
             bearer, "disposable-refresh", sessionId,
             DateTimeOffset.UtcNow.AddMinutes(10),
             DateTimeOffset.UtcNow.AddDays(1),
-            new AccountSessionAccount(userId, "test@bke.test", accountId, "INDIVIDUAL", "Disposable"));
+            new AccountSessionAccount(userId, "test@bke.test", accountId, "INDIVIDUAL", "Disposable"),
+            ProofDeviceCode);
         int passed = 0;
         void Pass(bool value, string name)
         {
@@ -45,6 +49,30 @@ internal static class AgentMachineKeyHttpCertification
 
         try
         {
+            var secretStore = new WindowsDpapiAccountSessionSecretStore(
+                Path.Combine(root, "handoff-secret"));
+            await secretStore.WriteAsync(session, CancellationToken.None);
+            var restored = await secretStore.ReadAsync(CancellationToken.None)
+                as ActiveAccountSessionState;
+            Pass(restored is not null &&
+                 restored.EnrollmentDeviceCode == ProofDeviceCode &&
+                 restored.AccessToken == bearer,
+                "Original device handoff proof survives real Windows DPAPI restart");
+            await secretStore.ClearAsync(CancellationToken.None);
+            using (var service = new AgentMachineKeyEnrollmentRemote(
+                store, "https://ds.bke.test", new ProofHandler(bearer,
+                    sessionId, accountId, userId, deviceId)))
+            {
+                await RejectAsync(() => service.EnrollAsync(session with {
+                    EnrollmentDeviceCode = null,
+                }, CancellationToken.None),
+                    "Stolen Agent bearer without original handoff code cannot enroll");
+                await RejectAsync(() => service.EnrollAsync(session with {
+                    EnrollmentDeviceCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+                        .TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+                }, CancellationToken.None),
+                    "Wrong device authorization code is refused by DS-shaped peer");
+            }
             using (var service = new AgentMachineKeyEnrollmentRemote(
                 store, "https://ds.bke.test", new ProofHandler(bearer,
                     sessionId, accountId, userId, deviceId)))
@@ -198,6 +226,37 @@ internal static class AgentMachineKeyHttpCertification
             Console.WriteLine("PASS: " + message);
             passed++;
         }
+        // Real application state machine: both approval modes preserve the
+        // original device code, including refresh-token rotation.
+        var deviceState = new MemorySessionStore();
+        var deviceService = new AccountSessionService(new MemoryAccountRemote(), deviceState);
+        var started = await deviceService.StartAsync(
+            new AccountSessionStartRequest("device-start"), CancellationToken.None);
+        Check(started.Status == "PENDING", "Device approval starts with original device code");
+        var approved = await deviceService.StatusAsync(
+            new AccountSessionStatusRequest("device-approve"), CancellationToken.None);
+        Check(approved.Status == "AUTHENTICATED" &&
+              deviceState.State is ActiveAccountSessionState approvedState &&
+              approvedState.EnrollmentDeviceCode == ProofDeviceCode,
+            "Device flow transfers original code only to trusted active session");
+        var rotated = await deviceService.StatusAsync(
+            new AccountSessionStatusRequest("device-refresh"), CancellationToken.None);
+        Check(rotated.Status == "AUTHENTICATED" &&
+              deviceState.State is ActiveAccountSessionState refreshedState &&
+              refreshedState.EnrollmentDeviceCode == ProofDeviceCode &&
+              refreshedState.AccessToken == "disposable-refreshed-token",
+            "Access-token refresh retains independent device authorization proof");
+
+        var nativeState = new MemorySessionStore();
+        var nativeService = new AccountSessionService(new MemoryAccountRemote(), nativeState);
+        var handoff = await nativeService.CompleteAsync(
+            new AccountSessionCompleteRequest("native-handoff", ProofDeviceCode),
+            CancellationToken.None);
+        Check(handoff.Status == "AUTHENTICATED" &&
+              nativeState.State is ActiveAccountSessionState nativeActive &&
+              nativeActive.EnrollmentDeviceCode == ProofDeviceCode,
+            "Native handoff preserves same original code only in Agent state");
+
         var directory = Path.Combine(root, "durable-receipt");
         var local = new WindowsDpapiEd25519MachineKeyStore(directory);
         var binding = new AgentEd25519SessionBinding(
@@ -286,7 +345,7 @@ internal static class AgentMachineKeyHttpCertification
     private sealed class MemorySessionStore : IAccountSessionSecretStore
     {
         public AccountSessionStoredState? State { get; private set; }
-        public MemorySessionStore(AccountSessionStoredState state) => State = state;
+        public MemorySessionStore(AccountSessionStoredState? state = null) => State = state;
         public Task<AccountSessionStoredState?> ReadAsync(CancellationToken ct)
         { ct.ThrowIfCancellationRequested(); return Task.FromResult(State); }
         public Task WriteAsync(AccountSessionStoredState state, CancellationToken ct)
@@ -298,16 +357,34 @@ internal static class AgentMachineKeyHttpCertification
     private sealed class MemoryAccountRemote : IAccountSessionRemote
     {
         public int RevokeCalls { get; private set; }
+        private static readonly AccountSessionAccount TestAccount = new(
+            "user-integration", "test@bke.test", "account-integration",
+            "INDIVIDUAL", "Disposable");
         public Task<RemoteAccountSessionStart> StartAsync(CancellationToken ct) =>
-            throw new NotSupportedException();
-        public Task<RemoteAccountSessionPoll> PollAsync(string code, CancellationToken ct) =>
-            throw new NotSupportedException();
-        public Task<RemoteAccountSessionPoll> ExchangeNativeAsync(string code, CancellationToken ct) =>
-            throw new NotSupportedException();
+            Task.FromResult(new RemoteAccountSessionStart(
+                ProofDeviceCode, "https://ds.bke.test/device",
+                "BKE-ABCD-EFGH", TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(5)));
+        public Task<RemoteAccountSessionPoll> PollAsync(string code, CancellationToken ct)
+        {
+            if (code != ProofDeviceCode) throw new InvalidDataException("Device code mismatch.");
+            return Task.FromResult(Approved());
+        }
+        public Task<RemoteAccountSessionPoll> ExchangeNativeAsync(string code, CancellationToken ct)
+        {
+            if (code != ProofDeviceCode) throw new InvalidDataException("Native handoff mismatch.");
+            return Task.FromResult(Approved());
+        }
+        private static RemoteAccountSessionPoll Approved() => new(
+            "approved", "disposable-access-validated", "disposable-refresh-validated",
+            "agent-session-integration", TimeSpan.FromSeconds(90),
+            TimeSpan.FromDays(1), TestAccount);
         public Task<RemoteAccountSessionRefresh> RefreshAsync(string token, CancellationToken ct) =>
-            throw new NotSupportedException();
+            Task.FromResult(new RemoteAccountSessionRefresh(
+                "refreshed", "disposable-refreshed-token", "disposable-new-refresh",
+                "agent-session-integration", TimeSpan.FromMinutes(15),
+                TimeSpan.FromDays(1), TestAccount));
         public Task AcknowledgeAsync(string token, CancellationToken ct) =>
-            throw new NotSupportedException();
+            Task.CompletedTask;
         public Task RevokeAsync(string? sessionId, string? refreshToken,
             string? deviceCode, CancellationToken ct)
         {
@@ -450,6 +527,8 @@ internal static class AgentMachineKeyHttpCertification
                 {
                     EnrollRequests++;
                     _pending = true;
+                    if (json.RootElement.GetProperty("device_code").GetString() != ProofDeviceCode)
+                        return Json(HttpStatusCode.Forbidden, "{\"error\":\"INVALID_PROOF\"}");
                     _publicPem = json.RootElement.GetProperty("public_key_pem").GetString()!;
                     _message = string.Join("\n",
                         "bke.agent-key-proof.v1", "ENROLL", _challenge, _registration,

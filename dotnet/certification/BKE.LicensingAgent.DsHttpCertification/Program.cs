@@ -30,6 +30,7 @@ string sessionId = Env("BKE_CROSS_REPO_SESSION_ID");
 string accountId = Env("BKE_CROSS_REPO_ACCOUNT_ID");
 string userId = Env("BKE_CROSS_REPO_USER_ID");
 string deviceId = Env("BKE_CROSS_REPO_DEVICE_ID");
+string deviceCode = Env("BKE_CROSS_REPO_DEVICE_CODE");
 var trusted = new AgentEd25519SessionBinding(sessionId, accountId, userId, deviceId);
 var session = new ActiveAccountSessionState(
     token,
@@ -38,7 +39,8 @@ var session = new ActiveAccountSessionState(
     DateTimeOffset.UtcNow.AddMinutes(12),
     DateTimeOffset.UtcNow.AddDays(1),
     new AccountSessionAccount(userId, "disposable@bke.test",
-        accountId, "INDIVIDUAL", "Disposable Certification"));
+        accountId, "INDIVIDUAL", "Disposable Certification"),
+    deviceCode);
 
 string algorithm = Env("BKE_CROSS_REPO_SIGNER_ALGORITHM");
 if (algorithm is not ("EdDSA" or "ES256"))
@@ -76,6 +78,15 @@ Check(unauthorized, "Actual DS route rejects invalid Agent bearer");
 var before = await remote.StatusAsync(session, null, CancellationToken.None);
 Check(before.Status == "none", "Actual DS status route reports no initial key");
 
+bool deniedWrongCode = false;
+try {
+    _ = await remote.EnrollAsync(session with {
+        EnrollmentDeviceCode = (deviceCode[0] == 'A' ? "B" : "A") + deviceCode[1..],
+    }, CancellationToken.None);
+}
+catch (HttpRequestException error) when (error.StatusCode == HttpStatusCode.Forbidden)
+{ deniedWrongCode = true; }
+Check(deniedWrongCode, "Original device proof rejects changed code despite valid bearer");
 var enrollment = await remote.EnrollAsync(session, CancellationToken.None);
 Check(Guid.TryParseExact(enrollment.RegistrationId, "D", out _) &&
       enrollment.Algorithm == algorithm,
@@ -98,7 +109,7 @@ Check(revoked.Status == "revoked",
 
 var empty = await remote.StatusAsync(session, null, CancellationToken.None);
 Check(empty.Status == "none", "Revoked DS registration is no longer active");
-Console.WriteLine("BKE LIVE CROSS-REPO HTTPS + POSTGRESQL PASS (7 assertions; algorithm=" + algorithm + "; actual DS handlers; separate .NET Agent client).");
+Console.WriteLine("BKE LIVE CROSS-REPO HTTPS + POSTGRESQL PASS (8 assertions; algorithm=" + algorithm + "; actual DS handlers; separate .NET Agent client).");
 
 static void Check(bool accepted, string label)
 {
