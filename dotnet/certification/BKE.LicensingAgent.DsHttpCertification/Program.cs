@@ -40,7 +40,10 @@ var session = new ActiveAccountSessionState(
     new AccountSessionAccount(userId, "disposable@bke.test",
         accountId, "INDIVIDUAL", "Disposable Certification"));
 
-using var key = new DisposableSigner();
+string algorithm = Env("BKE_CROSS_REPO_SIGNER_ALGORITHM");
+if (algorithm is not ("EdDSA" or "ES256"))
+    throw new InvalidOperationException("Only disposable EdDSA or ES256 test keys are supported.");
+using var key = new DisposableSigner(algorithm);
 using var tls = new HttpClientHandler
 {
     AllowAutoRedirect = false,
@@ -74,8 +77,9 @@ var before = await remote.StatusAsync(session, null, CancellationToken.None);
 Check(before.Status == "none", "Actual DS status route reports no initial key");
 
 var enrollment = await remote.EnrollAsync(session, CancellationToken.None);
-Check(Guid.TryParseExact(enrollment.RegistrationId, "D", out _),
-    "Actual DS route verifies Ed25519 enrollment and returns server registration");
+Check(Guid.TryParseExact(enrollment.RegistrationId, "D", out _) &&
+      enrollment.Algorithm == algorithm,
+    "Actual DS route verifies " + algorithm + " enrollment and returns server registration");
 Check(enrollment.KeyThumbprint == key.GetOrCreateIdentity(trusted).KeyThumbprint,
     "Actual DS registration matches ephemeral test SPKI public key");
 
@@ -83,6 +87,7 @@ var current = await remote.StatusAsync(session, enrollment.RegistrationId, Cance
 Check(current.Status == "active" &&
       current.RegistrationId == enrollment.RegistrationId &&
       current.KeyThumbprint == enrollment.KeyThumbprint &&
+      current.Algorithm == algorithm &&
       current.ValidUntil > DateTimeOffset.UtcNow,
     "Actual DS PostgreSQL registration is ACTIVE with matching identity");
 
@@ -93,7 +98,7 @@ Check(revoked.Status == "revoked",
 
 var empty = await remote.StatusAsync(session, null, CancellationToken.None);
 Check(empty.Status == "none", "Revoked DS registration is no longer active");
-Console.WriteLine("BKE LIVE CROSS-REPO HTTPS + POSTGRESQL PASS (7 assertions; actual DS handlers; separate .NET Agent client).");
+Console.WriteLine("BKE LIVE CROSS-REPO HTTPS + POSTGRESQL PASS (7 assertions; algorithm=" + algorithm + "; actual DS handlers; separate .NET Agent client).");
 
 static void Check(bool accepted, string label)
 {
@@ -103,26 +108,41 @@ static void Check(bool accepted, string label)
 
 // EPHEMERAL TEST-ONLY SOFTWARE KEY. It is not Windows DPAPI, attestation,
 // or a substitute for the separately certified production Windows signer.
-internal sealed class DisposableSigner : IAgentMachineKeyChallengeSigning, IDisposable
+internal sealed class DisposableSigner : IAgentMachineKeySigner, IDisposable
 {
-    private readonly byte[] _seed = RandomNumberGenerator.GetBytes(32);
-    private readonly Ed25519PrivateKeyParameters _privateKey;
+    private readonly string _algorithm;
+    private readonly byte[]? _seed;
+    private readonly Ed25519PrivateKeyParameters? _ed25519;
+    private readonly ECDsa? _p256;
     private readonly string _publicPem;
     private readonly string _thumbprint;
 
-    public DisposableSigner()
+    public DisposableSigner(string algorithm)
     {
-        _privateKey = new Ed25519PrivateKeyParameters(_seed, 0);
-        byte[] spki = Convert.FromHexString("302A300506032B6570032100")
-            .Concat(_privateKey.GeneratePublicKey().GetEncoded()).ToArray();
-        _publicPem = "-----BEGIN PUBLIC KEY-----\n" +
-            Convert.ToBase64String(spki) + "\n-----END PUBLIC KEY-----\n";
+        _algorithm = algorithm;
+        byte[] spki;
+        if (algorithm == "EdDSA")
+        {
+            _seed = RandomNumberGenerator.GetBytes(32);
+            _ed25519 = new Ed25519PrivateKeyParameters(_seed, 0);
+            spki = Convert.FromHexString("302A300506032B6570032100")
+                .Concat(_ed25519.GeneratePublicKey().GetEncoded()).ToArray();
+            _publicPem = "-----BEGIN PUBLIC KEY-----\n" +
+                Convert.ToBase64String(spki) + "\n-----END PUBLIC KEY-----\n";
+        }
+        else if (algorithm == "ES256")
+        {
+            _p256 = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            spki = _p256.ExportSubjectPublicKeyInfo();
+            _publicPem = _p256.ExportSubjectPublicKeyInfoPem();
+        }
+        else throw new InvalidOperationException("Untrusted disposable signing algorithm.");
         _thumbprint = B64(SHA256.HashData(spki));
     }
 
     public AgentEd25519PublicIdentity GetOrCreateIdentity(
         AgentEd25519SessionBinding binding, bool createIfMissing = true) =>
-        new(_publicPem, _thumbprint, "software");
+        new(_publicPem, _thumbprint, "software", _algorithm);
 
     public string SignChallenge(
         AgentEd25519SessionBinding binding,
@@ -139,26 +159,32 @@ internal sealed class DisposableSigner : IAgentMachineKeyChallengeSigning, IDisp
                 ((messageBase64url.Length + 3) / 4) * 4, '='));
         try
         {
-            if (B64(message) != messageBase64url ||
-                message.Length > 4096)
+            if (B64(message) != messageBase64url || message.Length > 4096)
                 throw new InvalidDataException("Noncanonical DS challenge.");
             var pieces = new UTF8Encoding(false, true).GetString(message).Split('\n');
             if (pieces.Length != 11 ||
-                pieces[0] != "bke.agent-key-proof.v1" ||
-                pieces[1] != "ENROLL" ||
-                pieces[2] != challengeId ||
-                pieces[3] != registrationId ||
-                pieces[4] != binding.SessionId ||
-                pieces[5] != binding.AccountId ||
-                pieces[6] != binding.UserId ||
-                pieces[7] != binding.DeviceId ||
-                pieces[8] != "-" || pieces[9] != "-" ||
-                pieces[10].Length != 43)
+                pieces[0] != "bke.agent-key-proof.v1" || pieces[1] != "ENROLL" ||
+                pieces[2] != challengeId || pieces[3] != registrationId ||
+                pieces[4] != binding.SessionId || pieces[5] != binding.AccountId ||
+                pieces[6] != binding.UserId || pieces[7] != binding.DeviceId ||
+                pieces[8] != "-" || pieces[9] != "-" || pieces[10].Length != 43)
                 throw new InvalidDataException("DS challenge mismatched trusted disposable Agent context.");
-            var signer = new Ed25519Signer();
-            signer.Init(true, _privateKey);
-            signer.BlockUpdate(message, 0, message.Length);
-            return B64(signer.GenerateSignature());
+            byte[] signature;
+            if (_algorithm == "EdDSA")
+            {
+                var signer = new Ed25519Signer();
+                signer.Init(true, _ed25519!);
+                signer.BlockUpdate(message, 0, message.Length);
+                signature = signer.GenerateSignature();
+            }
+            else
+            {
+                signature = _p256!.SignData(message, HashAlgorithmName.SHA256,
+                    DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+            }
+            if (signature.Length != 64)
+                throw new InvalidDataException("Disposable signature must use 64-byte EdDSA/P1363 encoding.");
+            return B64(signature);
         }
         finally { CryptographicOperations.ZeroMemory(message); }
     }
@@ -166,5 +192,9 @@ internal sealed class DisposableSigner : IAgentMachineKeyChallengeSigning, IDisp
     private static string B64(byte[] bytes) =>
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-    public void Dispose() => CryptographicOperations.ZeroMemory(_seed);
+    public void Dispose()
+    {
+        _p256?.Dispose();
+        if (_seed is not null) CryptographicOperations.ZeroMemory(_seed);
+    }
 }

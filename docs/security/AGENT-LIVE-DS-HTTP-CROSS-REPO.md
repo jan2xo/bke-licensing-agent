@@ -11,3 +11,8 @@ Cross-repo: exact SHA pinned in DS harness; Agent Windows DPAPI source certifica
 Security: no public listeners, no TLS validation bypass in production, no secrets/prod credentials, no real PayMongo/Resend, no published release, no Agent production registration automation, no JWS/lease product entitlement issuance. No production DB mutation or deployment. No merge while upstream draft dependencies and stolen-bearer enrollment provenance unresolved.
 
 Not required: Commerce, payments, Launcher, installer/UTM/VM, software product binary, signing cutover, production.
+
+
+## Reconciled EdDSA + ES256 exact-source contract (2026-11-12 PHT)
+
+The disposable .NET cross-process client is a **test-only named friend assembly** with an injected ephemeral signer and synthetic session binding. It now exercises both EdDSA (software Ed25519) and ES256 (NIST P-256, 64-byte IEEE-P1363). The actual Agent production constructor and Windows signer/receipt lifecycle remain those certified under Agent #124; Linux CI does **not** attest physical TPM provenance. Do not publish this test signer, allow production DI overrides, or infer rights from its software key. DS #350 pins the exact Agent commit after this reconciliation.
