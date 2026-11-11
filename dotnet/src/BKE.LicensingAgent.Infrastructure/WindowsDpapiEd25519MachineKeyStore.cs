@@ -18,10 +18,7 @@ public sealed record AgentEd25519PublicIdentity(
     string PublicKeyPem, string KeyThumbprint, string KeyProtection,
     string Algorithm = "EdDSA");
 
-/// <summary>
-/// Trusted OS-protected machine key signer, one exact authenticated Agent binding.
-/// TPM P-256 and software EdDSA share exact protocol sign operation.
-/// </summary>
+/// <summary>Trusted signing without exposing arbitrary messages through public IPC.</summary>
 public interface IAgentMachineKeySigner
 {
     AgentEd25519PublicIdentity GetOrCreateIdentity(
@@ -32,13 +29,20 @@ public interface IAgentMachineKeySigner
         string? productId = null, string? action = null);
 }
 
+/// <summary>Only protected concrete stores may execute local key removal after remote revocation.</summary>
+public interface IAgentMachineKeyLifecycleSigner : IAgentMachineKeySigner
+{
+    bool HasStoredIdentity { get; }
+    void RemoveLocalKey(AgentEd25519SessionBinding binding);
+}
+
 /// <summary>
 /// Windows user-DPAPI protected SOFTWARE Ed25519 key. The seed is exportable to
 /// the running account in process memory; this is NOT TPM, attestation, or a
 /// nonexportable hardware-backed identity. No public HTTP/IPC route exposes it.
 /// Unsupported platforms and damaged/foreign stores fail closed.
 /// </summary>
-public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeySigner
+public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeyLifecycleSigner
 {
     private const string Protocol = "bke.agent-key-proof.v1";
     private const int SeedLength = 32;
@@ -49,6 +53,8 @@ public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeySigner
     private static readonly byte[] SpkiPrefix =
         Convert.FromHexString("302A300506032B6570032100");
     private readonly string _path;
+    private readonly string _receiptPath;
+    private static readonly byte[] ReceiptHeader = Encoding.ASCII.GetBytes("BKE-AGENT-KEY-RECEIPT-1\0");
 
     public WindowsDpapiEd25519MachineKeyStore(string? dataDirectory = null)
     {
@@ -62,6 +68,9 @@ public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeySigner
             throw new InvalidOperationException("Protected Agent user profile is unavailable.");
         _path = Path.Combine(Path.GetFullPath(root), "machine-trust",
             "agent-ed25519.dpapi");
+        // Algorithm-neutral receipt; protected by the Windows user, not a software key.
+        _receiptPath = Path.Combine(Path.GetDirectoryName(_path)!,
+            "agent-machine-key.receipt.dpapi");
     }
 
     public bool HasStoredIdentity => File.Exists(_path);
@@ -159,12 +168,170 @@ public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeySigner
     }
 
     /// <summary>
+    /// Same-user DPAPI encrypted receipt, bound to exact authenticated
+    /// session/account/user/device and local protected Ed25519 thumbprint.
+    /// No caller may replace a conflicting durable receipt.
+    /// </summary>
+    public AgentMachineKeyRegistrationReceipt? ReadReceipt(
+        AgentEd25519SessionBinding binding, IAgentMachineKeySigner? signer = null)
+    {
+        ValidateBinding(binding);
+        if (!File.Exists(_receiptPath)) return null;
+        using var stream = new FileStream(_receiptPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length == 0 || stream.Length > 8192)
+            throw new InvalidDataException("Protected Agent registration receipt size is invalid.");
+        byte[] cipher = new byte[(int)stream.Length];
+        stream.ReadExactly(cipher);
+        byte[]? plain = null;
+        byte[] hash = HashBinding(binding);
+        try
+        {
+            plain = Unprotect(cipher);
+            if (plain.Length < ReceiptHeader.Length + 32 + 75 ||
+                !plain.AsSpan(0, ReceiptHeader.Length).SequenceEqual(ReceiptHeader) ||
+                !CryptographicOperations.FixedTimeEquals(
+                    plain.AsSpan(ReceiptHeader.Length, 32), hash))
+                throw new InvalidDataException("Protected Agent registration receipt binding is invalid.");
+            var utf8 = new UTF8Encoding(false, true);
+            string text = utf8.GetString(plain.AsSpan(ReceiptHeader.Length + 32));
+            var parts = text.Split('\n');
+            if (parts.Length is not (3 or 4) ||
+                !Guid.TryParseExact(parts[0], "D", out var id) ||
+                id.ToString("D") != parts[0] ||
+                parts[1].Length != 43 ||
+                parts[1].Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_') ||
+                !long.TryParse(parts[2], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out long unix) ||
+                unix <= 0)
+                throw new InvalidDataException("Protected Agent registration receipt contents are invalid.");
+            var expiry = DateTimeOffset.FromUnixTimeSeconds(unix);
+            // 3-field source-only EdDSA receipts are read as EdDSA only;
+            // fresh receipts always bind the exact server-derived algorithm.
+            string algorithm = parts.Length == 4 ? parts[3] : "EdDSA";
+            if (algorithm is not ("EdDSA" or "ES256"))
+                throw new InvalidDataException("Protected Agent receipt algorithm is invalid.");
+            var identity = (signer ?? this).GetOrCreateIdentity(binding, createIfMissing: false);
+            if (identity.KeyThumbprint != parts[1] || identity.Algorithm != algorithm)
+                throw new InvalidDataException("Protected Agent receipt key/algorithm mismatch.");
+            return new AgentMachineKeyRegistrationReceipt(parts[0], parts[1], expiry, algorithm);
+        }
+        catch (DecoderFallbackException error)
+        {
+            throw new InvalidDataException("Protected Agent registration receipt is not UTF-8.", error);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(hash);
+            CryptographicOperations.ZeroMemory(cipher);
+            if (plain is not null) CryptographicOperations.ZeroMemory(plain);
+        }
+    }
+
+    private static bool ReceiptMatches(AgentMachineKeyRegistrationReceipt? a,
+        AgentMachineKeyRegistrationReceipt b) =>
+        a is not null && a.RegistrationId == b.RegistrationId &&
+        a.KeyThumbprint == b.KeyThumbprint && a.Algorithm == b.Algorithm &&
+        a.ValidUntil is { } first && b.ValidUntil is { } second &&
+        first.ToUnixTimeSeconds() == second.ToUnixTimeSeconds();
+
+    public void WriteReceipt(AgentEd25519SessionBinding binding,
+        AgentMachineKeyRegistrationReceipt receipt, IAgentMachineKeySigner? signer = null)
+    {
+        ValidateBinding(binding);
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (receipt.ValidUntil is not { } until ||
+            until <= DateTimeOffset.UtcNow ||
+            until > DateTimeOffset.UtcNow.AddDays(2) ||
+            !Guid.TryParseExact(receipt.RegistrationId, "D", out var id) ||
+            id.ToString("D") != receipt.RegistrationId ||
+            receipt.Algorithm is not ("EdDSA" or "ES256") ||
+            receipt.KeyThumbprint.Length != 43 ||
+            receipt.KeyThumbprint.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
+            throw new InvalidDataException("Agent registration receipt metadata is invalid.");
+        var current = (signer ?? this).GetOrCreateIdentity(binding, createIfMissing: false);
+        if (current.KeyThumbprint != receipt.KeyThumbprint ||
+            current.Algorithm != receipt.Algorithm)
+            throw new InvalidDataException("Cannot persist receipt for another protected key.");
+        if (File.Exists(_receiptPath))
+        {
+            var previous = ReadReceipt(binding, signer);
+            if (!ReceiptMatches(previous, receipt))
+                throw new InvalidDataException("Conflicting protected Agent registration receipt.");
+            return;
+        }
+        byte[] hash = HashBinding(binding);
+        byte[] body = Encoding.UTF8.GetBytes(receipt.RegistrationId + "\n" +
+            receipt.KeyThumbprint + "\n" +
+            until.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            "\n" + receipt.Algorithm);
+        byte[] plain = new byte[ReceiptHeader.Length + hash.Length + body.Length];
+        byte[]? cipher = null;
+        string? temporary = null;
+        try
+        {
+            Buffer.BlockCopy(ReceiptHeader, 0, plain, 0, ReceiptHeader.Length);
+            Buffer.BlockCopy(hash, 0, plain, ReceiptHeader.Length, hash.Length);
+            Buffer.BlockCopy(body, 0, plain, ReceiptHeader.Length + hash.Length, body.Length);
+            cipher = Protect(plain);
+            var directory = Path.GetDirectoryName(_receiptPath)!;
+            Directory.CreateDirectory(directory);
+            temporary = Path.Combine(directory, ".agent-receipt." + Guid.NewGuid().ToString("N") + ".tmp");
+            using (var f = new FileStream(temporary, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                f.Write(cipher);
+                f.Flush(flushToDisk: true);
+            }
+            try
+            {
+                File.Move(temporary, _receiptPath, overwrite: false);
+                temporary = null;
+            }
+            catch (IOException) when (File.Exists(_receiptPath))
+            {
+                if (!ReceiptMatches(ReadReceipt(binding, signer), receipt))
+                    throw new InvalidDataException("Concurrent Agent registration receipt mismatch.");
+            }
+        }
+        finally
+        {
+            if (temporary is not null) { try { File.Delete(temporary); } catch { } }
+            CryptographicOperations.ZeroMemory(hash);
+            CryptographicOperations.ZeroMemory(body);
+            CryptographicOperations.ZeroMemory(plain);
+            if (cipher is not null) CryptographicOperations.ZeroMemory(cipher);
+        }
+    }
+
+    /// <summary>Call only after independently confirmed server revocation.</summary>
+    public void RemoveReceipt(AgentEd25519SessionBinding binding,
+        IAgentMachineKeySigner? signer = null)
+    {
+        // A tampered/foreign receipt never gets silently deleted.
+        if (File.Exists(_receiptPath))
+        {
+            _ = ReadReceipt(binding, signer);
+            File.Delete(_receiptPath);
+        }
+    }
+
+    /// <summary>
     /// LOCAL removal only: this does not revoke DS registration. The future
     /// authenticated revocation protocol must run before production rotation.
     /// Does not silently replace a corrupt or mismatched key.
     /// </summary>
+    /// <summary>Must be called only after DS has confirmed revoke.</summary>
+    public void RemoveLocalKey(AgentEd25519SessionBinding binding)
+    {
+        // A foreign/expired session may not delete a surviving local key.
+        _ = GetOrCreateIdentity(binding, createIfMissing: false);
+        RemoveLocalKey();
+    }
+
     public void RemoveLocalKey()
     {
+        if (File.Exists(_receiptPath))
+            throw new InvalidOperationException("Revoke and erase the protected registration receipt before local key reset.");
         if (File.Exists(_path))
             File.Delete(_path);
     }

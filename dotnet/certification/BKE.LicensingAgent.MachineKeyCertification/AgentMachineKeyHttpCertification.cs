@@ -121,6 +121,8 @@ internal static class AgentMachineKeyHttpCertification
             }
             catch (InvalidOperationException) { refused = true; }
             Pass(refused, "Non-HTTPS public endpoint rejected");
+            await RunReceiptAsync(root, session, bearer, sessionId, accountId, userId, deviceId);
+            await RunEs256ReceiptAsync(root, session, bearer, sessionId, accountId, userId, deviceId);
             Console.WriteLine("BKE Agent real DS-shaped enrollment transport PASS (" + passed +
                 " assertions, in-memory HTTP without production/network).");
         }
@@ -130,12 +132,201 @@ internal static class AgentMachineKeyHttpCertification
         }
     }
 
-    private sealed class EphemeralEs256Signer : IAgentMachineKeySigner, IDisposable
+    private static async Task RunEs256ReceiptAsync(
+        string root, ActiveAccountSessionState session, string bearer,
+        string sessionId, string accountId, string userId, string deviceId)
+    {
+        var directory = Path.Combine(root, "p256-registration-receipt");
+        using var signer = new EphemeralEs256Signer();
+        var receipts = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var binding = new AgentEd25519SessionBinding(sessionId, accountId, userId, deviceId);
+        var fake = new ProofHandler(bearer, sessionId, accountId, userId, deviceId);
+        using var remote = new AgentMachineKeyEnrollmentRemote(
+            signer, "https://ds.bke.test", fake);
+        var coordinator = new AgentMachineKeyRegistrationCoordinator(signer, receipts, remote);
+        var accepted = await coordinator.EnsureEnrolledAsync(session, CancellationToken.None);
+        if (accepted.Algorithm != "ES256" ||
+            accepted.KeyThumbprint != signer.GetOrCreateIdentity(binding).KeyThumbprint)
+            throw new InvalidOperationException("ES256 receipt algorithm/identity drift");
+        if (receipts.HasStoredIdentity)
+            throw new InvalidOperationException("TPM ES256 session created a software Ed25519 private key");
+        var restored = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var persisted = restored.ReadReceipt(binding, signer);
+        if (persisted is null || persisted.Algorithm != "ES256" ||
+            persisted.RegistrationId != accepted.RegistrationId)
+            throw new InvalidOperationException("ES256 receipt failed protected restart recovery");
+        var restarted = new AgentMachineKeyRegistrationCoordinator(signer, restored, remote);
+        var again = await restarted.EnsureEnrolledAsync(session, CancellationToken.None);
+        if (fake.EnrollRequests != 1)
+            throw new InvalidOperationException("ES256 restart made a second server enrollment");
+        if (again.RegistrationId != accepted.RegistrationId ||
+            again.KeyThumbprint != accepted.KeyThumbprint ||
+            again.Algorithm != accepted.Algorithm ||
+            again.ValidUntil?.ToUnixTimeSeconds() != accepted.ValidUntil?.ToUnixTimeSeconds())
+            throw new InvalidOperationException(
+                "ES256 protected restart changed registration ID, public key, algorithm or canonical expiry");
+        bool wrongAlgRejected = false;
+        try
+        {
+            restored.WriteReceipt(binding, accepted with { Algorithm = "EdDSA" }, signer);
+        }
+        catch (InvalidDataException) { wrongAlgRejected = true; }
+        if (!wrongAlgRejected)
+            throw new InvalidOperationException("ES256 local receipt downgraded to EdDSA");
+        fake.WrongStatusAlgorithm = true;
+        bool serverDowngradeDenied = false;
+        try { _ = await restarted.EnsureEnrolledAsync(session, CancellationToken.None); }
+        catch (InvalidDataException) { serverDowngradeDenied = true; }
+        if (!serverDowngradeDenied)
+            throw new InvalidOperationException("Server EdDSA downgrade was accepted for ES256 key");
+        fake.WrongStatusAlgorithm = false;
+        await restarted.RevokeAndClearAsync(session, CancellationToken.None);
+        if (signer.HasStoredIdentity || restored.ReadReceipt(binding, signer) is not null ||
+            receipts.HasStoredIdentity)
+            throw new InvalidOperationException("ES256 logout did not clear signer and protected receipt");
+        Console.WriteLine("PASS: ES256 key has algorithm-bound DPAPI receipt, restart, downgrade rejection and revoke-before-clear (8 checks).");
+    }
+
+    private static async Task RunReceiptAsync(
+        string root, ActiveAccountSessionState session, string bearer,
+        string sessionId, string accountId, string userId, string deviceId)
+    {
+        int passed = 0;
+        void Check(bool accepted, string message)
+        {
+            if (!accepted) throw new InvalidOperationException("FAIL: " + message);
+            Console.WriteLine("PASS: " + message);
+            passed++;
+        }
+        var directory = Path.Combine(root, "durable-receipt");
+        var local = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var binding = new AgentEd25519SessionBinding(
+            sessionId, accountId, userId, deviceId);
+        var handler = new ProofHandler(bearer, sessionId, accountId, userId, deviceId)
+        {
+            DropVerifyAcknowledgementOnce = true,
+        };
+        using var remote = new AgentMachineKeyEnrollmentRemote(
+            local, "https://ds.bke.test", handler);
+        var coordinator = new AgentMachineKeyRegistrationCoordinator(local, remote);
+        bool ackLost = false;
+        try { await coordinator.EnsureEnrolledAsync(session, CancellationToken.None); }
+        catch (HttpRequestException) { ackLost = true; }
+        Check(ackLost, "Simulated server activated key but final response was lost");
+        Check(local.ReadReceipt(binding) is null,
+            "Unconfirmed response never persists local registration receipt");
+        var recovered = await coordinator.EnsureEnrolledAsync(session, CancellationToken.None);
+        Check(recovered.RegistrationId.Length == 36 && recovered.ValidUntil is not null,
+            "Lost acknowledgment recovered from authenticated ACTIVE server metadata");
+        Check(handler.EnrollRequests == 1,
+            "Recovery never creates another DS registration or overwrites key");
+        var reloaded = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var second = new AgentMachineKeyRegistrationCoordinator(reloaded, remote);
+        var afterRestart = await second.EnsureEnrolledAsync(session, CancellationToken.None);
+        Check(afterRestart.RegistrationId == recovered.RegistrationId &&
+              afterRestart.KeyThumbprint == recovered.KeyThumbprint,
+            "Agent restart restores exact DPAPI-protected receipt");
+        Check(handler.EnrollRequests == 1, "Restart never duplicates enrollment");
+
+        bool wrong = false;
+        try { _ = reloaded.ReadReceipt(binding with { AccountId = "foreign-account" }); }
+        catch (InvalidDataException) { wrong = true; }
+        Check(wrong, "Foreign account cannot read protected registration receipt");
+
+        bool guarded = false;
+        try { reloaded.RemoveLocalKey(); }
+        catch (InvalidOperationException) { guarded = true; }
+        Check(guarded, "Local private key reset forbidden while receipt exists");
+
+        string receiptPath = Directory.GetFiles(directory, "*.receipt.dpapi",
+            SearchOption.AllDirectories).Single();
+        byte[] previous = File.ReadAllBytes(receiptPath);
+        byte[] corrupt = (byte[])previous.Clone();
+        corrupt[corrupt.Length / 2] ^= 0x7F;
+        File.WriteAllBytes(receiptPath, corrupt);
+        bool damaged = false;
+        try { _ = reloaded.ReadReceipt(binding); }
+        catch (InvalidDataException) { damaged = true; }
+        catch (System.ComponentModel.Win32Exception) { damaged = true; }
+        Check(damaged, "Corrupt encrypted receipt cannot be accepted or regenerated");
+        File.WriteAllBytes(receiptPath, previous);
+        Check(reloaded.ReadReceipt(binding)?.RegistrationId == recovered.RegistrationId,
+            "Unmodified encrypted receipt remains readable after corruption rejection");
+
+        handler.FailRevoke = true;
+        var accountStore = new MemorySessionStore(session);
+        var fakeAccountRemote = new MemoryAccountRemote();
+        var sessions = new AccountSessionService(
+            fakeAccountRemote, accountStore, keyLifecycle: second);
+        var failed = await sessions.LogoutAsync(
+            new AccountSessionLogoutRequest("receipt-revocation"),
+            CancellationToken.None);
+        Check(failed.Status == "FAILED" && failed.Error?.Code == "KEY_REVOCATION_PENDING",
+            "Server revocation outage blocks local session erasure");
+        Check(accountStore.State is ActiveAccountSessionState &&
+              fakeAccountRemote.RevokeCalls == 0 &&
+              reloaded.ReadReceipt(binding) is not null,
+            "Failed cleanup preserves authenticated bearer and protected receipt for retry");
+
+        handler.FailRevoke = false;
+        var logout = await sessions.LogoutAsync(
+            new AccountSessionLogoutRequest("receipt-retry"),
+            CancellationToken.None);
+        Check(logout.Status == "SIGNED_OUT" &&
+              accountStore.State is null && fakeAccountRemote.RevokeCalls == 1,
+            "Confirmed DS key revocation precedes final AccountSession logout");
+        Check(Directory.GetFiles(directory, "*.dpapi",
+            SearchOption.AllDirectories).Length == 0,
+            "Confirmed terminal revocation clears both receipt and software private key");
+        Check(handler.EnrollRequests == 1, "No silent key regeneration across logout lifecycle");
+        Console.WriteLine("BKE Agent protected receipt/restart/revocation lifecycle PASS (" +
+            passed + " assertions, disposable Windows DPAPI + HTTP handler).");
+    }
+
+    private sealed class MemorySessionStore : IAccountSessionSecretStore
+    {
+        public AccountSessionStoredState? State { get; private set; }
+        public MemorySessionStore(AccountSessionStoredState state) => State = state;
+        public Task<AccountSessionStoredState?> ReadAsync(CancellationToken ct)
+        { ct.ThrowIfCancellationRequested(); return Task.FromResult(State); }
+        public Task WriteAsync(AccountSessionStoredState state, CancellationToken ct)
+        { ct.ThrowIfCancellationRequested(); State = state; return Task.CompletedTask; }
+        public Task ClearAsync(CancellationToken ct)
+        { ct.ThrowIfCancellationRequested(); State = null; return Task.CompletedTask; }
+    }
+
+    private sealed class MemoryAccountRemote : IAccountSessionRemote
+    {
+        public int RevokeCalls { get; private set; }
+        public Task<RemoteAccountSessionStart> StartAsync(CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<RemoteAccountSessionPoll> PollAsync(string code, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<RemoteAccountSessionPoll> ExchangeNativeAsync(string code, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task<RemoteAccountSessionRefresh> RefreshAsync(string token, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task AcknowledgeAsync(string token, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task RevokeAsync(string? sessionId, string? refreshToken,
+            string? deviceCode, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            RevokeCalls++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class EphemeralEs256Signer : IAgentMachineKeyLifecycleSigner, IDisposable
     {
         private readonly ECDsa _key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        private bool _present = true;
+        public bool HasStoredIdentity => _present;
+        public void RemoveLocalKey(AgentEd25519SessionBinding binding) { _present = false; }
         public AgentEd25519PublicIdentity GetOrCreateIdentity(
             AgentEd25519SessionBinding binding, bool createIfMissing = true)
         {
+            if (!_present) throw new InvalidDataException("Ephemeral P256 signing key removed.");
             byte[] spki = _key.ExportSubjectPublicKeyInfo();
             string encoded = Convert.ToBase64String(spki);
             string pem = "-----BEGIN PUBLIC KEY-----\n" +
@@ -190,6 +381,12 @@ internal static class AgentMachineKeyHttpCertification
         private readonly string _nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');
         private string? _message, _publicPem;
+        private readonly DateTimeOffset _validUntil = DateTimeOffset.UtcNow.AddHours(12);
+        private bool _active, _pending, _revoked;
+        public bool DropVerifyAcknowledgementOnce { get; set; }
+        public bool FailRevoke { get; set; }
+        public bool WrongStatusAlgorithm { get; set; }
+        public int EnrollRequests { get; private set; }
         public bool WrongAccount { get; init; }
         public bool Redirect { get; init; }
         public bool WrongVersion { get; init; }
@@ -224,8 +421,35 @@ internal static class AgentMachineKeyHttpCertification
             var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
             using (json)
             {
+                if (path.EndsWith("/status", StringComparison.Ordinal))
+                {
+                    string? lookup = json.RootElement.TryGetProperty("registration_id", out var field)
+                        ? field.GetString() : null;
+                    if (lookup is not null && lookup != _registration)
+                        return Json(HttpStatusCode.OK, "{\"status\":\"none\"}");
+                    if (!_pending && !_active && !(lookup is not null && _revoked))
+                        return Json(HttpStatusCode.OK, "{\"status\":\"none\"}");
+                    string pemBody = _publicPem!.Replace("-----BEGIN PUBLIC KEY-----", "")
+                        .Replace("-----END PUBLIC KEY-----", "").Trim();
+                    string thumbprint = Convert.ToBase64String(
+                        SHA256.HashData(Convert.FromBase64String(pemBody)))
+                        .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+                    return Json(HttpStatusCode.OK, JsonSerializer.Serialize(new
+                    {
+                        status = "registration",
+                        registration_id = _registration,
+                        registration_state = _revoked ? "revoked" : _active ? "active" : "pending",
+                        key_thumbprint = thumbprint,
+                        key_protection = "software",
+                        key_algorithm = WrongStatusAlgorithm ? "EdDSA" :
+                            Convert.FromBase64String(pemBody).Length == 44 ? "EdDSA" : "ES256",
+                        valid_until = _validUntil.UtcDateTime.ToString("O"),
+                    }));
+                }
                 if (path.EndsWith("/enroll", StringComparison.Ordinal))
                 {
+                    EnrollRequests++;
+                    _pending = true;
                     _publicPem = json.RootElement.GetProperty("public_key_pem").GetString()!;
                     _message = string.Join("\n",
                         "bke.agent-key-proof.v1", "ENROLL", _challenge, _registration,
@@ -281,6 +505,13 @@ internal static class AgentMachineKeyHttpCertification
                     }
                     if (Encoding.UTF8.GetString(signedBytes) != _message || !verified)
                         throw new InvalidDataException("Agent did not sign the exact EdDSA/ES256 DS challenge.");
+                    _active = true;
+                    _pending = false;
+                    if (DropVerifyAcknowledgementOnce)
+                    {
+                        DropVerifyAcknowledgementOnce = false;
+                        throw new HttpRequestException("Disposable lost final enrollment ACK.");
+                    }
                     return Json(HttpStatusCode.OK, JsonSerializer.Serialize(new
                     {
                         status = "enrolled",
@@ -291,6 +522,11 @@ internal static class AgentMachineKeyHttpCertification
                 {
                     if (json.RootElement.GetProperty("registration_id").GetString() != _registration)
                         throw new InvalidDataException("Revoke registration mismatch.");
+                    if (FailRevoke)
+                        return Json(HttpStatusCode.ServiceUnavailable, "{\"error\":\"DISPOSABLE_OFFLINE\"}");
+                    _revoked = true;
+                    _active = false;
+                    _pending = false;
                     return Json(HttpStatusCode.OK, "{\"status\":\"revoked\"}");
                 }
             }

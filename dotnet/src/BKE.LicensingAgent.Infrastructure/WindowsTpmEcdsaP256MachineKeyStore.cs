@@ -13,7 +13,7 @@ namespace BKE.LicensingAgent.Infrastructure;
 /// No private key bytes are ever imported or exported by this class.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class WindowsTpmEcdsaP256MachineKeyStore : IAgentMachineKeySigner
+public sealed class WindowsTpmEcdsaP256MachineKeyStore : IAgentMachineKeyLifecycleSigner
 {
     private const string Protocol = "bke.agent-key-proof.v1";
     private const string MetadataDomain = "bke.agent-tpm-p256-local-marker.v1";
