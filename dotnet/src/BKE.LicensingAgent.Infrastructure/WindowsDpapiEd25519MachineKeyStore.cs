@@ -15,7 +15,22 @@ public sealed record AgentEd25519SessionBinding(
     string SessionId, string AccountId, string UserId, string DeviceId);
 
 public sealed record AgentEd25519PublicIdentity(
-    string PublicKeyPem, string KeyThumbprint, string KeyProtection);
+    string PublicKeyPem, string KeyThumbprint, string KeyProtection,
+    string Algorithm = "EdDSA");
+
+/// <summary>
+/// Trusted OS-protected machine key signer, one exact authenticated Agent binding.
+/// TPM P-256 and software EdDSA share exact protocol sign operation.
+/// </summary>
+public interface IAgentMachineKeySigner
+{
+    AgentEd25519PublicIdentity GetOrCreateIdentity(
+        AgentEd25519SessionBinding binding, bool createIfMissing = true);
+    string SignChallenge(
+        AgentEd25519SessionBinding binding, string registrationId, string challengeId,
+        string messageBase64url, DateTimeOffset expiresAt,
+        string? productId = null, string? action = null);
+}
 
 /// <summary>
 /// Windows user-DPAPI protected SOFTWARE Ed25519 key. The seed is exportable to
@@ -23,7 +38,7 @@ public sealed record AgentEd25519PublicIdentity(
 /// nonexportable hardware-backed identity. No public HTTP/IPC route exposes it.
 /// Unsupported platforms and damaged/foreign stores fail closed.
 /// </summary>
-public sealed class WindowsDpapiEd25519MachineKeyStore
+public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeySigner
 {
     private const string Protocol = "bke.agent-key-proof.v1";
     private const int SeedLength = 32;
@@ -48,6 +63,8 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
         _path = Path.Combine(Path.GetFullPath(root), "machine-trust",
             "agent-ed25519.dpapi");
     }
+
+    public bool HasStoredIdentity => File.Exists(_path);
 
     public AgentEd25519PublicIdentity GetOrCreateIdentity(
         AgentEd25519SessionBinding binding, bool createIfMissing = true)
