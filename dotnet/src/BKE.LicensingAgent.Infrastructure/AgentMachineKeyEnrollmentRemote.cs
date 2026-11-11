@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using BKE.LicensingAgent.Application;
@@ -17,12 +18,42 @@ namespace BKE.LicensingAgent.Infrastructure;
 public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
 {
     public const string ProtocolVersion = "bke.account-session.v1";
-    private readonly WindowsDpapiEd25519MachineKeyStore _keys;
+    private readonly IAgentMachineKeySigner _keys;
     private readonly HttpClient _http;
     private readonly Uri _base;
 
+    // The hardware/software signer choice is made inside the trusted Agent,
+    // never from a Launcher/IPC supplied algorithm or claimed TPM label.
     public AgentMachineKeyEnrollmentRemote(
         WindowsDpapiEd25519MachineKeyStore keys,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+        : this((IAgentMachineKeySigner)keys, baseUrl, handler) { }
+
+    public AgentMachineKeyEnrollmentRemote(
+        WindowsTpmEcdsaP256MachineKeyStore keys,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+        : this((IAgentMachineKeySigner)keys, baseUrl, handler) { }
+
+    [SupportedOSPlatform("windows")]
+    public static AgentMachineKeyEnrollmentRemote CreatePreferred(
+        ActiveAccountSessionState trustedSession,
+        string? dataDirectory = null,
+        bool allowSoftwareFallback = false,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+    {
+        var binding = Binding(trustedSession);
+        var signer = WindowsPreferredAgentMachineKey.Open(
+            binding, dataDirectory, allowSoftwareFallback);
+        return new AgentMachineKeyEnrollmentRemote(signer, baseUrl, handler);
+    }
+
+    internal IAgentMachineKeySigner TrustedSigner => _keys;
+
+    internal AgentMachineKeyEnrollmentRemote(
+        IAgentMachineKeySigner keys,
         string? baseUrl = null,
         HttpMessageHandler? handler = null)
     {
@@ -48,6 +79,9 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
     {
         var binding = Binding(authenticatedSession);
         var identity = _keys.GetOrCreateIdentity(binding);
+        if (identity.Algorithm is not ("EdDSA" or "ES256") ||
+            identity.KeyProtection is not ("software" or "tpm-unverified"))
+            throw new InvalidDataException("Unsupported Agent key identity or protection claim.");
 
         using var enrollment = await SendAsync(
             "/api/agent-sessions/keys/enroll",
@@ -84,7 +118,8 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
             RequiredUuid(result, "registration_id") != registrationId)
             throw new InvalidDataException("Agent key enrollment was not server-confirmed.");
 
-        return new AgentMachineKeyRegistrationReceipt(registrationId, identity.KeyThumbprint);
+        return new AgentMachineKeyRegistrationReceipt(registrationId, identity.KeyThumbprint,
+            Algorithm: identity.Algorithm);
     }
 
     /// <summary>
@@ -104,7 +139,7 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
             throw new InvalidDataException("Agent registration ID is invalid.");
         var identity = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
         if (!string.Equals(identity.KeyThumbprint, registration.KeyThumbprint,
-            StringComparison.Ordinal))
+            StringComparison.Ordinal) || identity.Algorithm != registration.Algorithm)
             throw new InvalidDataException("Agent registration key does not match current private key.");
 
         using var reply = await SendAsync(
@@ -170,14 +205,16 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
         string registration = RequiredUuid(root, "registration_id");
         string state = Required(root, "registration_state");
         string thumbprint = Required(root, "key_thumbprint");
-        if (state is not ("pending" or "active" or "revoked" or "expired") ||
+        string algorithm = Required(root, "key_algorithm");
+        if (algorithm is not ("EdDSA" or "ES256") ||
+            state is not ("pending" or "active" or "revoked" or "expired") ||
             Required(root, "key_protection") != "software" ||
             thumbprint.Length != 43 ||
             thumbprint.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_') ||
             (registrationId is not null && registration != registrationId))
             throw new InvalidDataException("Agent server registration state is not trustworthy.");
         DateTimeOffset expiry = RequiredExpiry(root, "valid_until");
-        return new AgentMachineKeyRemoteState(state, registration, thumbprint, expiry);
+        return new AgentMachineKeyRemoteState(state, registration, thumbprint, expiry, algorithm);
     }
 
     public async Task RevokeRegistrationAsync(
@@ -320,8 +357,9 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
 }
 
 public sealed record AgentMachineKeyRegistrationReceipt(
-    string RegistrationId, string KeyThumbprint, DateTimeOffset? ValidUntil = null);
+    string RegistrationId, string KeyThumbprint, DateTimeOffset? ValidUntil = null,
+    string Algorithm = "EdDSA");
 
 public sealed record AgentMachineKeyRemoteState(
     string Status, string? RegistrationId = null, string? KeyThumbprint = null,
-    DateTimeOffset? ValidUntil = null);
+    DateTimeOffset? ValidUntil = null, string? Algorithm = null);
