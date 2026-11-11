@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using BKE.LicensingAgent.Application;
+using BKE.LicensingAgent.Contracts;
 using BKE.LicensingAgent.Infrastructure;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
