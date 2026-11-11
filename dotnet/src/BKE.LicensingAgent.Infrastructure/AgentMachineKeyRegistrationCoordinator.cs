@@ -65,14 +65,14 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
 
             if (remote.Status == "pending")
             {
-                // Interrupted challenge: revoke it first, using current protected
-                // key thumbprint, before any new ENROLL registration is created.
+                // Reuse the same PENDING registration and existing protected
+                // Ed25519 key. Server reissues one ENROLL nonce only after
+                // original device-code possession is proven. Never revoke and
+                // replace a registered machine key within the same session.
                 var existing = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
                 if (remote.KeyThumbprint != existing.KeyThumbprint ||
                     remote.RegistrationId is null)
                     throw new InvalidDataException("Cannot replace a foreign pending registration.");
-                await _remote.RevokeRegistrationAsync(authenticatedSession,
-                    remote.RegistrationId, existing.KeyThumbprint, cancellationToken);
             }
             else if (remote.Status != "none")
             {
