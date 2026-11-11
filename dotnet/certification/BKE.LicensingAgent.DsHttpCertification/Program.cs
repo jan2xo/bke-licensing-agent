@@ -76,7 +76,7 @@ var before = await remote.StatusAsync(session, null, CancellationToken.None);
 Check(before.Status == "none", "Actual DS status route reports no initial key");
 
 bool rejected = false;
-try { _ = await remote.EnrollAsync(session with { EnrollmentDeviceCode = "A" + deviceCode[1..] }, CancellationToken.None); }
+try { _ = await remote.EnrollAsync(session with { EnrollmentDeviceCode = (deviceCode[0] == 'A' ? "B" : "A") + deviceCode[1..] }, CancellationToken.None); }
 catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden) { rejected = true; }
 Check(rejected, "Key enrollment rejects nonmatching device proof");
 var enrollment = await remote.EnrollAsync(session, CancellationToken.None);
