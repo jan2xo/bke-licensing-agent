@@ -797,6 +797,7 @@ await CertifySoftwareCatalogBoundary();
 await CertifyLauncherPluginAuthorizationBoundary();
 await CertifySoftwareInstallBoundary();
 await CertifySoftwareUpdateBoundary();
+await CertifyDigitalSolutionsUpdateDiscoveryBoundary();
 await CertifySoftwareRepairBoundary();
 await CertifySoftwareOpenBoundary();
 await CertifySoftwareRemoveBoundary();
@@ -3343,6 +3344,134 @@ static async Task CertifySoftwareUpdateBoundary()
             "bke-render-dock"),
         CancellationToken.None);
     Require(deniedResponse.Error?.Code == "NOT_ENTITLED", "truthful update denial was flattened");
+}
+
+static async Task CertifyDigitalSolutionsUpdateDiscoveryBoundary()
+{
+    var account = new AccountSessionAccount(
+        "user-update-discovery", "buyer@example.com", "account-update-discovery",
+        "INDIVIDUAL", "Update Buyer");
+    var store = new FakeAccountSessionStore();
+    await store.WriteAsync(new ActiveAccountSessionState(
+        "discovery-access-secret", "discovery-refresh-secret", "session-discovery",
+        DateTimeOffset.UtcNow.AddMinutes(15),
+        DateTimeOffset.UtcNow.AddDays(30),
+        account), CancellationToken.None);
+
+    var installed = new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
+    {
+        ["bke-render-dock"] = new(
+            "bke-render-dock", "1.0.1", "BKE_MANAGED_PACKAGE", "MANAGED_DIRECTORY"),
+    };
+    var inventory = new FakeLocalProductInventory(installed);
+    var authority = new StandaloneUpdateAuthorization(
+        "bke-render-dock", "1.0.1", "1.0.2",
+        "jan2xo/BKE_RENDER_DOCK", "v1.0.2",
+        """{"schema":"bke.update-policy.v2","signature":"hidden"}""");
+    var remote = new FakeStandaloneUpdateAuthorizationRemote(
+        new StandaloneUpdateAuthorizationResult("UPDATE_AVAILABLE", authority));
+    var privileged = new FakeStandaloneSoftwareUpdater(
+        new StandaloneUpdateResult("STARTED", "staged", false));
+    var authenticated = new FakeAuthenticatedAccountSessionService(account);
+    var update = new SoftwareUpdateService(authenticated, store, inventory, remote, privileged);
+    var discovery = new Gen2UpdateService(authenticated, store, inventory, remote, update);
+
+    var check = await discovery.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.1"),
+        CancellationToken.None);
+    Require(check.Status == "UpdateAvailable" && check.AvailableVersion == "1.0.2",
+        "DS-signed v2 authority did not project a legitimate update discovery");
+    Require(remote.AccessToken == "discovery-access-secret" &&
+            remote.ProductId == "bke-render-dock" &&
+            remote.CurrentVersion == "1.0.1",
+        "update discovery did not use Agent-owned account credentials and local version");
+    Require(privileged.ProductId is null,
+        "read-only update discovery unexpectedly performed a privileged update");
+    var wire = JsonSerializer.Serialize(check);
+    Require(!wire.Contains("discovery-access-secret", StringComparison.Ordinal) &&
+            !wire.Contains("discovery-refresh-secret", StringComparison.Ordinal) &&
+            !wire.Contains("BKE_RENDER_DOCK", StringComparison.Ordinal),
+        "update discovery leaked secrets or release repository");
+
+    var open = await discovery.OpenCenterAsync(
+        new OpenUpdateCenterRequest("bke-render-dock", "1.0.1", "cert-center-v2"),
+        CancellationToken.None);
+    Require(open.Outcome == "update_started" && open.Reason == "staged",
+        "legacy Update Center did not delegate to signed-v2 software lifecycle");
+    Require(privileged.ProductId == "bke-render-dock" &&
+            privileged.Authorization?.TargetVersion == "1.0.2",
+        "legacy Update Center did not reauthorize and relay signed-v2 target");
+
+    var staleOpen = await discovery.OpenCenterAsync(
+        new OpenUpdateCenterRequest("bke-render-dock", "1.0.0", "cert-stale-center"),
+        CancellationToken.None);
+    Require(staleOpen.Outcome == "update_failed" &&
+            staleOpen.Reason == "product_context_mismatch",
+        "legacy Update Center accepted a stale installed version");
+
+    var neverRequested = new FakeStandaloneUpdateAuthorizationRemote(
+        new StandaloneUpdateAuthorizationResult("UPDATE_AVAILABLE", authority));
+    var neverUpdater = new FakeStandaloneSoftwareUpdater(
+        new StandaloneUpdateResult("STARTED", "staged", false));
+    var neverExecute = new SoftwareUpdateService(
+        authenticated, store, inventory, neverRequested, neverUpdater);
+    var strict = new Gen2UpdateService(
+        authenticated, store, inventory, neverRequested, neverExecute);
+
+    var unsupportedVersion = await strict.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.1", "1.0.2"),
+        CancellationToken.None);
+    var inventedVersion = await strict.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.0"), CancellationToken.None);
+    var absent = await strict.CheckAsync(
+        new UpdateCheckRequest("another-product", "1.0.1"), CancellationToken.None);
+    Require(unsupportedVersion.Error?.Code == "InvalidRequest" &&
+            inventedVersion.Error?.Code == "InvalidRequest" &&
+            absent.Error?.Code == "InvalidRequest" &&
+            neverRequested.AccessToken is null,
+        "discovery contacted DS for unsupported, uninstalled, or stale local context");
+
+    var untrusted = new Gen2UpdateService(
+        authenticated, store,
+        new FakeLocalProductInventory(new Dictionary<string, LocalInstalledProduct>
+        {
+            ["bke-render-dock"] = new(
+                "bke-render-dock", "1.0.1", "PRODUCT_INSTALLER", "INSTALLER_EXECUTABLE"),
+        }),
+        neverRequested, neverExecute);
+    var untrustedCheck = await untrusted.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.1"), CancellationToken.None);
+    Require(untrustedCheck.Error?.Code == "PolicyDenied" &&
+            neverRequested.AccessToken is null,
+        "discovery accepted untrusted installer-owned provenance");
+
+    var unauthenticated = new Gen2UpdateService(
+        new FakeUnauthenticatedAccountSessionService(), store, inventory,
+        neverRequested, neverExecute);
+    var unauth = await unauthenticated.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.1"), CancellationToken.None);
+    Require(unauth.Error?.Code == "AuthRequired" &&
+            neverRequested.AccessToken is null,
+        "update discovery contacted DS without authenticated account session");
+
+    var deniedRemote = new FakeStandaloneUpdateAuthorizationRemote(
+        new StandaloneUpdateAuthorizationResult("NOT_ENTITLED"));
+    var denied = new Gen2UpdateService(
+        authenticated, store, inventory, deniedRemote, neverExecute);
+    var deniedCheck = await denied.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.1"), CancellationToken.None);
+    Require(deniedCheck.Error?.Code == "PolicyDenied" && deniedCheck.AvailableVersion is null,
+        "DS account entitlement denial must never produce an available update");
+
+    var upToDate = new Gen2UpdateService(
+        authenticated, store, inventory,
+        new FakeStandaloneUpdateAuthorizationRemote(
+            new StandaloneUpdateAuthorizationResult("UP_TO_DATE")),
+        neverExecute);
+    var upToDateCheck = await upToDate.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.1"), CancellationToken.None);
+    Require(upToDateCheck.Status == "UpToDate" && upToDateCheck.AvailableVersion is null,
+        "DS v2 up-to-date response was not projected correctly");
 }
 
 static async Task CertifySoftwareRepairBoundary()
