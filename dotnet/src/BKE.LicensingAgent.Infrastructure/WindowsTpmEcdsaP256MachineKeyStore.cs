@@ -51,7 +51,14 @@ public sealed class WindowsTpmEcdsaP256MachineKeyStore : IAgentMachineKeySigner
             throw new InvalidDataException("TPM Agent identity is missing.");
         // A CNG key without its signed binding marker is an interrupted
         // enrollment. It may not be claimed or overwritten silently.
-        if (CngKey.Exists(name, Provider))
+        bool exists;
+        try { exists = CngKey.Exists(name, Provider); }
+        catch (CryptographicException error)
+        {
+            throw new AgentTpmUnavailableException(
+                "TPM Platform Crypto Provider could not be queried.", error);
+        }
+        if (exists)
             throw new InvalidDataException("Unreconciled TPM key requires explicit recovery.");
         CngKey created;
         try
@@ -219,7 +226,8 @@ public sealed class WindowsTpmEcdsaP256MachineKeyStore : IAgentMachineKeySigner
 
     private static AgentEd25519PublicIdentity PublicIdentity(CngKey key)
     {
-        if (key.Provider != Provider || key.Algorithm.Algorithm != CngAlgorithm.ECDsaP256.Algorithm ||
+        if (key.Provider.Provider != Provider.Provider ||
+            key.Algorithm.Algorithm != CngAlgorithm.ECDsaP256.Algorithm ||
             key.ExportPolicy != CngExportPolicies.None)
             throw new InvalidDataException("TPM provider, curve or export policy invalid.");
         using var signer = new ECDsaCng(key);
@@ -228,9 +236,12 @@ public sealed class WindowsTpmEcdsaP256MachineKeyStore : IAgentMachineKeySigner
         pub.ImportSubjectPublicKeyInfo(spki, out int read);
         if (read != spki.Length || pub.KeySize != 256)
             throw new InvalidDataException("TPM public key is not ECDSA P-256.");
+        // Match Node's canonical 64-column SPKI PEM exactly.
+        string encoded = Convert.ToBase64String(spki);
         string pem = "-----BEGIN PUBLIC KEY-----\n" +
-            Convert.ToBase64String(spki, Base64FormattingOptions.InsertLineBreaks)
-                .Replace("\r\n", "\n") +
+            string.Join("\n", Enumerable.Range(0, (encoded.Length + 63) / 64)
+                .Select(index => encoded.Substring(index * 64,
+                    Math.Min(64, encoded.Length - index * 64)))) +
             "\n-----END PUBLIC KEY-----\n";
         // Local "tpm-unverified" means KSP was selected, not that DS validated
         // an attestation. The DS entitlement claim remains "software".
