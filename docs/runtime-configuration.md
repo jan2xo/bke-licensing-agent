@@ -36,7 +36,7 @@ BKE_PLATFORM_BASE_URL=https://<disposable-digital-solutions>
 When `BKE_ENVIRONMENT=utm`:
 
 - `BKE_PLATFORM_BASE_URL` is mandatory.
-- `jl-bke.com` and every `*.jl-bke.com` authority are rejected at Host startup.
+- both `jl-bke.com` (legacy) and `bkedigitalsolutions.com`, including all subdomains, are rejected at Host startup. UTM must never contact production BKE services.
 - A malformed platform URL is rejected before the Agent local API starts.
 - HTTP remains allowed only for explicit loopback certification with
   `BKE_AGENT_VNEXT_ALLOW_INSECURE_LOCAL=1`.
@@ -51,6 +51,6 @@ session secrets continue to be protected by the Agent-owned secure store.
 
 ## Production authority
 
-The production platform authority remains `https://jl-bke.com`. After disposable
-UTM certification, production should use its own explicit Agent `.env`; production
-credentials and Digital Solutions secrets do not belong in the Agent configuration.
+**Preproduction code default:** `https://bkedigitalsolutions.com` (existing Digital Solutions web/API authority). `BKE_PLATFORM_BASE_URL` overrides this on the installed machine and remains version-free. A future dedicated `api.` hostname is **not assumed routable or certified** until DS routing/TLS is proven. The Bootstrap self-update executable mirrors the same default because its separate minimal executable does not reference the Infrastructure assembly. Contract certification checks their parity.
+
+Do **not** interpret a source default change as authority cutover: no production Agent package, DNS, credentials, signing or customer sessions have been migrated by this PR. Keep legacy installed-client endpoints operational until separately certified and explicitly authorized. Digital Solutions secrets do not belong in the Agent configuration.
