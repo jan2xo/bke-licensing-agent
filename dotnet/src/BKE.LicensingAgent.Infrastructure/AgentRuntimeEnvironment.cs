@@ -205,7 +205,8 @@ public static class AgentRuntimeEnvironmentLoader
             (uri.Scheme != Uri.UriSchemeHttps &&
              uri.Scheme != Uri.UriSchemeHttp) ||
             !string.IsNullOrEmpty(uri.Query) ||
-            !string.IsNullOrEmpty(uri.Fragment))
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
         {
             throw new InvalidOperationException(
                 "UTM BKE_PLATFORM_BASE_URL must be an absolute HTTP(S) URL without query or fragment.");
@@ -213,10 +214,12 @@ public static class AgentRuntimeEnvironmentLoader
 
         var host = uri.Host.TrimEnd('.');
         if (host.Equals("jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
-            host.EndsWith(".jl-bke.com", StringComparison.OrdinalIgnoreCase))
+            host.EndsWith(".jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
+            host.Equals("bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "UTM environment refuses the production jl-bke.com authority.");
+                "UTM environment refuses a production BKE authority.");
         }
     }
 

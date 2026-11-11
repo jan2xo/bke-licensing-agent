@@ -128,7 +128,9 @@ if ($hasDigitalSolutionsSigningTrustInput) {
 
     $platformHost = $platformUri.Host.TrimEnd(".")
     if ($platformHost -ieq "jl-bke.com" -or
-        $platformHost.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase)) {
+        $platformHost.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase) -or
+    $platformHost -ieq "bkedigitalsolutions.com" -or
+    $platformHost.EndsWith(".bkedigitalsolutions.com", [StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing disposable signing trust while the Agent points at production authority."
     }
 

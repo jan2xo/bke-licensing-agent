@@ -30,8 +30,10 @@ if ($uri.Scheme -notin @("http", "https") -or
 
 $hostName = $uri.Host.TrimEnd(".")
 if ($hostName -ieq "jl-bke.com" -or
-    $hostName.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase)) {
-    throw "UTM environment refuses the production jl-bke.com authority."
+    $hostName.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase) -or
+    $hostName -ieq "bkedigitalsolutions.com" -or
+    $hostName.EndsWith(".bkedigitalsolutions.com", [StringComparison]::OrdinalIgnoreCase)) {
+    throw "UTM environment refuses the production BKE authority."
 }
 
 if ($uri.Scheme -eq "http") {
