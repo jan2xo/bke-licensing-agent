@@ -122,6 +122,7 @@ internal static class AgentMachineKeyHttpCertification
             catch (InvalidOperationException) { refused = true; }
             Pass(refused, "Non-HTTPS public endpoint rejected");
             await RunReceiptAsync(root, session, bearer, sessionId, accountId, userId, deviceId);
+            await RunEs256ReceiptAsync(root, session, bearer, sessionId, accountId, userId, deviceId);
             Console.WriteLine("BKE Agent real DS-shaped enrollment transport PASS (" + passed +
                 " assertions, in-memory HTTP without production/network).");
         }
@@ -129,6 +130,55 @@ internal static class AgentMachineKeyHttpCertification
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static async Task RunEs256ReceiptAsync(
+        string root, ActiveAccountSessionState session, string bearer,
+        string sessionId, string accountId, string userId, string deviceId)
+    {
+        var directory = Path.Combine(root, "p256-registration-receipt");
+        using var signer = new EphemeralEs256Signer();
+        var receipts = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var binding = new AgentEd25519SessionBinding(sessionId, accountId, userId, deviceId);
+        var fake = new ProofHandler(bearer, sessionId, accountId, userId, deviceId);
+        using var remote = new AgentMachineKeyEnrollmentRemote(
+            signer, "https://ds.bke.test", fake);
+        var coordinator = new AgentMachineKeyRegistrationCoordinator(signer, receipts, remote);
+        var accepted = await coordinator.EnsureEnrolledAsync(session, CancellationToken.None);
+        if (accepted.Algorithm != "ES256" ||
+            accepted.KeyThumbprint != signer.GetOrCreateIdentity(binding).KeyThumbprint)
+            throw new InvalidOperationException("ES256 receipt algorithm/identity drift");
+        if (receipts.HasStoredIdentity)
+            throw new InvalidOperationException("TPM ES256 session created a software Ed25519 private key");
+        var restored = new WindowsDpapiEd25519MachineKeyStore(directory);
+        var persisted = restored.ReadReceipt(binding, signer);
+        if (persisted is null || persisted.Algorithm != "ES256" ||
+            persisted.RegistrationId != accepted.RegistrationId)
+            throw new InvalidOperationException("ES256 receipt failed protected restart recovery");
+        var restarted = new AgentMachineKeyRegistrationCoordinator(signer, restored, remote);
+        var again = await restarted.EnsureEnrolledAsync(session, CancellationToken.None);
+        if (again != accepted || fake.EnrollRequests != 1)
+            throw new InvalidOperationException("ES256 restart silently replaced existing registration");
+        bool wrongAlgRejected = false;
+        try
+        {
+            restored.WriteReceipt(binding, accepted with { Algorithm = "EdDSA" }, signer);
+        }
+        catch (InvalidDataException) { wrongAlgRejected = true; }
+        if (!wrongAlgRejected)
+            throw new InvalidOperationException("ES256 local receipt downgraded to EdDSA");
+        fake.WrongStatusAlgorithm = true;
+        bool serverDowngradeDenied = false;
+        try { _ = await restarted.EnsureEnrolledAsync(session, CancellationToken.None); }
+        catch (InvalidDataException) { serverDowngradeDenied = true; }
+        if (!serverDowngradeDenied)
+            throw new InvalidOperationException("Server EdDSA downgrade was accepted for ES256 key");
+        fake.WrongStatusAlgorithm = false;
+        await restarted.RevokeAndClearAsync(session, CancellationToken.None);
+        if (signer.HasStoredIdentity || restored.ReadReceipt(binding, signer) is not null ||
+            receipts.HasStoredIdentity)
+            throw new InvalidOperationException("ES256 logout did not clear signer and protected receipt");
+        Console.WriteLine("PASS: ES256 key has algorithm-bound DPAPI receipt, restart, downgrade rejection and revoke-before-clear (8 checks).");
     }
 
     private static async Task RunReceiptAsync(
@@ -329,6 +379,7 @@ internal static class AgentMachineKeyHttpCertification
         private bool _active, _pending, _revoked;
         public bool DropVerifyAcknowledgementOnce { get; set; }
         public bool FailRevoke { get; set; }
+        public bool WrongStatusAlgorithm { get; set; }
         public int EnrollRequests { get; private set; }
         public bool WrongAccount { get; init; }
         public bool Redirect { get; init; }
@@ -384,8 +435,8 @@ internal static class AgentMachineKeyHttpCertification
                         registration_state = _revoked ? "revoked" : _active ? "active" : "pending",
                         key_thumbprint = thumbprint,
                         key_protection = "software",
-                        key_algorithm = Convert.FromBase64String(pemBody).Length == 44
-                            ? "EdDSA" : "ES256",
+                        key_algorithm = WrongStatusAlgorithm ? "EdDSA" :
+                            Convert.FromBase64String(pemBody).Length == 44 ? "EdDSA" : "ES256",
                         valid_until = _validUntil.UtcDateTime.ToString("O"),
                     }));
                 }
