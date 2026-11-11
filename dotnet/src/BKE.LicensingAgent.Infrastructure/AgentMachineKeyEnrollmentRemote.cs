@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using BKE.LicensingAgent.Application;
@@ -17,12 +18,46 @@ namespace BKE.LicensingAgent.Infrastructure;
 public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
 {
     public const string ProtocolVersion = "bke.account-session.v1";
-    private readonly WindowsDpapiEd25519MachineKeyStore _keys;
+    private readonly IAgentMachineKeySigner _keys;
     private readonly HttpClient _http;
     private readonly Uri _base;
 
+    // Public constructors never let a caller substitute an arbitrary signing
+    // implementation. Only a trusted named certification assembly may inject
+    // an ephemeral test signer through the internal constructor.
     public AgentMachineKeyEnrollmentRemote(
         WindowsDpapiEd25519MachineKeyStore keys,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+        : this((IAgentMachineKeySigner)keys, baseUrl, handler) { }
+
+    public AgentMachineKeyEnrollmentRemote(
+        WindowsTpmEcdsaP256MachineKeyStore keys,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+        : this((IAgentMachineKeySigner)keys, baseUrl, handler) { }
+
+    /// <summary>
+    /// First Agent login: use nonexportable Platform Crypto Provider P-256
+    /// if available. Fallback to DPAPI EdDSA ONLY when caller explicitly
+    /// approves it; existing persisted identity is never silently rotated.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    public static AgentMachineKeyEnrollmentRemote CreatePreferred(
+        ActiveAccountSessionState trustedSession,
+        string? dataDirectory = null,
+        bool allowSoftwareFallback = false,
+        string? baseUrl = null,
+        HttpMessageHandler? handler = null)
+    {
+        var binding = Binding(trustedSession);
+        var key = WindowsPreferredAgentMachineKey.Open(
+            binding, dataDirectory, allowSoftwareFallback);
+        return new AgentMachineKeyEnrollmentRemote(key, baseUrl, handler);
+    }
+
+    internal AgentMachineKeyEnrollmentRemote(
+        IAgentMachineKeySigner keys,
         string? baseUrl = null,
         HttpMessageHandler? handler = null)
     {
@@ -48,6 +83,9 @@ public sealed class AgentMachineKeyEnrollmentRemote : IDisposable
     {
         var binding = Binding(authenticatedSession);
         var identity = _keys.GetOrCreateIdentity(binding);
+        if (identity.Algorithm is not ("EdDSA" or "ES256") ||
+            identity.KeyProtection is not ("software" or "tpm-unverified"))
+            throw new InvalidDataException("Agent local signer identity cannot be trusted.");
 
         using var enrollment = await SendAsync(
             "/api/agent-sessions/keys/enroll",
