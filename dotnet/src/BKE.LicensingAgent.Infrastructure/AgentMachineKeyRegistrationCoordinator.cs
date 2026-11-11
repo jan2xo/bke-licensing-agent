@@ -124,11 +124,13 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
             if (nowActive.Status != "active" ||
                 nowActive.RegistrationId != confirmed.RegistrationId ||
                 nowActive.KeyThumbprint != confirmed.KeyThumbprint ||
+                nowActive.Algorithm != confirmed.Algorithm ||
                 nowActive.ValidUntil is null)
                 throw new InvalidDataException("DS key enrollment acknowledgement was not durable.");
             var receiptNext = new AgentMachineKeyRegistrationReceipt(
-                confirmed.RegistrationId, confirmed.KeyThumbprint, nowActive.ValidUntil);
-            _keys.WriteReceipt(binding, receiptNext);
+                confirmed.RegistrationId, confirmed.KeyThumbprint, nowActive.ValidUntil,
+                confirmed.Algorithm);
+            _receipts.WriteReceipt(binding, receiptNext, _keys);
             return receiptNext;
         }
         finally { _gate.Release(); }
@@ -164,20 +166,21 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
                 // No live registration in the current Agent session. Local
                 // key from a crashed, never-persisted ENROLL may be discarded
                 // only after authenticated DS confirms the empty session.
-                try { _ = _keys.GetOrCreateIdentity(binding, createIfMissing: false); }
-                catch (FileNotFoundException) { return; }
-                catch (DirectoryNotFoundException) { return; }
-                _keys.RemoveLocalKey();
+                if (!_keys.HasStoredIdentity) return;
+                _ = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
+                _keys.RemoveLocalKey(binding);
                 return;
             }
 
             if (remote.RegistrationId is null || remote.KeyThumbprint is null ||
                 (receipt is not null &&
                  (receipt.RegistrationId != remote.RegistrationId ||
-                  receipt.KeyThumbprint != remote.KeyThumbprint)))
+                  receipt.KeyThumbprint != remote.KeyThumbprint ||
+                  receipt.Algorithm != remote.Algorithm)))
                 throw new InvalidDataException("Cannot clear mismatched Agent registration authority.");
             var actual = _keys.GetOrCreateIdentity(binding, createIfMissing: false);
-            if (actual.KeyThumbprint != remote.KeyThumbprint)
+            if (actual.KeyThumbprint != remote.KeyThumbprint ||
+                actual.Algorithm != remote.Algorithm)
                 throw new InvalidDataException("Machine-key material does not match remote registration.");
 
             if (remote.Status != "revoked")
@@ -187,8 +190,8 @@ public sealed class AgentMachineKeyRegistrationCoordinator : IAccountSessionKeyL
                 await _remote.RevokeRegistrationAsync(authenticatedSession,
                     remote.RegistrationId, actual.KeyThumbprint, cancellationToken);
             }
-            _keys.RemoveReceipt(binding);
-            _keys.RemoveLocalKey();
+            _receipts.RemoveReceipt(binding, _keys);
+            _keys.RemoveLocalKey(binding);
         }
         finally { _gate.Release(); }
     }
