@@ -197,6 +197,17 @@ var hostSource = File.ReadAllText(
         "src",
         "BKE.LicensingAgent.Host",
         "Program.cs"));
+var updateBridgeSource = File.ReadAllText(
+    Path.Combine("dotnet", "src", "BKE.LicensingAgent.Infrastructure", "Gen2UpdateService.cs"));
+Require(
+    hostSource.Contains("new Gen2UpdateService(", StringComparison.Ordinal) &&
+    !hostSource.Contains("AddSingleton<UpdateProvider>", StringComparison.Ordinal) &&
+    updateBridgeSource.Contains("IStandaloneUpdateAuthorizationRemote", StringComparison.Ordinal) &&
+    updateBridgeSource.Contains("ISoftwareUpdateService", StringComparison.Ordinal) &&
+    !updateBridgeSource.Contains("/api/agent/updates/check", StringComparison.Ordinal) &&
+    !updateBridgeSource.Contains("UpdateProvider", StringComparison.Ordinal),
+    "Legacy local update endpoints are no longer bound to DS's authenticated signed-v2 update authority.");
+
 Require(
     hostSource.Contains(
         "LocalAgentContract.LauncherPluginAuthorizePath",
@@ -3463,6 +3474,20 @@ static async Task CertifyDigitalSolutionsUpdateDiscoveryBoundary()
     Require(deniedCheck.Error?.Code == "PolicyDenied" && deniedCheck.AvailableVersion is null,
         "DS account entitlement denial must never produce an available update");
 
+    var revokedStore = new FakeAccountSessionStore();
+    await revokedStore.WriteAsync(new ActiveAccountSessionState(
+        "revoked-access-secret", "revoked-refresh-secret", "session-revoked",
+        DateTimeOffset.UtcNow.AddMinutes(10), DateTimeOffset.UtcNow.AddDays(10),
+        account), CancellationToken.None);
+    var revokedDiscovery = new Gen2UpdateService(
+        authenticated, revokedStore, inventory,
+        new RevokedStandaloneUpdateAuthorizationRemote(), neverExecute);
+    var revoked = await revokedDiscovery.CheckAsync(
+        new UpdateCheckRequest("bke-render-dock", "1.0.1"), CancellationToken.None);
+    Require(revoked.Error?.Code == "AuthRequired" &&
+            await revokedStore.ReadAsync(CancellationToken.None) is null,
+        "revoked DS session did not clear Agent-only credential custody");
+
     var upToDate = new Gen2UpdateService(
         authenticated, store, inventory,
         new FakeStandaloneUpdateAuthorizationRemote(
@@ -4917,6 +4942,13 @@ sealed class FakeStandaloneUpdateAuthorizationRemote(
         CurrentVersion = currentVersion;
         return Task.FromResult(result);
     }
+}
+
+sealed class RevokedStandaloneUpdateAuthorizationRemote : IStandaloneUpdateAuthorizationRemote
+{
+    public Task<StandaloneUpdateAuthorizationResult> AuthorizeAsync(
+        string accessToken, string productId, string currentVersion,
+        CancellationToken cancellationToken) => throw new UnauthorizedAccessException();
 }
 
 sealed class FakeStandaloneSoftwareUpdater(
