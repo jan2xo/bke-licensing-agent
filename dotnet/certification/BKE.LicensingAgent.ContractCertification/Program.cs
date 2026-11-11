@@ -39,6 +39,17 @@ Require(
         AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl,
         StringComparison.Ordinal),
     "Agent self-update Bootstrap default drifted from core production authority.");
+Require(
+    !bootstrapSelfUpdateSource.Contains("\"https://jl-bke.com\"", StringComparison.Ordinal),
+    "Bootstrap retained a legacy production API default.");
+foreach (var remoteSourcePath in Directory.GetFiles(
+    Path.Combine("src", "BKE.LicensingAgent.Infrastructure"), "*.cs", SearchOption.TopDirectoryOnly))
+{
+    Require(
+        !File.ReadAllText(remoteSourcePath).Contains("\"https://jl-bke.com\"", StringComparison.Ordinal),
+        "Infrastructure retained a legacy default HTTPS authority: " + Path.GetFileName(remoteSourcePath));
+}
+
 var activeWorkflowDirectory = Path.Combine(".github", "workflows");
 var activeWorkflowNames = Directory
     .GetFiles(activeWorkflowDirectory, "*.yml")
