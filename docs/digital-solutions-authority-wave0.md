@@ -20,8 +20,8 @@
 - No production cutover or legacy host retirement until downstream clients and provider flows are independently certified, and human owner explicitly authorizes release.
 
 ## Certification plan (exact final PR head to be recorded)
-- Required Agent: `contracts`, `windows-x64`, `utm-trust` because changing HTTPS authority and UTM production exclusion crosses runtime trust.
-- Not required: Installer/Defender/rollback/preflight, self-update workflow, acquisition and Launcher/DS CI **unless** source behavior changes require those owners; simple self-update URL default does not change the signed self-update protocol.
+- Required Agent: `contracts`, `windows-x64`, `utm-trust`, `acquisition`, `self-update` because the HTTPS authority affects account and standalone product remotes, disposable test separation, and signed Agent self-update fetching. Self-update proof pins exact DS SHA via `ds:<sha>`.
+- Not required: Installer/Defender/rollback/preflight, Launcher UI or new DS workflow. No privileged packaging/reboot behavior or DS source was changed. Source-only checks are not installed acceptance proof.
 - Cross-repo proof: pin DS `888202f39ac4650b522fc2ed052557cdc9ee924f` for interface inventory; this source-only PR is not proof of installed Agent↔DS acceptance.
 - No merge per owner instruction; PR remains draft/open even if CI is green.
 
