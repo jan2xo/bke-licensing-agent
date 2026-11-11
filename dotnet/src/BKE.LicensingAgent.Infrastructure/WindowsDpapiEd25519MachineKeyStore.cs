@@ -15,7 +15,26 @@ public sealed record AgentEd25519SessionBinding(
     string SessionId, string AccountId, string UserId, string DeviceId);
 
 public sealed record AgentEd25519PublicIdentity(
-    string PublicKeyPem, string KeyThumbprint, string KeyProtection);
+    string PublicKeyPem, string KeyThumbprint, string KeyProtection,
+    string Algorithm = "EdDSA");
+
+/// <summary>Trusted signing without exposing arbitrary messages through public IPC.</summary>
+public interface IAgentMachineKeySigner
+{
+    AgentEd25519PublicIdentity GetOrCreateIdentity(
+        AgentEd25519SessionBinding binding, bool createIfMissing = true);
+    string SignChallenge(
+        AgentEd25519SessionBinding binding, string registrationId, string challengeId,
+        string messageBase64url, DateTimeOffset expiresAt,
+        string? productId = null, string? action = null);
+}
+
+/// <summary>Only protected concrete stores may execute local key removal after remote revocation.</summary>
+public interface IAgentMachineKeyLifecycleSigner : IAgentMachineKeySigner
+{
+    bool HasStoredIdentity { get; }
+    void RemoveLocalKey(AgentEd25519SessionBinding binding);
+}
 
 /// <summary>
 /// Windows user-DPAPI protected SOFTWARE Ed25519 key. The seed is exportable to
@@ -23,7 +42,7 @@ public sealed record AgentEd25519PublicIdentity(
 /// nonexportable hardware-backed identity. No public HTTP/IPC route exposes it.
 /// Unsupported platforms and damaged/foreign stores fail closed.
 /// </summary>
-public sealed class WindowsDpapiEd25519MachineKeyStore
+public sealed class WindowsDpapiEd25519MachineKeyStore : IAgentMachineKeyLifecycleSigner
 {
     private const string Protocol = "bke.agent-key-proof.v1";
     private const int SeedLength = 32;
@@ -49,8 +68,12 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
             throw new InvalidOperationException("Protected Agent user profile is unavailable.");
         _path = Path.Combine(Path.GetFullPath(root), "machine-trust",
             "agent-ed25519.dpapi");
-        _receiptPath = Path.ChangeExtension(_path, "receipt.dpapi");
+        // Algorithm-neutral receipt; protected by the Windows user, not a software key.
+        _receiptPath = Path.Combine(Path.GetDirectoryName(_path)!,
+            "agent-machine-key.receipt.dpapi");
     }
+
+    public bool HasStoredIdentity => File.Exists(_path);
 
     public AgentEd25519PublicIdentity GetOrCreateIdentity(
         AgentEd25519SessionBinding binding, bool createIfMissing = true)
@@ -149,7 +172,8 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
     /// session/account/user/device and local protected Ed25519 thumbprint.
     /// No caller may replace a conflicting durable receipt.
     /// </summary>
-    public AgentMachineKeyRegistrationReceipt? ReadReceipt(AgentEd25519SessionBinding binding)
+    public AgentMachineKeyRegistrationReceipt? ReadReceipt(
+        AgentEd25519SessionBinding binding, IAgentMachineKeySigner? signer = null)
     {
         ValidateBinding(binding);
         if (!File.Exists(_receiptPath)) return null;
@@ -171,7 +195,7 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
             var utf8 = new UTF8Encoding(false, true);
             string text = utf8.GetString(plain.AsSpan(ReceiptHeader.Length + 32));
             var parts = text.Split('\n');
-            if (parts.Length != 3 ||
+            if (parts.Length is not (3 or 4) ||
                 !Guid.TryParseExact(parts[0], "D", out var id) ||
                 id.ToString("D") != parts[0] ||
                 parts[1].Length != 43 ||
@@ -181,10 +205,15 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
                 unix <= 0)
                 throw new InvalidDataException("Protected Agent registration receipt contents are invalid.");
             var expiry = DateTimeOffset.FromUnixTimeSeconds(unix);
-            var identity = GetOrCreateIdentity(binding, createIfMissing: false);
-            if (identity.KeyThumbprint != parts[1])
-                throw new InvalidDataException("Protected Agent registration receipt key does not match.");
-            return new AgentMachineKeyRegistrationReceipt(parts[0], parts[1], expiry);
+            // 3-field source-only EdDSA receipts are read as EdDSA only;
+            // fresh receipts always bind the exact server-derived algorithm.
+            string algorithm = parts.Length == 4 ? parts[3] : "EdDSA";
+            if (algorithm is not ("EdDSA" or "ES256"))
+                throw new InvalidDataException("Protected Agent receipt algorithm is invalid.");
+            var identity = (signer ?? this).GetOrCreateIdentity(binding, createIfMissing: false);
+            if (identity.KeyThumbprint != parts[1] || identity.Algorithm != algorithm)
+                throw new InvalidDataException("Protected Agent receipt key/algorithm mismatch.");
+            return new AgentMachineKeyRegistrationReceipt(parts[0], parts[1], expiry, algorithm);
         }
         catch (DecoderFallbackException error)
         {
@@ -201,12 +230,12 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
     private static bool ReceiptMatches(AgentMachineKeyRegistrationReceipt? a,
         AgentMachineKeyRegistrationReceipt b) =>
         a is not null && a.RegistrationId == b.RegistrationId &&
-        a.KeyThumbprint == b.KeyThumbprint &&
+        a.KeyThumbprint == b.KeyThumbprint && a.Algorithm == b.Algorithm &&
         a.ValidUntil is { } first && b.ValidUntil is { } second &&
         first.ToUnixTimeSeconds() == second.ToUnixTimeSeconds();
 
     public void WriteReceipt(AgentEd25519SessionBinding binding,
-        AgentMachineKeyRegistrationReceipt receipt)
+        AgentMachineKeyRegistrationReceipt receipt, IAgentMachineKeySigner? signer = null)
     {
         ValidateBinding(binding);
         ArgumentNullException.ThrowIfNull(receipt);
@@ -215,15 +244,17 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
             until > DateTimeOffset.UtcNow.AddDays(2) ||
             !Guid.TryParseExact(receipt.RegistrationId, "D", out var id) ||
             id.ToString("D") != receipt.RegistrationId ||
+            receipt.Algorithm is not ("EdDSA" or "ES256") ||
             receipt.KeyThumbprint.Length != 43 ||
             receipt.KeyThumbprint.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_'))
             throw new InvalidDataException("Agent registration receipt metadata is invalid.");
-        var current = GetOrCreateIdentity(binding, createIfMissing: false);
-        if (current.KeyThumbprint != receipt.KeyThumbprint)
+        var current = (signer ?? this).GetOrCreateIdentity(binding, createIfMissing: false);
+        if (current.KeyThumbprint != receipt.KeyThumbprint ||
+            current.Algorithm != receipt.Algorithm)
             throw new InvalidDataException("Cannot persist receipt for another protected key.");
         if (File.Exists(_receiptPath))
         {
-            var previous = ReadReceipt(binding);
+            var previous = ReadReceipt(binding, signer);
             if (!ReceiptMatches(previous, receipt))
                 throw new InvalidDataException("Conflicting protected Agent registration receipt.");
             return;
@@ -231,7 +262,8 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
         byte[] hash = HashBinding(binding);
         byte[] body = Encoding.UTF8.GetBytes(receipt.RegistrationId + "\n" +
             receipt.KeyThumbprint + "\n" +
-            until.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture));
+            until.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            "\n" + receipt.Algorithm);
         byte[] plain = new byte[ReceiptHeader.Length + hash.Length + body.Length];
         byte[]? cipher = null;
         string? temporary = null;
@@ -257,7 +289,7 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
             }
             catch (IOException) when (File.Exists(_receiptPath))
             {
-                if (!ReceiptMatches(ReadReceipt(binding), receipt))
+                if (!ReceiptMatches(ReadReceipt(binding, signer), receipt))
                     throw new InvalidDataException("Concurrent Agent registration receipt mismatch.");
             }
         }
@@ -272,12 +304,13 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
     }
 
     /// <summary>Call only after independently confirmed server revocation.</summary>
-    public void RemoveReceipt(AgentEd25519SessionBinding binding)
+    public void RemoveReceipt(AgentEd25519SessionBinding binding,
+        IAgentMachineKeySigner? signer = null)
     {
         // A tampered/foreign receipt never gets silently deleted.
         if (File.Exists(_receiptPath))
         {
-            _ = ReadReceipt(binding);
+            _ = ReadReceipt(binding, signer);
             File.Delete(_receiptPath);
         }
     }
@@ -287,6 +320,14 @@ public sealed class WindowsDpapiEd25519MachineKeyStore
     /// authenticated revocation protocol must run before production rotation.
     /// Does not silently replace a corrupt or mismatched key.
     /// </summary>
+    /// <summary>Must be called only after DS has confirmed revoke.</summary>
+    public void RemoveLocalKey(AgentEd25519SessionBinding binding)
+    {
+        // A foreign/expired session may not delete a surviving local key.
+        _ = GetOrCreateIdentity(binding, createIfMissing: false);
+        RemoveLocalKey();
+    }
+
     public void RemoveLocalKey()
     {
         if (File.Exists(_receiptPath))
