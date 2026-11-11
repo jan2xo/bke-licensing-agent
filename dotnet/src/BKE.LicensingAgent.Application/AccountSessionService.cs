@@ -56,7 +56,8 @@ public sealed record ActiveAccountSessionState(
     string? SessionId,
     DateTimeOffset AccessTokenExpiresAt,
     DateTimeOffset RefreshTokenExpiresAt,
-    AccountSessionAccount Account) : AccountSessionStoredState;
+    AccountSessionAccount Account,
+    string? EnrollmentDeviceCode = null) : AccountSessionStoredState;
 
 public sealed record RemoteAccountSessionStart(
     string DeviceCode,
@@ -193,7 +194,8 @@ public sealed class AccountSessionService : IAccountSessionService
                         exchanged.SessionId,
                         now.Add(exchanged.ExpiresIn!.Value),
                         now.Add(exchanged.RefreshExpiresIn!.Value),
-                        exchanged.Account!);
+                        exchanged.Account!,
+                        request.HandoffCode);
                     await _store.WriteAsync(next, cancellationToken);
                     try
                     {
@@ -487,7 +489,8 @@ public sealed class AccountSessionService : IAccountSessionService
                     poll.SessionId,
                     now.Add(poll.ExpiresIn!.Value),
                     now.Add(poll.RefreshExpiresIn!.Value),
-                    poll.Account!);
+                    poll.Account!,
+                    pending.DeviceCode);
                 await _store.WriteAsync(active, cancellationToken);
                 try
                 {
@@ -574,7 +577,8 @@ public sealed class AccountSessionService : IAccountSessionService
             refreshed.SessionId,
             now.Add(refreshed.ExpiresIn!.Value),
             now.Add(refreshed.RefreshExpiresIn!.Value),
-            refreshed.Account!);
+            refreshed.Account!,
+            active.EnrollmentDeviceCode);
         await _store.WriteAsync(next, cancellationToken);
         return StatusResponse("AUTHENTICATED", next.Account, null);
     }
