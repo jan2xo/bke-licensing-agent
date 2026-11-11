@@ -11,6 +11,9 @@ using Org.BouncyCastle.Crypto.Signers;
 
 internal static class AgentMachineKeyHttpCertification
 {
+    private static readonly string ProofDeviceCode =
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
     public static async Task RunAsync()
     {
         if (!OperatingSystem.IsWindows())
@@ -26,7 +29,8 @@ internal static class AgentMachineKeyHttpCertification
             bearer, "disposable-refresh", sessionId,
             DateTimeOffset.UtcNow.AddMinutes(10),
             DateTimeOffset.UtcNow.AddDays(1),
-            new AccountSessionAccount(userId, "test@bke.test", accountId, "INDIVIDUAL", "Disposable"));
+            new AccountSessionAccount(userId, "test@bke.test", accountId, "INDIVIDUAL", "Disposable"),
+            ProofDeviceCode);
         int passed = 0;
         void Pass(bool value, string name)
         {
@@ -45,6 +49,20 @@ internal static class AgentMachineKeyHttpCertification
 
         try
         {
+            using (var service = new AgentMachineKeyEnrollmentRemote(
+                store, "https://ds.bke.test", new ProofHandler(bearer,
+                    sessionId, accountId, userId, deviceId)))
+            {
+                await RejectAsync(() => service.EnrollAsync(session with {
+                    EnrollmentDeviceCode = null,
+                }, CancellationToken.None),
+                    "Stolen Agent bearer without original handoff code cannot enroll");
+                await RejectAsync(() => service.EnrollAsync(session with {
+                    EnrollmentDeviceCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+                        .TrimEnd('=').Replace('+', '-').Replace('/', '_'),
+                }, CancellationToken.None),
+                    "Wrong device authorization code is refused by DS-shaped peer");
+            }
             using (var service = new AgentMachineKeyEnrollmentRemote(
                 store, "https://ds.bke.test", new ProofHandler(bearer,
                     sessionId, accountId, userId, deviceId)))
@@ -320,6 +338,8 @@ internal static class AgentMachineKeyHttpCertification
                 {
                     EnrollRequests++;
                     _pending = true;
+                    if (json.RootElement.GetProperty("device_code").GetString() != ProofDeviceCode)
+                        return Json(HttpStatusCode.Forbidden, "{\"error\":\"INVALID_PROOF\"}");
                     _publicPem = json.RootElement.GetProperty("public_key_pem").GetString()!;
                     _message = string.Join("\n",
                         "bke.agent-key-proof.v1", "ENROLL", _challenge, _registration,
