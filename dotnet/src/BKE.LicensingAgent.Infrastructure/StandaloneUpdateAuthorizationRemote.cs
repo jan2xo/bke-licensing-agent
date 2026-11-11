@@ -62,7 +62,7 @@ public sealed class StandaloneUpdateAuthorizationRemote :
             throw new UnauthorizedAccessException("BKE account session was rejected by the update authority.");
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        using var document = await ParseResponseAsync(stream, cancellationToken);
         ValidateProtocol(response);
 
         if (response.IsSuccessStatusCode)
@@ -174,6 +174,20 @@ public sealed class StandaloneUpdateAuthorizationRemote :
             "distribution_unavailable"=>"DISTRIBUTION_UNAVAILABLE",
             _=>throw new InvalidDataException("BKE standalone update rejection status drifted."),
         });
+    }
+
+    private static async Task<JsonDocument> ParseResponseAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        }
+        catch (JsonException exception)
+        {
+            // The caller must fail closed with a typed invalid-authority result.
+            // A malformed DS body is never permission to update the product.
+            throw new InvalidDataException("BKE update authority returned malformed JSON.", exception);
+        }
     }
 
     private static void ValidateProtocol(HttpResponseMessage response)
