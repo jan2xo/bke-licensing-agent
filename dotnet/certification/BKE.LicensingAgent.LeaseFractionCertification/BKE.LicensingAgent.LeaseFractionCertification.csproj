@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>BKE.LicensingAgent.LeaseFractionCertification</AssemblyName>
+    <RootNamespace>BKE.LicensingAgent.LeaseFractionCertification</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/BKE.LicensingAgent.Infrastructure/BKE.LicensingAgent.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
