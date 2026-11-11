@@ -58,7 +58,7 @@ internal sealed class AgentSelfUpdateWorker(ILogger<AgentSelfUpdateWorker> logge
         var current = CurrentVersion();
         _ = SemanticVersion.Parse(current);
         var targetArchitecture = TargetArchitecture();
-        var platformBase = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
+        var platformBase = (Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://bkedigitalsolutions.com").TrimEnd('/');
         if (!Uri.TryCreate(platformBase, UriKind.Absolute, out var origin) || origin.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("BKE_PLATFORM_BASE_URL must be HTTPS");
 

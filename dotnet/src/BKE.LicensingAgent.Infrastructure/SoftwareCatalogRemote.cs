@@ -27,7 +27,7 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
         var rawBaseUrl = (
             platformBaseUrl ??
             Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
-            "https://jl-bke.com"
+            AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl
         ).TrimEnd('/');
 
         if (!Uri.TryCreate(rawBaseUrl, UriKind.Absolute, out var baseUri))
