@@ -49,6 +49,33 @@ using (var machineKeyProof = Process.Start(new ProcessStartInfo
     Console.WriteLine(output);
 }
 
+// The default-branch Windows certification already executes this exact-head
+// FirstInstall runner. Use it to perform a real kernel named-pipe peer proof
+// without depending on candidate-only workflow YAML.
+using (var startupPeerProof = Process.Start(new ProcessStartInfo
+{
+    FileName = "dotnet",
+    ArgumentList =
+    {
+        "run", "--project",
+        "dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj",
+        "--configuration", "Release", "--", "--certify-startup-peer",
+    },
+    RedirectStandardOutput = true,
+    RedirectStandardError = true,
+    UseShellExecute = false,
+    CreateNoWindow = true,
+}) ?? throw new InvalidOperationException("Could not launch native startup peer certification."))
+{
+    string output = startupPeerProof.StandardOutput.ReadToEnd();
+    string errors = startupPeerProof.StandardError.ReadToEnd();
+    startupPeerProof.WaitForExit();
+    if (startupPeerProof.ExitCode != 0)
+        throw new InvalidOperationException(
+            "Agent native process startup peer certification failed: " + errors + output);
+    Console.WriteLine(output);
+}
+
 var helper = Path.GetFullPath(args[1]);
 if (!File.Exists(helper))
 {
