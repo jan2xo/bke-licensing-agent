@@ -185,14 +185,16 @@ internal static class Program
 
             if (schema == "bke.install-target-policy.v1")
             {
-                if (!fields.SetEquals(TargetPolicyV1Fields))
+                if (root.EnumerateObject().Count() != TargetPolicyV1Fields.Count ||
+                    !fields.SetEquals(TargetPolicyV1Fields))
                 {
                     throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
                 }
             }
             else if (schema == "bke.install-target-policy.v2")
             {
-                if (!fields.SetEquals(TargetPolicyV2Fields))
+                if (root.EnumerateObject().Count() != TargetPolicyV2Fields.Count ||
+                    !fields.SetEquals(TargetPolicyV2Fields))
                 {
                     throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
                 }
