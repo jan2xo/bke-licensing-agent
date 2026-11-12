@@ -198,14 +198,35 @@ public sealed class InstalledStandaloneStartupPolicyRegistry :
             throw new InvalidDataException("Startup executable is outside trusted install root.");
 
         return new SignedInstallation(product, version, installationId,
-            normalized, sha, user, mode);
+            normalized, sha, user, mode, from, until);
+    }
+
+    // Certification-only constructor uses the same signature verifier and
+    // duplicate checks; installed Host can only call LoadInstalled.
+    internal static InstalledStandaloneStartupPolicyRegistry ForCertification(
+        IEnumerable<string> envelopes,
+        IReadOnlyDictionary<string, AccountProductLeaseTrustedKey> keys,
+        string trustedProgramFiles,
+        DateTimeOffset now)
+    {
+        var records = envelopes.Select(e =>
+            VerifyEnvelope(e, keys, trustedProgramFiles, now)).ToArray();
+        if (records.Length is < 1 or > 128 ||
+            records.GroupBy(p => (p.ProductId, p.Version)).Any(g => g.Count() != 1) ||
+            records.GroupBy(p => (p.ImagePath.ToUpperInvariant(),
+                                  p.AllowedUserSid.ToUpperInvariant()))
+                .Any(g => g.Count() != 1))
+            throw new InvalidDataException("Startup signature fixture is empty or ambiguous.");
+        return new InstalledStandaloneStartupPolicyRegistry(records);
     }
 
     public Task<TrustedStandaloneStartupInstallation?> ResolveVerifiedAsync(
         StandaloneStartupProcessEvidence peer, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var now = DateTimeOffset.UtcNow;
         var matching = _policies.Where(p =>
+            p.NotBefore <= now && p.ExpiresAt > now &&
             string.Equals(p.ImagePath, peer.ImagePath, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(p.ImageSha256, peer.ImageSha256, StringComparison.Ordinal) &&
             string.Equals(p.AllowedUserSid, peer.UserSid, StringComparison.Ordinal))
@@ -222,7 +243,9 @@ public sealed class InstalledStandaloneStartupPolicyRegistry :
         string productId, string version, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var now = DateTimeOffset.UtcNow;
         var matching = _policies.Where(p =>
+            p.NotBefore <= now && p.ExpiresAt > now &&
             p.ProductId == productId && p.Version == version).Take(2).ToArray();
         return Task.FromResult<TrustedStandaloneStartupPolicy?>(
             matching.Length == 1
@@ -265,5 +288,5 @@ public sealed class InstalledStandaloneStartupPolicyRegistry :
     internal sealed record SignedInstallation(
         string ProductId, string Version, string InstallationId,
         string ImagePath, string ImageSha256, string AllowedUserSid,
-        string ActivationMode);
+        string ActivationMode, DateTimeOffset NotBefore, DateTimeOffset ExpiresAt);
 }
