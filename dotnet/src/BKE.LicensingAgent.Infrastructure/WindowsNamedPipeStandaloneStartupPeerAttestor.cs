@@ -68,6 +68,10 @@ public sealed class WindowsNamedPipeStandaloneStartupPeerAttestor
             // The OS pipe impersonation token, not product IPC, supplies SID.
             _connectedPipe.RunAsClient(() =>
             {
+                // Platform analysis must see the guard inside the callback;
+                // Windows reachability of the caller does not flow into it.
+                if (!OperatingSystem.IsWindows())
+                    return;
                 using var identity = WindowsIdentity.GetCurrent();
                 userSid = identity.User?.Value;
             });
