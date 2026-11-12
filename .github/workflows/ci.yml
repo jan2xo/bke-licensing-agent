@@ -50,6 +50,12 @@ jobs:
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish_dotnet_windows_payloads.ps1 -Version $env:AGENT_VERSION -Architecture x64
 
+      - name: Certify kernel-observed process identity over real Windows pipe
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj --configuration Release -- --certify-startup-peer
+          if ($LASTEXITCODE -ne 0) { throw "Native pipe peer identity fixture failed" }
+
       - name: Smoke native x64 helpers
         shell: pwsh
         run: |
