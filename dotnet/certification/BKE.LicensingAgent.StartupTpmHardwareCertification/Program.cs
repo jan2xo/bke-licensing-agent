@@ -49,7 +49,7 @@ internal static class HardwareProof
     private static void RequireMachine(CngKey key)
     {
         if (!key.IsMachineKey || key.IsEphemeral ||
-            key.Provider.Provider != Platform.Provider ||
+            key.Provider?.Provider != Platform.Provider ||
             key.Algorithm.Algorithm != CngAlgorithm.ECDsaP256.Algorithm ||
             key.ExportPolicy != CngExportPolicies.None ||
             (key.KeyUsage & CngKeyUsages.Signing) != CngKeyUsages.Signing)
