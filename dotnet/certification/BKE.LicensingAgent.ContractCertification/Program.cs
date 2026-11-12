@@ -12,10 +12,12 @@ using Microsoft.Data.Sqlite;
 if (args is ["--certify-startup-peer"])
 {
     await StandaloneStartupWindowsPeerCertification.RunAsync();
+    await StandaloneStartupHostPipeCertification.RunAsync();
     return;
 }
 
 await StandaloneStartupAuthorityCertification.RunAsync();
+await InstalledStandaloneStartupAuthorityCertification.RunAsync();
 
 // Hermetic, pinned DS account-product LEASE HTTP consumer proof.
 await AccountProductLeaseHttpCertification.RunAsync();

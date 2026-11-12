@@ -75,6 +75,58 @@ if (accountLeaseGateFlag == "1")
     }
 }
 
+// Experimental direct-executable gate is a separate explicit opt-in. It
+// cannot run in production, point at production DS, or use unsigned policy.
+var startupFlag =
+    Environment.GetEnvironmentVariable("BKE_STANDALONE_STARTUP_GATE_ENABLED") ?? "0";
+if (startupFlag is not ("0" or "1"))
+{
+    Console.Error.WriteLine("Standalone startup gate setting must be 0 or 1.");
+    return 78;
+}
+InstalledStandaloneStartupPolicyRegistry? installedStartupPolicy = null;
+InstalledStandaloneStartupGrantAudit? installedStartupAudit = null;
+if (startupFlag == "1")
+{
+    if (!OperatingSystem.IsWindows() ||
+        runtimeEnvironment.Name == AgentRuntimeEnvironmentLoader.ProductionEnvironment)
+    {
+        Console.Error.WriteLine(
+            "Standalone startup execution gate is PREPRODUCTION Windows-only.");
+        return 78;
+    }
+    var platformUrl = runtimeEnvironment.PlatformBaseUrl;
+    if (string.IsNullOrWhiteSpace(platformUrl) ||
+        !Uri.TryCreate(platformUrl, UriKind.Absolute, out var platformUri) ||
+        platformUri.Host.Equals("jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
+        platformUri.Host.EndsWith(".jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
+        platformUri.Scheme is not ("http" or "https") ||
+        (platformUri.Scheme == "http" && !platformUri.IsLoopback))
+    {
+        Console.Error.WriteLine(
+            "Standalone startup gate requires a separate, explicit nonproduction DS origin.");
+        return 78;
+    }
+    try
+    {
+        // The pinned public-only DS issuer verifies a domain-separated policy.
+        // It is not a signer and no private key is ever installed.
+        var startupIssuers = installedLeaseKeys ??
+            AccountProductLeaseInstalledTrust.LoadInstalled(runtimeEnvironment.Name);
+        installedStartupPolicy =
+            InstalledStandaloneStartupPolicyRegistry.LoadInstalled(
+                runtimeEnvironment.Name, startupIssuers);
+        installedStartupAudit =
+            InstalledStandaloneStartupGrantAudit.CreateInstalled(runtimeEnvironment.Name);
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine(
+            $"Installed standalone startup trust bootstrap failed: {exception.Message}");
+        return 78;
+    }
+}
+
 var port = LocalAgentContract.DefaultPort;
 var configuredPort = Environment.GetEnvironmentVariable("BKE_AGENT_PORT");
 if (!string.IsNullOrWhiteSpace(configuredPort))
@@ -311,6 +363,23 @@ builder.Services.AddSingleton<ISoftwareRemoveService>(services => new SoftwareRe
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<ILocalProductInventory>(),
     services.GetRequiredService<IStandaloneSoftwareRemover>()));
+// No listener unless a verified signed policy is installed and explicitly enabled.
+if (installedStartupPolicy is not null && installedStartupAudit is not null)
+{
+    builder.Services.AddSingleton(installedStartupPolicy);
+    builder.Services.AddSingleton(installedStartupAudit);
+    builder.Services.AddHostedService<StandaloneStartupPipeHostedService>(services =>
+        new StandaloneStartupPipeHostedService(
+            services.GetRequiredService<InstalledStandaloneStartupPolicyRegistry>(),
+            services.GetRequiredService<InstalledStandaloneStartupGrantAudit>(),
+            services.GetRequiredService<ISoftwareCatalogService>(),
+            services.GetRequiredService<IAuthorizationService>(),
+            runtimeEnvironment.Name,
+            services.GetRequiredService<ILogger<StandaloneStartupPipeHostedService>>(),
+            installedLeaseKeys is null
+                ? null
+                : services.GetRequiredService<IAccountProductOpenLeaseGate>()));
+}
 builder.Services.AddSingleton<UnavailableProviders>();
 
 var app = builder.Build();

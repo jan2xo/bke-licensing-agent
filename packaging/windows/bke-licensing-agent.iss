@@ -53,6 +53,9 @@ Source: "..\..\dist\windows\update-authority-keys\*.json"; DestDir: "{app}\trust
 ; Privileged package/replacement/rollback owns this path, never user .env.
 ; No production keys are generated or included by default.
 Source: "..\..\dist\windows\account-product-lease-keys\issuers.json"; DestDir: "{app}\trust\account-product-lease-keys"; Flags: ignoreversion skipifsourcedoesntexist
+; Optional PREPRODUCTION DS-signed standalone installation and activation-mode policies.
+; This directory ships no keys or unsigned grants by default.
+Source: "..\..\dist\windows\standalone-startup-policies\*.json"; DestDir: "{app}\trust\standalone-startup-policies"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Dirs]
