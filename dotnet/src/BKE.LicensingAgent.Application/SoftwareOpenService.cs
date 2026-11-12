@@ -113,6 +113,18 @@ public sealed class SoftwareOpenService : ISoftwareOpenService
                     false));
         }
 
+        // Only Digital Solutions ACCOUNT or EITHER policy can authorize
+        // an account-based Launcher Open. A commercial license key uses its
+        // independent signed-lease /v1/authorize path.
+        if (product.ActivationMode is not ("ACCOUNT" or "EITHER"))
+            return Response("FAILED",
+                product.ActivationMode == "LICENSE_KEY" ?
+                    "license_key_required" : "activation_mode_unavailable",
+                Error(product.ActivationMode == "LICENSE_KEY"
+                        ? "LICENSE_KEY_REQUIRED" : "ACTIVATION_MODE_INVALID",
+                    "This product requires its independently verified license-key activation path.",
+                    false));
+
         if (!product.Entitled ||
             product.State == "INSTALLED_NOT_ENTITLED")
         {
