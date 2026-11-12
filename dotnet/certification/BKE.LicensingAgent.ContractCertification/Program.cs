@@ -12,6 +12,7 @@ using Microsoft.Data.Sqlite;
 if (args is ["--certify-startup-peer"])
 {
     await StandaloneStartupWindowsPeerCertification.RunAsync();
+    await StandaloneStartupHostPipeCertification.RunAsync();
     return;
 }
 
