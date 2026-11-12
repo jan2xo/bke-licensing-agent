@@ -12,6 +12,11 @@ if (!OperatingSystem.IsWindows())
 if (Environment.GetEnvironmentVariable("BKE_ENVIRONMENT") != "certification" ||
     Environment.GetEnvironmentVariable("BKE_TPM_HARDWARE_CERTIFICATION_ENABLED") != "1")
     throw new InvalidOperationException("Explicit preproduction TPM certification authorization required.");
+if (args is ["selftest-software-deny"])
+{
+    HardwareProof.RejectSoftwareProvider();
+    return;
+}
 if (args.Length != 4 || args[0] is not ("create" or "verify" or "cleanup") ||
     !Regex.IsMatch(args[1], @"^BKE-PREPRODUCTION-STARTUP-TPM-[A-F0-9]{32}$",
         RegexOptions.CultureInvariant) ||
@@ -141,6 +146,24 @@ internal static class HardwareProof
         RequireNoPrivateExport(key);
         CryptographicOperations.ZeroMemory(nonce);
         CryptographicOperations.ZeroMemory(signature);
+    }
+
+    // Runs safely on ordinary hosted Windows CI: ephemeral SOFTWARE KSP key
+    // MUST be rejected as installed-machine TPM proof. No TPM key is created.
+    internal static void RejectSoftwareProvider()
+    {
+        using var software = CngKey.Create(CngAlgorithm.ECDsaP256, null,
+            new CngKeyCreationParameters {
+                Provider = CngProvider.MicrosoftSoftwareKeyStorageProvider,
+                KeyUsage = CngKeyUsages.Signing,
+                ExportPolicy = CngExportPolicies.None,
+            });
+        var denied = false;
+        try { RequireMachine(software); }
+        catch (InvalidDataException) { denied = true; }
+        if (!denied)
+            throw new InvalidDataException("Windows SOFTWARE KSP was wrongly accepted as TPM custody.");
+        Console.WriteLine("PASS: software-only CNG P-256 key strictly denied as machine TPM evidence.");
     }
 
     internal static void Create(string name, string path, string source)
