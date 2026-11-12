@@ -102,6 +102,11 @@ internal sealed class StartupMachineAttestor
         var policyDir = Path.Combine(privileged, "target-policies");
         RequireDirectory(keyDir);
         RequireDirectory(policyDir);
+        // Reject redirected public verification keys before parsing them.
+        // A signed policy is never certified against a user-writable key path.
+        foreach (var keyFile in Directory.GetFiles(
+                     keyDir, "*.pem", SearchOption.TopDirectoryOnly))
+            RequireFile(keyFile, 16_384);
         // Existing privileged provisioner owns both signature and exact-field
         // verification; no mutable product manifest is trusted.
         Program.ValidatePolicies(policyDir, Program.ValidatePublicKeys(keyDir));
@@ -137,11 +142,14 @@ internal sealed class StartupMachineAttestor
         RequireDirectory(root);
         RequireFile(exe, 2_000_000_000);
         var before = new FileInfo(exe);
+        long expectedBytes = before.Length;
+        var expectedModified = before.LastWriteTimeUtc;
         using var stream = new FileStream(exe, FileMode.Open, FileAccess.Read, FileShare.Read);
         var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        var after = new FileInfo(exe);
-        after.Refresh();
-        if (before.Length != after.Length || before.LastWriteTimeUtc != after.LastWriteTimeUtc)
+        var observed = new FileInfo(exe);
+        observed.Refresh();
+        if (observed.Length != expectedBytes ||
+            observed.LastWriteTimeUtc != expectedModified)
             throw new IOException("Installed executable changed while hashing.");
         return new InstalledEvidence(productId, version, installationId, exe, digest, sid);
     }
