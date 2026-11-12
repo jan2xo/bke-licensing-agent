@@ -10,9 +10,10 @@ Prove on an **ephemeral Windows runner** that actual Windows-DPAPI Agent-provisi
 - Digital Solutions source: `0be43d74d45b6a24307ddb626a6fd0d4b70bbba4` (certified #43277515014)
 
 ## Minimum complete intentional certification graph
-- Required: `contracts startup-handshake` against exact final PR head, including Windows DPAPI, actual .NET proof, disposable local PostgreSQL DS transaction, and actual .NET policy verification.
-- Not required: Agent `installer rollback acquisition utm-trust self-update fraction-lease preflight`; no runtime/package/privileged installed application changes. No DS repo certification rerun: reuse immutable merged upstream certification; the Agent-controlled cross-repo consumer proof tests that unchanged code.
-- Must amend this plan if engineering changes touch machine-trust production code, signer custody, SQL schema, runtime interface, packaging or release provenance.
+- **Required:** `contracts windows-x64 installer rollback acquisition utm-trust startup-handshake` on the **exact final Agent PR head**, including actual Windows DPAPI/protected target, real .NET Agent → local PostgreSQL Digital Solutions two-admin and issuance → .NET Agent verifier. Broad Agent native/installer/rollback/acquisition/UTM graph is required because the integration surfaced a concrete defect in the **privileged Provisioner machine-enrollment candidate serializer**. Correctness of its published bytes and the packaged privileged helper is security-sensitive; prior #133 installer proof belongs to an earlier SHA and cannot certify changed source.
+- **Not required:** `self-update fraction-lease preflight`; updater behavior, unrelated JWS runtime/TS licensing fraction and production preflight remain unchanged. No DS repo re-certification: reuse exact upstream `0be43d74d45b6a24307ddb626a6fd0d4b70bbba4` proof, and certify the changed consuming Agent interop on the exact head.
+- Current integration discovery: the Agent's .NET default `JsonSerializer` public-key enrollment output escapes JSON differently from DS's strict `JSON.stringify(row) === raw` canonical public-key parser. Fix the **Agent producer** to use the same JavaScript-compatible `UnsafeRelaxedJsonEscaping` already used for the signed attestation envelope. Do not weaken DS canonical or signature checks.
+- If more shared trust ownership changes are discovered, revise the graph before dispatch and keep all earlier generations stale.
 
 ## Excluded (separate intent)
 No HTTP transport/public provisioning, production enrollment, human physical fingerprint attestation, signed GitHub release provenance, SDK or Render Dock customer executable startup, Launcher repin, customer acceptance or production release.
