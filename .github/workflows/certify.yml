@@ -64,6 +64,7 @@ jobs:
               "acquisition",
               "self-update",
               "fraction-lease",
+              "startup-handshake",
             ];
             let sourceSha;
             let requested;
@@ -136,6 +137,18 @@ jobs:
               return;
             }
 
+            // Native → DS SQL → Agent proof consumes a fixed, already-certified
+            // public upstream source, never an arbitrary moving DS branch.
+            if (unique.includes("startup-handshake") &&
+                digitalSolutionsSha !== "0be43d74d45b6a24307ddb626a6fd0d4b70bbba4") {
+              core.setFailed("startup-handshake requires exact certified DS #366 main SHA.");
+              return;
+            }
+            if (unique.includes("startup-handshake") && context.eventName === "issue_comment" &&
+                sourceSha !== livePrHead) {
+              core.setFailed("startup-handshake must certify the current exact PR head.");
+              return;
+            }
             if (unique.includes("fraction-lease") && !/^[0-9a-f]{40}$/i.test(librarySha)) {
               core.setFailed("fraction-lease requires an exact library SHA via lib:<sha> or library_sha.");
               return;
@@ -295,10 +308,123 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  startup-handshake:
+    name: Native Windows Agent → disposable DS SQL → .NET Agent signed policy
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets_json), 'startup-handshake')
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      AGENT_SHA: ${{ needs.plan.outputs.source_sha }}
+      DS_SHA: ${{ needs.plan.outputs.digital_solutions_sha }}
+      NODE_ENV: test
+      DATABASE_URL: postgresql://bke:bke@127.0.0.1:5432/bke_test
+      BKE_CROSS_REPO_STARTUP_SQL_PROOF: '1'
+    steps:
+      - name: Checkout exact Agent candidate code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AGENT_SHA }}
+          path: agent
+          persist-credentials: false
+
+      - name: Checkout exact certified Digital Solutions source
+        uses: actions/checkout@v4
+        with:
+          repository: jan2xo/bke-digital-solutions
+          ref: ${{ env.DS_SHA }}
+          path: ds
+          persist-credentials: false
+
+      - name: Verify both exact source identities
+        shell: pwsh
+        run: |
+          if ((git -C agent rev-parse HEAD).Trim() -ne $env:AGENT_SHA) { throw "Agent source SHA mismatch" }
+          if ((git -C ds rev-parse HEAD).Trim() -ne $env:DS_SHA) { throw "DS source SHA mismatch" }
+          if ($env:DS_SHA -ne "0be43d74d45b6a24307ddb626a6fd0d4b70bbba4") { throw "Uncertified DS producer" }
+          if (!(Test-Path agent/certification/startup-handshake/DSAgentHandshake.test.ts)) { throw "Missing exact-head test" }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ds/package-lock.json
+
+      - name: Start disposable Windows PostgreSQL 17
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $service = Get-Service -Name postgresql-x64-17 -ErrorAction Stop
+          Set-Service -Name $service.Name -StartupType Manual
+          Start-Service -Name $service.Name
+          $env:PGPASSWORD = 'root'
+          $psql = Join-Path $env:PGBIN "psql.exe"
+          if (!(Test-Path $psql)) { throw "PostgreSQL 17 client missing from Windows runner" }
+          & $psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE bke LOGIN PASSWORD 'bke';"
+          if ($LASTEXITCODE -ne 0) { throw "Disposable role creation failed" }
+          & $psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE bke_test OWNER bke;"
+          if ($LASTEXITCODE -ne 0) { throw "Disposable DB creation failed" }
+
+      - name: Restore exact DS dependencies and apply SQL migrations
+        shell: pwsh
+        working-directory: ds
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "DS dependency restore failed" }
+          npm run db:generate
+          if ($LASTEXITCODE -ne 0) { throw "DS Prisma generation failed" }
+          npm run db:deploy
+          if ($LASTEXITCODE -ne 0) { throw "DS disposable PostgreSQL migration failed" }
+          npm run db:status
+          if ($LASTEXITCODE -ne 0) { throw "DS disposable schema is not current" }
+
+      - name: Install exact Agent-owned integration test inside DS checkout
+        shell: pwsh
+        run: |
+          Copy-Item agent/certification/startup-handshake/DSAgentHandshake.test.ts ds/tests/integration/agent-startup-handshake-crossrepo.test.ts
+          $env:BKE_CROSS_REPO_STARTUP_INPUT = Join-Path $env:RUNNER_TEMP "startup-native-proof.json"
+          $env:BKE_CROSS_REPO_STARTUP_OUTPUT = Join-Path $env:RUNNER_TEMP "startup-ds-signed-policy.json"
+          "BKE_CROSS_REPO_STARTUP_INPUT=$env:BKE_CROSS_REPO_STARTUP_INPUT" >> $env:GITHUB_ENV
+          "BKE_CROSS_REPO_STARTUP_OUTPUT=$env:BKE_CROSS_REPO_STARTUP_OUTPUT" >> $env:GITHUB_ENV
+
+      - name: Produce actual protected Windows Agent installer attestation
+        shell: pwsh
+        working-directory: agent
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.MachineKeyCertification/BKE.LicensingAgent.MachineKeyCertification.csproj --configuration Release -- --emit-startup-handshake "$env:BKE_CROSS_REPO_STARTUP_INPUT"
+          if ($LASTEXITCODE -ne 0) { throw "Native Agent attestation issuer failed" }
+          if (!(Test-Path $env:BKE_CROSS_REPO_STARTUP_INPUT)) { throw "No native proof was generated" }
+
+      - name: Consume actual .NET bytes via DS two-admin SQL and signed policy
+        shell: pwsh
+        working-directory: ds
+        run: |
+          npx --no-install vitest run tests/integration/agent-startup-handshake-crossrepo.test.ts --maxWorkers=1
+          if ($LASTEXITCODE -ne 0) { throw "DS exact-byte SQL issuer proof failed" }
+          if (!(Test-Path $env:BKE_CROSS_REPO_STARTUP_OUTPUT)) { throw "DS did not issue signed policy" }
+
+      - name: Feed exact DS signed bytes back into .NET Agent verifier
+        shell: pwsh
+        working-directory: agent
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.MachineKeyCertification/BKE.LicensingAgent.MachineKeyCertification.csproj --configuration Release -- --verify-startup-handshake "$env:BKE_CROSS_REPO_STARTUP_OUTPUT"
+          if ($LASTEXITCODE -ne 0) { throw "Agent refused DS signed startup policy" }
+          Write-Host "PASS: exact Agent .NET -> disposable DS PostgreSQL -> Agent .NET signed startup interoperability"
+
+      - name: Clean disposable signed vectors (never publish private material)
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath "$env:BKE_CROSS_REPO_STARTUP_INPUT","$env:BKE_CROSS_REPO_STARTUP_OUTPUT" -Force -ErrorAction SilentlyContinue
+
   required-certification:
     name: Required certification
     if: always() && needs.plan.result == 'success'
-    needs: [plan, contracts, windows-x64, installer, rollback, preflight, utm-trust, acquisition, self-update, fraction-lease]
+    needs: [plan, contracts, windows-x64, installer, rollback, preflight, utm-trust, acquisition, self-update, fraction-lease, startup-handshake]
     runs-on: ubuntu-latest
     env:
       SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
@@ -312,6 +438,7 @@ jobs:
       ACQUISITION_RESULT: ${{ needs.acquisition.result }}
       SELF_UPDATE_RESULT: ${{ needs.self-update.result }}
       FRACTION_LEASE_RESULT: ${{ needs.fraction-lease.result }}
+      STARTUP_HANDSHAKE_RESULT: ${{ needs.startup-handshake.result }}
     steps:
       - name: Verify declared certification plan
         shell: bash
@@ -328,6 +455,7 @@ jobs:
             acquisition: process.env.ACQUISITION_RESULT,
             "self-update": process.env.SELF_UPDATE_RESULT,
             "fraction-lease": process.env.FRACTION_LEASE_RESULT,
+            "startup-handshake": process.env.STARTUP_HANDSHAKE_RESULT,
           };
           const failed = targets
             .filter(target => results[target] !== "success")
