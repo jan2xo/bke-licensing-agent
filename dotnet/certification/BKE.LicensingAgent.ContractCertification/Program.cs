@@ -12,6 +12,7 @@ using Microsoft.Data.Sqlite;
 // Hermetic, pinned DS account-product LEASE HTTP consumer proof.
 await AccountProductLeaseHttpCertification.RunAsync();
 await AccountProductOpenGateCertification.RunAsync();
+AccountActivationModeCatalogCertification.Run();
 
 var inventoryPath = Path.Combine(AppContext.BaseDirectory, "certified-contract-baseline.json");
 using var inventory = JsonDocument.Parse(File.ReadAllText(inventoryPath));
