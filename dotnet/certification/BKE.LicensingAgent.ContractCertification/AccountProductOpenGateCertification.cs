@@ -165,7 +165,8 @@ internal static class AccountProductOpenGateCertification
             installer.Contains("skipifsourcedoesntexist", StringComparison.Ordinal),
             "privileged installer owns optional public-only issuer payload");
 
-        Console.WriteLine($"Account-product installed OPEN gate certification: {passed}/17 PASS");
+        if (passed != 18) throw new InvalidOperationException("Incomplete installed gate certification.");
+        Console.WriteLine($"Account-product installed OPEN gate certification: {passed}/18 PASS");
     }
 
     private sealed class Catalog(SoftwareCatalogResponse response)
