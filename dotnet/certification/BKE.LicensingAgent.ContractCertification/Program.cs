@@ -9,7 +9,15 @@ using BKE.LicensingAgent.Storage;
 using BKE.LicensingAgent.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-if (args is ["--certify-startup-peer"])\n{\n    await StandaloneStartupWindowsPeerCertification.RunAsync();\n    return;\n}\n\nawait StandaloneStartupAuthorityCertification.RunAsync();\n\n// Hermetic, pinned DS account-product LEASE HTTP consumer proof.
+if (args is ["--certify-startup-peer"])
+{
+    await StandaloneStartupWindowsPeerCertification.RunAsync();
+    return;
+}
+
+await StandaloneStartupAuthorityCertification.RunAsync();
+
+// Hermetic, pinned DS account-product LEASE HTTP consumer proof.
 await AccountProductLeaseHttpCertification.RunAsync();
 await AccountProductOpenGateCertification.RunAsync();
 AccountActivationModeCatalogCertification.Run();
