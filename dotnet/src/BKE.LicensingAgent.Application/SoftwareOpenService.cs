@@ -9,6 +9,15 @@ public interface ILocalProductLauncher
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Preproduction account-lease verification for Launcher-mediated OPEN only.
+/// Never accepts issuer public keys or authorization decisions from IPC.
+/// </summary>
+public interface IAccountProductOpenLeaseGate
+{
+    Task<bool> VerifyFreshOpenAsync(string productId, CancellationToken cancellationToken);
+}
+
 public interface ISoftwareOpenService
 {
     Task<SoftwareOpenResponse> OpenAsync(
@@ -25,13 +34,16 @@ public sealed class SoftwareOpenService : ISoftwareOpenService
 {
     private readonly ISoftwareCatalogService _catalog;
     private readonly ILocalProductLauncher _launcher;
+    private readonly IAccountProductOpenLeaseGate? _leaseGate;
 
     public SoftwareOpenService(
         ISoftwareCatalogService catalog,
-        ILocalProductLauncher launcher)
+        ILocalProductLauncher launcher,
+        IAccountProductOpenLeaseGate? leaseGate = null)
     {
         _catalog = catalog;
         _launcher = launcher;
+        _leaseGate = leaseGate;
     }
 
     public async Task<SoftwareOpenResponse> OpenAsync(
@@ -122,6 +134,33 @@ public sealed class SoftwareOpenService : ISoftwareOpenService
                     "NOT_INSTALLED",
                     "The selected product is not installed on this machine.",
                     false));
+        }
+
+        // The preproduction gate never grants standalone rights by itself.
+        // Existing catalog and installed-inventory checks have already passed.
+        // Once enabled, failure cannot fall back to catalog-only execution.
+        if (_leaseGate is not null)
+        {
+            bool verified;
+            try
+            {
+                verified = await _leaseGate.VerifyFreshOpenAsync(
+                    request.ProductId, cancellationToken);
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                verified = false;
+            }
+            if (!verified)
+                return Response("FAILED", "account_lease_unavailable",
+                    Error("ACCOUNT_LEASE_UNAVAILABLE",
+                        "A fresh signed account-product lease could not be verified.",
+                        true));
         }
 
         LocalProductLaunchResult result;
