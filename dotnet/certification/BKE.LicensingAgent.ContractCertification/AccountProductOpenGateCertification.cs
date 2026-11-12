@@ -61,6 +61,65 @@ internal static class AccountProductOpenGateCertification
         Check(legacy.Status == "STARTED" && legacyLauncher.Calls == 1,
             "default-off preserves existing independent license-key workflow");
 
+        // Account-based launcher Open cannot borrow entitlements from
+        // a product whose SQL-owned activation mode is commercial key only.
+        var keyOnlyCatalog = new Catalog(new SoftwareCatalogResponse(
+            LocalAgentContract.SoftwareCatalogCapabilityId,
+            LocalAgentContract.SoftwareCatalogContractVersion,
+            "READY", [item with { ActivationMode = "LICENSE_KEY" }], null));
+        var keyOnlyLauncher = new Launcher();
+        var keyOnly = await new SoftwareOpenService(
+            keyOnlyCatalog, keyOnlyLauncher).OpenAsync(request, CancellationToken.None);
+        Check(keyOnly.Error?.Code == "LICENSE_KEY_REQUIRED" &&
+            keyOnlyLauncher.Calls == 0,
+            "LICENSE_KEY-only denies account Open even without optional JWS gate");
+
+        var keyOnlyProof = new Gate(true);
+        var keyOnlyProofLauncher = new Launcher();
+        var keyWithProof = await new SoftwareOpenService(
+            keyOnlyCatalog, keyOnlyProofLauncher, keyOnlyProof)
+            .OpenAsync(request, CancellationToken.None);
+        Check(keyWithProof.Error?.Code == "LICENSE_KEY_REQUIRED" &&
+            keyOnlyProof.Calls == 0 && keyOnlyProofLauncher.Calls == 0,
+            "LICENSE_KEY-only denies account Open before any JWS proof");
+
+        var invalidCatalog = new Catalog(new SoftwareCatalogResponse(
+            LocalAgentContract.SoftwareCatalogCapabilityId,
+            LocalAgentContract.SoftwareCatalogContractVersion,
+            "READY", [item with { ActivationMode = "AUTO" }], null));
+        var invalidLauncher = new Launcher();
+        var invalid = await new SoftwareOpenService(
+            invalidCatalog, invalidLauncher).OpenAsync(request, CancellationToken.None);
+        Check(invalid.Error?.Code == "ACTIVATION_MODE_INVALID" &&
+            invalidLauncher.Calls == 0,
+            "unknown activation mode cannot silently become EITHER");
+
+        var accountLauncher = new Launcher();
+        var account = await new SoftwareOpenService(
+            new Catalog(new SoftwareCatalogResponse(
+                LocalAgentContract.SoftwareCatalogCapabilityId,
+                LocalAgentContract.SoftwareCatalogContractVersion,
+                "READY", [item with { ActivationMode = "ACCOUNT" }], null)),
+            accountLauncher, new Gate(true))
+            .OpenAsync(request, CancellationToken.None);
+        Check(account.Status == "STARTED" && accountLauncher.Calls == 1,
+            "ACCOUNT-only succeeds through independently verified account proof");
+
+        var pluginKeyOnly = await new LauncherPluginAuthorizationService(
+            new Catalog(new SoftwareCatalogResponse(
+                LocalAgentContract.SoftwareCatalogCapabilityId,
+                LocalAgentContract.SoftwareCatalogContractVersion,
+                "READY", [item with {
+                    ExecutionType = "LAUNCHER_PLUGIN", ActivationMode = "LICENSE_KEY"
+                }], null))).AuthorizeAsync(
+                    new LauncherPluginAuthorizeRequest(
+                        "mode-gate-plugin", "bke-render-dock", "1.0.2"),
+                    CancellationToken.None);
+        Check(pluginKeyOnly.Status == "DENIED" &&
+            pluginKeyOnly.Reason == "license_key_required" &&
+            !pluginKeyOnly.Authorized,
+            "Launcher plugin account entitlement cannot bypass LICENSE_KEY-only mode");
+
         var wrongEntitlement = new Catalog(new SoftwareCatalogResponse(
             LocalAgentContract.SoftwareCatalogCapabilityId,
             LocalAgentContract.SoftwareCatalogContractVersion,
@@ -165,8 +224,8 @@ internal static class AccountProductOpenGateCertification
             installer.Contains("skipifsourcedoesntexist", StringComparison.Ordinal),
             "privileged installer owns optional public-only issuer payload");
 
-        if (passed != 18) throw new InvalidOperationException("Incomplete installed gate certification.");
-        Console.WriteLine($"Account-product installed OPEN gate certification: {passed}/18 PASS");
+        if (passed != 23) throw new InvalidOperationException("Incomplete installed gate certification.");
+        Console.WriteLine($"Account-product installed OPEN gate certification: {passed}/23 PASS");
     }
 
     private sealed class Catalog(SoftwareCatalogResponse response)
