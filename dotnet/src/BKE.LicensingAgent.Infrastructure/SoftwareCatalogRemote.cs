@@ -193,7 +193,7 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
         }
     }
 
-    private static IReadOnlyList<RemoteSoftwareCatalogItem> Parse(JsonElement root)
+    internal static IReadOnlyList<RemoteSoftwareCatalogItem> Parse(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -203,7 +203,8 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
         var rootKeys = root.EnumerateObject()
             .Select(property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
-        if (!rootKeys.SetEquals(["status", "account_id", "products"]) ||
+        if (root.EnumerateObject().Count() != 3 ||
+            !rootKeys.SetEquals(["status", "account_id", "products"]) ||
             RequiredString(root, "status", 32) != "ok")
         {
             throw new InvalidDataException("BKE software catalog response shape drifted.");
@@ -228,7 +229,7 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
             var keys = item.EnumerateObject()
                 .Select(property => property.Name)
                 .ToHashSet(StringComparer.Ordinal);
-            if (!keys.SetEquals([
+            if (item.EnumerateObject().Count() != 8 || !keys.SetEquals([
                     "product_id",
                     "display_name",
                     "summary",
@@ -254,7 +255,8 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
             var latestVersion = OptionalString(item, "latest_version", 128);
 
             if (installable &&
-                (!entitled || executionType is null || latestVersion is null))
+                (!entitled || activationMode == "LICENSE_KEY" ||
+                 executionType is null || latestVersion is null))
             {
                 throw new InvalidDataException(
                     "BKE software catalog marked an incomplete product installable.");
