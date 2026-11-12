@@ -220,6 +220,11 @@ public sealed class InstalledStandaloneStartupPolicyRegistry :
         return new InstalledStandaloneStartupPolicyRegistry(records);
     }
 
+    // Native Host wire tests are denial-only. Real installed runtime cannot
+    // construct this empty fixture because the factory is test-internal.
+    internal static InstalledStandaloneStartupPolicyRegistry
+        DenyAllForCertification() => new(Array.Empty<SignedInstallation>());
+
     public Task<TrustedStandaloneStartupInstallation?> ResolveVerifiedAsync(
         StandaloneStartupProcessEvidence peer, CancellationToken cancellationToken)
     {
