@@ -175,7 +175,7 @@ public sealed class StandaloneStartupAuthorizationService
                 return Deny("activation_policy_unavailable");
 
             string? provenCredential = null;
-            if (policy.ActivationMode is "ACCOUNT" or "EITHER" &&
+            if ((policy.ActivationMode is "ACCOUNT" or "EITHER") &&
                 await TryAccountAsync(installed, policy, cancellationToken))
                 provenCredential = "ACCOUNT";
 
