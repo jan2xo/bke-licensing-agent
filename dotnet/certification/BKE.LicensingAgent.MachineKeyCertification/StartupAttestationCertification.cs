@@ -189,9 +189,9 @@ internal static class StartupAttestationCertification
             Check(File.ReadAllBytes(privatePath).SequenceEqual(encrypted),
                 "corrupted protected identity remains untouched for investigation");
 
-            if (count != 17)
-                throw new InvalidOperationException($"Incomplete Windows startup attestation: {count}/17");
-            Console.WriteLine("BKE privileged startup machine attestation certification: PASS 17/17");
+            if (count != 18)
+                throw new InvalidOperationException($"Incomplete Windows startup attestation: {count}/18");
+            Console.WriteLine("BKE privileged startup machine attestation certification: PASS 18/18");
         }
         finally
         {
