@@ -13,13 +13,13 @@ Add **certification-only, fail-closed** proof tooling for native TPM 2.0 Windows
 
 ## Certification / ownership
 - **Primary owner:** Agent preproduction native machine-trust hardware proof.
-- **Required before merge:** `contracts` exact-head compilation/contract guard; targeted `windows-x64` only if the current implementation materially changes the native payload. This wave is certification-only; production runtime, installer and DS contracts are untouched.
+- **Required before merge:** `contracts windows-x64` at exact PR head: compile the probe, guard the manual workflow, run native Windows **software-KSP rejection** without creating any TPM key, and preserve existing native payload proof. This wave is certification-only; production runtime, installer and DS contracts remain untouched.
 - **Not required:** `installer rollback acquisition utm-trust startup-handshake self-update fraction-lease preflight` because no installed runtime trust or packaging behavior changes.
 - **Hardware acceptance:** A separate **manual main-only** self-hosted Windows/TPM run is required after the source probe is merged. `contracts` is NOT actual TPM evidence. Fail the hardware job if Windows TPM isn't present/ready, CNG Platform key cannot be created/reopened, nonexportability fails, or a signature is forged. No fallback to DPAPI. A trustworthy human must validate the hardware/runner context; hosted CI cannot supply it.
 - **Cross-repo:** reuse fixed DS source only. No DS mutation, ES256 enrollment, algorithm downgrade or imported signing material.
 
 ## Acceptance classification
-- Source+CI compilation PASS = probe implemented only.
+- Source + Windows software-KSP denial CI PASS = strict probe implemented and its **non-TPM rejection behavior** proven; still NOT hardware acceptance.
 - Hardware CNG Platform machine key creation/open/sign/verify PASS on a separately approved real TPM runner = **local TPM-backed signing proof**, not manufacturer/EK/AIK remote attestation.
 - Full installed machine proof → DS two-admin enrollment/ES256 v2 → signed DS policy → product direct EXE authorization = **separate cross-repo wave**, still BLOCKED.
 
