@@ -57,6 +57,7 @@ internal static class StandaloneStartupWindowsPeerCertification
             "Changed PID-generation start time accepted");
 
         client.Dispose();
+        server.Disconnect();
         Require(await attestor.ObserveConnectedPeerAsync(deadline.Token) is null,
             "Disconnected pipe still had startup process authority");
 
