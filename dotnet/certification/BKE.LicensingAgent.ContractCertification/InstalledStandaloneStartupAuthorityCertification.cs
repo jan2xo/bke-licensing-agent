@@ -246,9 +246,9 @@ internal static class InstalledStandaloneStartupAuthorityCertification
                 "privileged installer owns optional signed policy delivery");
 
             Console.WriteLine($"Installed standalone startup signature/audit: {passed} PASS");
-            if (passed != 27)
+            if (passed != 29)
                 throw new InvalidOperationException(
-                    $"Incomplete signed startup trust test matrix: {passed}/27");
+                    $"Incomplete signed startup trust test matrix: {passed}/29");
         }
         finally
         {
