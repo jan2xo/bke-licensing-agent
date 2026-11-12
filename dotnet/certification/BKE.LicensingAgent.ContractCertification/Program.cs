@@ -16,6 +16,7 @@ if (args is ["--certify-startup-peer"])
 }
 
 await StandaloneStartupAuthorityCertification.RunAsync();
+await InstalledStandaloneStartupAuthorityCertification.RunAsync();
 
 // Hermetic, pinned DS account-product LEASE HTTP consumer proof.
 await AccountProductLeaseHttpCertification.RunAsync();
