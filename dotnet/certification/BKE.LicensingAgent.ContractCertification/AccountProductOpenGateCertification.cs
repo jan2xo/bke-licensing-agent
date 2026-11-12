@@ -24,7 +24,7 @@ internal static class AccountProductOpenGateCertification
 
         var item = new SoftwareCatalogItem(
             "bke-render-dock", "Render Dock", "Standalone", "STANDALONE",
-            true, true, "INSTALLED", "1.0.2", "1.0.2");
+            true, true, "INSTALLED", "1.0.2", "1.0.2", "EITHER");
         var catalog = new Catalog(new SoftwareCatalogResponse(
             LocalAgentContract.SoftwareCatalogCapabilityId,
             LocalAgentContract.SoftwareCatalogContractVersion,
