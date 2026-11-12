@@ -1,0 +1,74 @@
+name: PREPRODUCTION - Manual TPM Machine-Store Evidence
+
+# Manually dispatch ONLY after an isolated, approved physical TPM2 Windows
+# machine with no production material is registered under the runner label.
+# DO NOT execute unreviewed PR sources on a privileged self-hosted machine.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-startup-tpm-hardware-main
+  cancel-in-progress: false
+
+jobs:
+  machine-tpm:
+    name: Hardware-only machine-scope TPM ES256 (not remote attestation)
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, windows, x64, bke-disposable-tpm2]
+    environment: bke-disposable-tpm-review
+    timeout-minutes: 20
+    env:
+      BKE_ENVIRONMENT: certification
+      BKE_TPM_HARDWARE_CERTIFICATION_ENABLED: '1'
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Assert current approved main and Windows TPM2 availability
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw "Hardware proof must dispatch on main" }
+          if ((git rev-parse HEAD).Trim() -ne $env:SOURCE_SHA) { throw "Exact-source SHA drift" }
+          $tpm = Get-Tpm -ErrorAction Stop
+          if (!$tpm.TpmPresent -or !$tpm.TpmReady) {
+            throw "TPM_MACHINE_HARDWARE_UNAVAILABLE: no ready TPM; no software fallback"
+          }
+          $keyName = 'BKE-PREPRODUCTION-STARTUP-TPM-' + [Guid]::NewGuid().ToString('N').ToUpperInvariant()
+          $evidence = Join-Path $env:RUNNER_TEMP ('bke-tpm-' + $env:GITHUB_RUN_ID + '.json')
+          "BKE_TPM_PROOF_KEY_NAME=$keyName" >> $env:GITHUB_ENV
+          "BKE_TPM_PROOF_FILE=$evidence" >> $env:GITHUB_ENV
+          Write-Host "PASS: ready Windows TPM reported. This alone is NOT hardware provenance or remote attestation."
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Create unique hardware-only nonexportable machine P-256 key
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.StartupTpmHardwareCertification/BKE.LicensingAgent.StartupTpmHardwareCertification.csproj --configuration Release -- create "$env:BKE_TPM_PROOF_KEY_NAME" "$env:BKE_TPM_PROOF_FILE" "$env:SOURCE_SHA"
+          if ($LASTEXITCODE -ne 0) { throw "Native machine TPM create refused; never use software fallback" }
+      - name: Reopen the SAME persistent TPM key from independent process
+        shell: pwsh
+        run: |
+          dotnet run --project dotnet/certification/BKE.LicensingAgent.StartupTpmHardwareCertification/BKE.LicensingAgent.StartupTpmHardwareCertification.csproj --configuration Release -- verify "$env:BKE_TPM_PROOF_KEY_NAME" "$env:BKE_TPM_PROOF_FILE" "$env:SOURCE_SHA"
+          if ($LASTEXITCODE -ne 0) { throw "Nonexportable machine TPM re-open/sign/negative checks failed" }
+      - name: Upload nonsecret provider + exact-SHA evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-machine-tpm-public-evidence-${{ github.sha }}
+          path: ${{ env.BKE_TPM_PROOF_FILE }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Delete ONLY the verified disposable machine CNG key
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:BKE_TPM_PROOF_FILE -and (Test-Path -LiteralPath $env:BKE_TPM_PROOF_FILE)) {
+            dotnet run --project dotnet/certification/BKE.LicensingAgent.StartupTpmHardwareCertification/BKE.LicensingAgent.StartupTpmHardwareCertification.csproj --configuration Release -- cleanup "$env:BKE_TPM_PROOF_KEY_NAME" "$env:BKE_TPM_PROOF_FILE" "$env:SOURCE_SHA"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to verify/remove test-only TPM key; manual investigation required" }
+          }

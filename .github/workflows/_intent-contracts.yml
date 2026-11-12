@@ -45,6 +45,7 @@ jobs:
           dotnet build dotnet/certification/BKE.LicensingAgent.RootCleanupCertification/BKE.LicensingAgent.RootCleanupCertification.csproj --configuration Release
           dotnet build dotnet/certification/BKE.LicensingAgent.FirstInstallCertification/BKE.LicensingAgent.FirstInstallCertification.csproj --configuration Release
           dotnet build dotnet/tools/BKE.LicensingAgent.ReleaseTooling/BKE.LicensingAgent.ReleaseTooling.csproj --configuration Release
+          dotnet build dotnet/certification/BKE.LicensingAgent.StartupTpmHardwareCertification/BKE.LicensingAgent.StartupTpmHardwareCertification.csproj --configuration Release
 
       - name: Run .NET contract certifications
         run: |

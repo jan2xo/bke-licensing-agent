@@ -19,6 +19,34 @@ if (args is ["--verify-startup-handshake", var verifiedInput])
 if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("Windows DPAPI runner is required for this certification.");
 
+// This exact candidate-source executable already runs inside the established
+// windows-x64 certification (FirstInstallCertification -> MachineKeyCertification).
+// Execute the hardware-only probe's SOFTWARE KSP denial safely on hosted CI;
+// do not create a physical TPM key or silently substitute DPAPI signing.
+using (var tpmSoftwareDenial = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+    FileName = "dotnet",
+    ArgumentList = {
+        "run", "--project",
+        "dotnet/certification/BKE.LicensingAgent.StartupTpmHardwareCertification/BKE.LicensingAgent.StartupTpmHardwareCertification.csproj",
+        "--configuration", "Release", "--", "selftest-software-deny"
+    },
+    RedirectStandardOutput = true, RedirectStandardError = true,
+    UseShellExecute = false, CreateNoWindow = true,
+    Environment = {
+        ["BKE_ENVIRONMENT"] = "certification",
+        ["BKE_TPM_HARDWARE_CERTIFICATION_ENABLED"] = "1",
+    }
+}) ?? throw new InvalidOperationException("Cannot run SOFTWARE KSP rejection proof.")) {
+    var output = tpmSoftwareDenial.StandardOutput.ReadToEnd();
+    var errors = tpmSoftwareDenial.StandardError.ReadToEnd();
+    tpmSoftwareDenial.WaitForExit();
+    if (tpmSoftwareDenial.ExitCode != 0 ||
+        !output.Contains("software-only CNG P-256 key strictly denied", StringComparison.Ordinal))
+        throw new InvalidOperationException(
+            "Agent SOFTWARE KSP was not rejected as TPM hardware proof: " + errors + output);
+    Console.WriteLine(output);
+}
+
 // Native privileged key custody and DS installation-attestation proof.
 StartupAttestationCertification.Run();
 

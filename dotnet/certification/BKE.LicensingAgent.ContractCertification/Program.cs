@@ -64,6 +64,7 @@ var expectedActiveWorkflowNames = new[]
     "dotnet-production-release-preflight.yml",
     "dotnet-signed-self-update.yml",
     "standalone-acquisition-certification.yml",
+    "startup-tpm-hardware.yml",
     "utm-disposable-target-trust.yml",
 }.OrderBy(name => name, StringComparer.Ordinal).ToArray();
 
