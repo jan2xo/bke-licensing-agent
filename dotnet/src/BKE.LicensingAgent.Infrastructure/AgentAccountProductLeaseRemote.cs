@@ -55,9 +55,15 @@ public sealed class AgentAccountProductLeaseRemote : IDisposable
         HttpMessageHandler? handler = null)
     {
         var binding = AgentMachineKeyEnrollmentRemote.Binding(trustedSession);
+        // The enrollment path owns new-key creation. A lease consumer must
+        // never mint a fresh machine identity when prior custody was lost.
+        var receipts = new WindowsDpapiEd25519MachineKeyStore(dataDirectory);
+        var hardware = new WindowsTpmEcdsaP256MachineKeyStore(dataDirectory);
+        if (!hardware.HasStoredIdentity && !receipts.HasStoredIdentity)
+            throw new InvalidDataException(
+                "No existing protected Agent machine key; enroll before leasing.");
         var signer = WindowsPreferredAgentMachineKey.Open(
             binding, dataDirectory, allowSoftwareFallback);
-        var receipts = new WindowsDpapiEd25519MachineKeyStore(dataDirectory);
         return new AgentAccountProductLeaseRemote(
             signer, AgentMachineKeyEnrollmentRemote.Binding,
             b => receipts.ReadReceipt(b, signer),
