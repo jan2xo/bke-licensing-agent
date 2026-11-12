@@ -1,0 +1,23 @@
+{
+  "protocol": "bke.agent-key-proof.v1",
+  "message_utf8": "bke.agent-key-proof.v1\nENROLL\n1d7dcd16-9bf1-471d-a5b8-831db0158917\n8f12967d-cb7f-42d6-b790-4c91f379e8ee\nagent-golden-session\ngolden-account\ngolden-user\ngolden-device\n-\n-\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "message_base64url": "YmtlLmFnZW50LWtleS1wcm9vZi52MQpFTlJPTEwKMWQ3ZGNkMTYtOWJmMS00NzFkLWE1YjgtODMxZGIwMTU4OTE3CjhmMTI5NjdkLWNiN2YtNDJkNi1iNzkwLTRjOTFmMzc5ZThlZQphZ2VudC1nb2xkZW4tc2Vzc2lvbgpnb2xkZW4tYWNjb3VudApnb2xkZW4tdXNlcgpnb2xkZW4tZGV2aWNlCi0KLQpBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWEdCa2FHeHdkSGg4",
+  "vectors": [
+    {
+      "algorithm": "EdDSA",
+      "signature_encoding": "rfc8032",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAJmYPV3bJF5hJXeS/9XC4kx4Krdp4QwGkZqEtSt73bgQ=\n-----END PUBLIC KEY-----\n",
+      "signature_base64url": "BiDiyhnnMeDmMPO6q5fzvDRFr9WcQL_-n-3sjCfPu3aTjUGuuas7T3X28WVhHpAnVQgOygUajJjZ8mgFKoOfAQ"
+    },
+    {
+      "algorithm": "ES256",
+      "signature_encoding": "ieee-p1363",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwPlgiRZA+xGjSfNh1zJTDt9INyvJ\nciRyJPZfryB/rrs0Os93ZcOJ6FegXewT7n8QnIwe7qraxtrerloC1fmr7A==\n-----END PUBLIC KEY-----\n",
+      "signature_base64url": "hp1izdNv_kg_bP6jmYGHpQVikC7JAvjhOyE67sFLB0pdRjGNf0hw6LDlWS8sWSMQ1By2YVDoXjNia3bcUCoRUQ"
+    }
+  ],
+  "negative": {
+    "es256_der_signature_base64url": "MEUCIQCGnWLN02_-SD9s_qOZgYelBWKQLskC-OE7ITruwUsHSgIgXUYxjX9IcOiw5VkvLFkjENQctmFQ6F4zYmt23FAqEVE",
+    "unsupported_p384_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEjtoynseaiHRzll1AgBj9zPK3H5wAg2Kj\nlIGwGYUWbe7q7JxmdhOWAzz+BRK/gwwVOe9DYkYf0/HMU44h2j9z8kmKPV1jS7ll\nltuSe+WmUYXmJQA85uyg7F4Glm/UFz/f\n-----END PUBLIC KEY-----\n"
+  }
+}

@@ -69,6 +69,7 @@ jobs:
             let requested;
             let digitalSolutionsSha = "";
             let librarySha = "";
+            let livePrHead = "";
 
             if (context.eventName === "issue_comment") {
               const association = context.payload.comment?.author_association ?? "NONE";
@@ -88,6 +89,7 @@ jobs:
                 pull_number: issue.number,
               });
               sourceSha = response.data.head.sha;
+              livePrHead = response.data.head.sha;
               requested = (context.payload.comment?.body ?? "")
                 .replace(/^\/certify\s+/i, "")
                 .trim();
@@ -138,18 +140,12 @@ jobs:
               core.setFailed("fraction-lease requires an exact library SHA via lib:<sha> or library_sha.");
               return;
             }
+            // PR comments execute from the trusted default-branch router.
+            // Refuse any stale/overridden source SHA for this cross-repository proof.
             if (unique.includes("fraction-lease") && context.eventName === "issue_comment" &&
-                sourceSha !== context.payload.pull_request?.head?.sha) {
-              // issue_comment does not include pull_request details; verify against fetched PR above instead.
-              const live = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.payload.issue.number,
-              });
-              if (sourceSha !== live.data.head.sha) {
-                core.setFailed("fraction-lease must certify the current exact PR head.");
-                return;
-              }
+                sourceSha !== livePrHead) {
+              core.setFailed("fraction-lease must certify the current exact PR head.");
+              return;
             }
 
             core.setOutput("source_sha", sourceSha);

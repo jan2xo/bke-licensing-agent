@@ -21,6 +21,16 @@ public interface IAccountSessionRemote
     Task RevokeAsync(string? sessionId, string? refreshToken, string? deviceCode, CancellationToken cancellationToken);
 }
 
+/// <summary>
+ /// Optional trusted Agent-owned key cleanup hook. This must execute before
+ /// the account refresh token is revoked or erased, while DS can still
+ /// authenticate terminal machine-key revocation.
+ /// </summary>
+public interface IAccountSessionKeyLifecycle
+{
+    Task RevokeBeforeLogoutAsync(ActiveAccountSessionState session, CancellationToken cancellationToken);
+}
+
 public interface IAccountSessionSecretStore
 {
     Task<AccountSessionStoredState?> ReadAsync(CancellationToken cancellationToken);
@@ -46,7 +56,8 @@ public sealed record ActiveAccountSessionState(
     string? SessionId,
     DateTimeOffset AccessTokenExpiresAt,
     DateTimeOffset RefreshTokenExpiresAt,
-    AccountSessionAccount Account) : AccountSessionStoredState;
+    AccountSessionAccount Account,
+    string? EnrollmentDeviceCode = null) : AccountSessionStoredState;
 
 public sealed record RemoteAccountSessionStart(
     string DeviceCode,
@@ -81,16 +92,19 @@ public sealed class AccountSessionService : IAccountSessionService
 
     private readonly IAccountSessionRemote _remote;
     private readonly IAccountSessionSecretStore _store;
+    private readonly IAccountSessionKeyLifecycle? _keyLifecycle;
     private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public AccountSessionService(
         IAccountSessionRemote remote,
         IAccountSessionSecretStore store,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IAccountSessionKeyLifecycle? keyLifecycle = null)
     {
         _remote = remote;
         _store = store;
+        _keyLifecycle = keyLifecycle;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -180,7 +194,8 @@ public sealed class AccountSessionService : IAccountSessionService
                         exchanged.SessionId,
                         now.Add(exchanged.ExpiresIn!.Value),
                         now.Add(exchanged.RefreshExpiresIn!.Value),
-                        exchanged.Account!);
+                        exchanged.Account!,
+                        request.HandoffCode);
                     await _store.WriteAsync(next, cancellationToken);
                     try
                     {
@@ -349,6 +364,31 @@ public sealed class AccountSessionService : IAccountSessionService
             var state = await _store.ReadAsync(cancellationToken);
             AccountSessionError? remoteError = null;
 
+            if (state is ActiveAccountSessionState activeForKey && _keyLifecycle is not null)
+            {
+                try
+                {
+                    // Never erase the only Agent bearer before DS confirms
+                    // machine-key revocation. A failed hook leaves the durable
+                    // account session intact for retry and explicit recovery.
+                    await _keyLifecycle.RevokeBeforeLogoutAsync(activeForKey, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    return new AccountSessionLogoutResponse(
+                        LocalAgentContract.AccountSessionCapabilityId,
+                        LocalAgentContract.AccountSessionContractVersion,
+                        "FAILED",
+                        Error("KEY_REVOCATION_PENDING",
+                            "Machine-key revocation is not confirmed. The Agent session remains protected for retry.",
+                            true));
+                }
+            }
+
             try
             {
                 switch (state)
@@ -449,7 +489,8 @@ public sealed class AccountSessionService : IAccountSessionService
                     poll.SessionId,
                     now.Add(poll.ExpiresIn!.Value),
                     now.Add(poll.RefreshExpiresIn!.Value),
-                    poll.Account!);
+                    poll.Account!,
+                    pending.DeviceCode);
                 await _store.WriteAsync(active, cancellationToken);
                 try
                 {
@@ -536,7 +577,8 @@ public sealed class AccountSessionService : IAccountSessionService
             refreshed.SessionId,
             now.Add(refreshed.ExpiresIn!.Value),
             now.Add(refreshed.RefreshExpiresIn!.Value),
-            refreshed.Account!);
+            refreshed.Account!,
+            active.EnrollmentDeviceCode);
         await _store.WriteAsync(next, cancellationToken);
         return StatusResponse("AUTHENTICATED", next.Account, null);
     }
