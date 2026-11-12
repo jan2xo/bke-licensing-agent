@@ -86,6 +86,17 @@ public sealed class LauncherPluginAuthorizationService
                 null);
         }
 
+        // A key-only product cannot inherit account authority through
+        // a Launcher plugin catalog entitlement.
+        if (product.ActivationMode is not ("ACCOUNT" or "EITHER"))
+        {
+            return Response(
+                "DENIED", false,
+                product.ActivationMode == "LICENSE_KEY"
+                    ? "license_key_required" : "activation_mode_unavailable",
+                null);
+        }
+
         if (!product.Entitled)
         {
             return Response(

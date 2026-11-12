@@ -193,7 +193,7 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
         }
     }
 
-    private static IReadOnlyList<RemoteSoftwareCatalogItem> Parse(JsonElement root)
+    internal static IReadOnlyList<RemoteSoftwareCatalogItem> Parse(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -203,7 +203,8 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
         var rootKeys = root.EnumerateObject()
             .Select(property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
-        if (!rootKeys.SetEquals(["status", "account_id", "products"]) ||
+        if (root.EnumerateObject().Count() != 3 ||
+            !rootKeys.SetEquals(["status", "account_id", "products"]) ||
             RequiredString(root, "status", 32) != "ok")
         {
             throw new InvalidDataException("BKE software catalog response shape drifted.");
@@ -228,11 +229,12 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
             var keys = item.EnumerateObject()
                 .Select(property => property.Name)
                 .ToHashSet(StringComparer.Ordinal);
-            if (!keys.SetEquals([
+            if (item.EnumerateObject().Count() != 8 || !keys.SetEquals([
                     "product_id",
                     "display_name",
                     "summary",
                     "execution_type",
+                    "activation_mode",
                     "entitled",
                     "installable",
                     "latest_version"]))
@@ -244,12 +246,17 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
             var displayName = RequiredString(item, "display_name", 256);
             var summary = RequiredString(item, "summary", 4096);
             var executionType = OptionalExecutionType(item, "execution_type");
+            var activationMode = RequiredString(item, "activation_mode", 16);
+            if (activationMode is not ("ACCOUNT" or "LICENSE_KEY" or "EITHER"))
+                throw new InvalidDataException(
+                    "Digital Solutions returned an unrecognized activation mode.");
             var entitled = RequiredBoolean(item, "entitled");
             var installable = RequiredBoolean(item, "installable");
             var latestVersion = OptionalString(item, "latest_version", 128);
 
             if (installable &&
-                (!entitled || executionType is null || latestVersion is null))
+                (!entitled || activationMode == "LICENSE_KEY" ||
+                 executionType is null || latestVersion is null))
             {
                 throw new InvalidDataException(
                     "BKE software catalog marked an incomplete product installable.");
@@ -262,7 +269,8 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
                 executionType,
                 entitled,
                 installable,
-                latestVersion));
+                latestVersion,
+                activationMode));
         }
 
         return result;

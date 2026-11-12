@@ -21,7 +21,8 @@ public sealed record SoftwareCatalogItem(
     [property: JsonPropertyName("installable")] bool Installable,
     [property: JsonPropertyName("state")] string State,
     [property: JsonPropertyName("latest_version"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LatestVersion,
-    [property: JsonPropertyName("installed_version"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InstalledVersion);
+    [property: JsonPropertyName("installed_version"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InstalledVersion,
+    [property: JsonPropertyName("activation_mode")] string ActivationMode);
 
 public sealed record SoftwareCatalogError(
     [property: JsonPropertyName("code")] string Code,

@@ -22,7 +22,8 @@ public sealed record RemoteSoftwareCatalogItem(
     string? ExecutionType,
     bool Entitled,
     bool Installable,
-    string? LatestVersion);
+    string? LatestVersion,
+    string ActivationMode);
 
 public sealed record LocalInstalledProduct(
     string ProductId,
@@ -142,6 +143,13 @@ public sealed class SoftwareCatalogService : ISoftwareCatalogService
                     true));
         }
 
+        // A missing or fabricated DS activation mode cannot be interpreted
+        // as EITHER. Account entitlements do not authorize license-key-only software.
+        if (remoteItems.Any(item => item.ActivationMode is not ("ACCOUNT" or "LICENSE_KEY" or "EITHER")))
+            return Response("FAILED", [],
+                Error("INVALID_ACTIVATION_MODE",
+                    "Digital Solutions returned an unrecognized product activation policy.", false));
+
         var items = remoteItems
             .Select(item => Merge(item, installed))
             .OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -168,7 +176,8 @@ public sealed class SoftwareCatalogService : ISoftwareCatalogService
             remote.Installable,
             state,
             remote.LatestVersion,
-            installedVersion);
+            installedVersion,
+            remote.ActivationMode);
     }
 
     private static string ResolveState(
