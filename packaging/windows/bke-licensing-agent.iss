@@ -49,6 +49,10 @@ Source: "..\..\dist\windows\privileged-payload\target-keys\*.pem"; DestDir: "{ap
 Source: "..\..\dist\windows\privileged-payload\target-policies\*.json"; DestDir: "{app}\provisioning\target-policies"; Flags: ignoreversion
 ; Phase 9 update-authority trust contains public verification keys only.
 Source: "..\..\dist\windows\update-authority-keys\*.json"; DestDir: "{app}\trust\update-authority-keys"; Flags: ignoreversion
+; Optional PREPRODUCTION public-only Agent account-product issuer bundle.
+; Privileged package/replacement/rollback owns this path, never user .env.
+; No production keys are generated or included by default.
+Source: "..\..\dist\windows\account-product-lease-keys\issuers.json"; DestDir: "{app}\trust\account-product-lease-keys"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Dirs]

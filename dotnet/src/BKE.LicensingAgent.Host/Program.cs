@@ -43,6 +43,38 @@ catch (Exception exception)
     return 70;
 }
 
+// Preproduction account-product JWS execution is opt-in and requires
+// administrator-installed, public-only issuer trust. Production rejects even
+// an accidentally enabled setting; no silent catalog-only fallback.
+var accountLeaseGateFlag =
+    Environment.GetEnvironmentVariable("BKE_ACCOUNT_PRODUCT_LEASE_GATE_ENABLED") ?? "0";
+if (accountLeaseGateFlag is not ("0" or "1"))
+{
+    Console.Error.WriteLine("Account-product lease gate setting must be 0 or 1.");
+    return 78;
+}
+IReadOnlyDictionary<string, AccountProductLeaseTrustedKey>? installedLeaseKeys = null;
+if (accountLeaseGateFlag == "1")
+{
+    if (runtimeEnvironment.Name == AgentRuntimeEnvironmentLoader.ProductionEnvironment)
+    {
+        Console.Error.WriteLine(
+            "Account-product execution JWS gate is disabled unconditionally in production.");
+        return 78;
+    }
+    try
+    {
+        installedLeaseKeys = AccountProductLeaseInstalledTrust.LoadInstalled(
+            runtimeEnvironment.Name);
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine(
+            $"Installed account-product issuer trust bootstrap failed: {exception.Message}");
+        return 78;
+    }
+}
+
 var port = LocalAgentContract.DefaultPort;
 var configuredPort = Environment.GetEnvironmentVariable("BKE_AGENT_PORT");
 if (!string.IsNullOrWhiteSpace(configuredPort))
@@ -257,12 +289,24 @@ builder.Services.AddSingleton<ISoftwareRepairService>(services => new SoftwareRe
     services.GetRequiredService<ILocalProductInventory>(),
     services.GetRequiredService<IStandaloneRepairAuthorizationRemote>(),
     services.GetRequiredService<IStandaloneSoftwareRepairer>()));
+if (installedLeaseKeys is not null)
+{
+    var trustedKeys = installedLeaseKeys;
+    builder.Services.AddSingleton<IAccountProductOpenLeaseGate>(services =>
+        new InstalledAccountProductOpenLeaseGate(
+            services.GetRequiredService<IAccountSessionService>(),
+            services.GetRequiredService<IAccountSessionSecretStore>(),
+            trustedKeys));
+}
 builder.Services.AddSingleton<SqliteProductLauncher>();
 builder.Services.AddSingleton<ILocalProductLauncher>(services =>
     services.GetRequiredService<SqliteProductLauncher>());
 builder.Services.AddSingleton<ISoftwareOpenService>(services => new SoftwareOpenService(
     services.GetRequiredService<ISoftwareCatalogService>(),
-    services.GetRequiredService<ILocalProductLauncher>()));
+    services.GetRequiredService<ILocalProductLauncher>(),
+    installedLeaseKeys is null
+        ? null
+        : services.GetRequiredService<IAccountProductOpenLeaseGate>()));
 builder.Services.AddSingleton<ISoftwareRemoveService>(services => new SoftwareRemoveService(
     services.GetRequiredService<IAccountSessionService>(),
     services.GetRequiredService<ILocalProductInventory>(),
