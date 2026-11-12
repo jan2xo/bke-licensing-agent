@@ -70,12 +70,12 @@ internal static class AccountActivationModeCatalogCertification
         Reject(Root(Item("EITHER", true).Replace(
             "\"product_id\":\"bke-render-dock\"",
             "\"product_id\":\"foreign\",\"product_id\":\"bke-render-dock\"",
-            StringComparison.Ordinal),
+            StringComparison.Ordinal)),
             "duplicate product identity rejected");
         Reject(Root(Item("EITHER", true).Replace(
             "\"summary\":\"Standalone\"",
             "\"summary\":\"Standalone\",\"untrusted_extra\":true",
-            StringComparison.Ordinal),
+            StringComparison.Ordinal)),
             "extra catalog authority field rejected");
 
         if (passed != 10)
