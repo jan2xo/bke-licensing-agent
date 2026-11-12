@@ -80,6 +80,20 @@ internal static class StartupAttestationCertification
                 new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         }
 
+        Check(!StartupMachineAttestor.AllowsNonproductionOrigin(null),
+            "missing DS source is never a signing authority");
+        Check(!StartupMachineAttestor.AllowsNonproductionOrigin("https://jl-bke.com"),
+            "production DS origin is rejected even with preproduction environment");
+        Check(!StartupMachineAttestor.AllowsNonproductionOrigin("https://api.jl-bke.com"),
+            "production DS subdomain is rejected");
+        Check(!StartupMachineAttestor.AllowsNonproductionOrigin("http://remote.example.test"),
+            "remote cleartext DS cannot receive installer attestation");
+        Check(StartupMachineAttestor.AllowsNonproductionOrigin("https://disposable.example.test"),
+            "explicit HTTPS nonproduction DS is eligible");
+        Check(StartupMachineAttestor.AllowsNonproductionOrigin("http://127.0.0.1:3000") &&
+              !StartupMachineAttestor.AllowsNonproductionOrigin("https://user@staging.example.test"),
+            "loopback testing only and credentialed DS origins rejected");
+
         try
         {
             Directory.CreateDirectory(productRoot);
@@ -189,9 +203,9 @@ internal static class StartupAttestationCertification
             Check(File.ReadAllBytes(privatePath).SequenceEqual(encrypted),
                 "corrupted protected identity remains untouched for investigation");
 
-            if (count != 18)
-                throw new InvalidOperationException($"Incomplete Windows startup attestation: {count}/18");
-            Console.WriteLine("BKE privileged startup machine attestation certification: PASS 18/18");
+            if (count != 24)
+                throw new InvalidOperationException($"Incomplete Windows startup attestation: {count}/24");
+            Console.WriteLine("BKE privileged startup machine attestation certification: PASS 24/24");
         }
         finally
         {
