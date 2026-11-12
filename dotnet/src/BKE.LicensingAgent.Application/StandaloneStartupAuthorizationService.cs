@@ -27,7 +27,8 @@ public sealed record TrustedStandaloneStartupInstallation(
     string Version,
     string InstallationId,
     string ImagePath,
-    string ImageSha256);
+    string ImageSha256,
+    string AllowedUserSid);
 
 /// <summary>
 /// DS SQL activation mode or a separately verified signed offline projection.
@@ -178,7 +179,8 @@ public sealed class StandaloneStartupAuthorizationService
                 await TryAccountAsync(installed, policy, cancellationToken))
                 provenCredential = "ACCOUNT";
 
-            if (provenCredential is null && policy.ActivationMode is "LICENSE_KEY" or "EITHER" &&
+            if (provenCredential is null &&
+                (policy.ActivationMode is "LICENSE_KEY" or "EITHER") &&
                 await TryCommercialKeyAsync(installed, cancellationToken))
                 provenCredential = "LICENSE_KEY";
 
@@ -285,7 +287,8 @@ public sealed class StandaloneStartupAuthorizationService
             !DigestPattern.IsMatch(peer.ImageSha256) ||
             string.IsNullOrWhiteSpace(peer.UserSid) ||
             !peer.UserSid.StartsWith("S-1-", StringComparison.Ordinal) ||
-            now - peer.ObservedAt is < TimeSpan.Zero or > AttestationWindow)
+            now - peer.ObservedAt < TimeSpan.Zero ||
+            now - peer.ObservedAt > AttestationWindow)
             return false;
 
         var started = new DateTimeOffset(
@@ -304,6 +307,8 @@ public sealed class StandaloneStartupAuthorizationService
         string.Equals(installed.ImagePath, peer.ImagePath,
             StringComparison.OrdinalIgnoreCase) &&
         string.Equals(installed.ImageSha256, peer.ImageSha256,
+            StringComparison.Ordinal) &&
+        string.Equals(installed.AllowedUserSid, peer.UserSid,
             StringComparison.Ordinal) &&
         DigestPattern.IsMatch(installed.ImageSha256);
 
