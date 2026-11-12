@@ -32,7 +32,7 @@ internal static class StandaloneStartupAuthorityCertification
         }
 
         await Case("ACCOUNT requires authenticated catalog and fresh JWS",
-            f => { f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true; }, true,
+            f => { f.SetMode("ACCOUNT"); f.Account.Allow = true; }, true,
             "ACCOUNT", f => {
                 Must(f.Account.Calls == 1 && f.Key.Calls == 0 &&
                     f.Audit.Calls == 1 && f.Peer.RecheckCalls == 1,
@@ -41,7 +41,7 @@ internal static class StandaloneStartupAuthorityCertification
 
         await Case("LICENSE_KEY works independently without account/Google",
             f => {
-                f.Mode.Mode = "LICENSE_KEY";
+                f.SetMode("LICENSE_KEY");
                 f.Key.Allow = true;
                 f.Catalog.Response = f.Catalog.Response with {
                     Status = "AUTH_REQUIRED", Items = []
@@ -52,14 +52,14 @@ internal static class StandaloneStartupAuthorityCertification
             });
 
         await Case("explicit EITHER accepts the fresh account proof",
-            f => { f.Mode.Mode = "EITHER"; f.Account.Allow = true; },
+            f => { f.SetMode("EITHER"); f.Account.Allow = true; },
             true, "ACCOUNT", f => {
                 Must(f.Key.Calls == 0, "EITHER borrowed the key route");
             });
 
         await Case("explicit EITHER accepts signed key with offline account",
             f => {
-                f.Mode.Mode = "EITHER";
+                f.SetMode("EITHER");
                 f.Catalog.Response = f.Catalog.Response with {
                     Status = "AUTH_REQUIRED", Items = []
                 };
@@ -67,21 +67,21 @@ internal static class StandaloneStartupAuthorityCertification
             }, true, "LICENSE_KEY");
 
         await Case("LICENSE_KEY never accepts an account entitlement/JWS",
-            f => { f.Mode.Mode = "LICENSE_KEY"; f.Account.Allow = true; },
+            f => { f.SetMode("LICENSE_KEY"); f.Account.Allow = true; },
             false, inspect: f => {
                 Must(f.Account.Calls == 0 && f.Key.Calls == 1,
                     "key-only accepted account credential");
             });
 
         await Case("ACCOUNT never borrows a commercial signed key",
-            f => { f.Mode.Mode = "ACCOUNT"; f.Key.Allow = true; },
+            f => { f.SetMode("ACCOUNT"); f.Key.Allow = true; },
             false, inspect: f => Must(f.Key.Calls == 0,
                 "account-only attempted key fallback"));
 
         await Case("ACCOUNT unavailable JWS fails closed",
             f => f.Mode.Mode = "ACCOUNT", false);
         await Case("unknown mode never becomes EITHER",
-            f => { f.Mode.Mode = "UNKNOWN"; f.Key.Allow = true; f.Account.Allow = true; },
+            f => { f.SetMode("UNKNOWN"); f.Key.Allow = true; f.Account.Allow = true; },
             false, inspect: f => Must(f.Key.Calls == 0 && f.Account.Calls == 0,
                 "unknown mode reached credentials"));
         await Case("missing mode never becomes EITHER",
@@ -119,18 +119,18 @@ internal static class StandaloneStartupAuthorityCertification
                 ObservedAt = DateTimeOffset.UtcNow.AddMinutes(-5)
             }; f.Key.Allow = true; }, false);
         await Case("peer substitution after signing denies",
-            f => { f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true; f.Peer.Live = false; },
+            f => { f.SetMode("ACCOUNT"); f.Account.Allow = true; f.Peer.Live = false; },
             false, inspect: f => Must(f.Audit.Calls == 0,
                 "changed process reached audit"));
         await Case("audit failure blocks key credential",
-            f => { f.Mode.Mode = "LICENSE_KEY"; f.Key.Allow = true; f.Audit.Allow = false; },
+            f => { f.SetMode("LICENSE_KEY"); f.Key.Allow = true; f.Audit.Allow = false; },
             false);
         await Case("audit failure blocks account credential",
-            f => { f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true; f.Audit.Allow = false; },
+            f => { f.SetMode("ACCOUNT"); f.Account.Allow = true; f.Audit.Allow = false; },
             false);
         await Case("catalog entitlement false denies ACCOUNT despite JWS",
             f => {
-                f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true;
+                f.SetMode("ACCOUNT"); f.Account.Allow = true;
                 f.Catalog.Response = Fixture.Ready(f.Catalog.Response.Items[0] with {
                     Entitled = false, State = "INSTALLED_NOT_ENTITLED"
                 });
@@ -138,28 +138,28 @@ internal static class StandaloneStartupAuthorityCertification
                 "unentitled account reached signer"));
         await Case("catalog version mismatch denies ACCOUNT",
             f => {
-                f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true;
+                f.SetMode("ACCOUNT"); f.Account.Allow = true;
                 f.Catalog.Response = Fixture.Ready(f.Catalog.Response.Items[0] with {
                     InstalledVersion = "1.0.2"
                 });
             }, false);
         await Case("catalog activation-mode mismatch denies ACCOUNT",
             f => {
-                f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true;
+                f.SetMode("ACCOUNT"); f.Account.Allow = true;
                 f.Catalog.Response = Fixture.Ready(f.Catalog.Response.Items[0] with {
                     ActivationMode = "LICENSE_KEY"
                 });
             }, false);
         await Case("duplicate catalog identity denies",
             f => {
-                f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true;
+                f.SetMode("ACCOUNT"); f.Account.Allow = true;
                 f.Catalog.Response = f.Catalog.Response with {
                     Items = [f.Catalog.Response.Items[0], f.Catalog.Response.Items[0]]
                 };
             }, false);
         await Case("plugin execution never grants standalone startup",
             f => {
-                f.Mode.Mode = "ACCOUNT"; f.Account.Allow = true;
+                f.SetMode("ACCOUNT"); f.Account.Allow = true;
                 f.Catalog.Response = Fixture.Ready(f.Catalog.Response.Items[0] with {
                     ExecutionType = "LAUNCHER_PLUGIN"
                 });
@@ -167,9 +167,9 @@ internal static class StandaloneStartupAuthorityCertification
         await Case("commercial signature/lease denial fails closed",
             f => f.Mode.Mode = "LICENSE_KEY", false);
         await Case("Agent commercial authority exception fails closed",
-            f => { f.Mode.Mode = "LICENSE_KEY"; f.Key.Throw = true; }, false);
+            f => { f.SetMode("LICENSE_KEY"); f.Key.Throw = true; }, false);
         await Case("Agent account authority exception fails closed",
-            f => { f.Mode.Mode = "ACCOUNT"; f.Account.Throw = true; }, false);
+            f => { f.SetMode("ACCOUNT"); f.Account.Throw = true; }, false);
         await Case("trusted mode authority exception fails closed",
             f => { f.Mode.Throw = true; f.Key.Allow = true; }, false);
         await Case("production environment cannot start the new gate",
@@ -182,7 +182,7 @@ internal static class StandaloneStartupAuthorityCertification
                 "unapproved env inspected a peer"));
 
         var replay = new Fixture();
-        replay.Mode.Mode = "LICENSE_KEY";
+        replay.SetMode("LICENSE_KEY");
         replay.Key.Allow = true;
         var service = replay.Service();
         var one = await service.AuthorizeConnectedPeerAsync(CancellationToken.None);
@@ -224,6 +224,16 @@ internal static class StandaloneStartupAuthorityCertification
         internal readonly FakeKey Key = new();
         internal readonly FakeAudit Audit = new();
         internal string Environment = "certification";
+
+        internal void SetMode(string mode)
+        {
+            Mode.Mode = mode;
+            Catalog.Response = Catalog.Response with {
+                Items = Catalog.Response.Items.Select(item => item with {
+                    ActivationMode = mode
+                }).ToArray()
+            };
+        }
 
         internal StandaloneStartupAuthorizationService Service() => new(
             Peer, Registry, Mode, Catalog, Key, Account, Audit, Environment);
