@@ -5,6 +5,17 @@ using BKE.LicensingAgent.Infrastructure;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Signers;
 
+if (args is ["--emit-startup-handshake", var fixtureOutput])
+{
+    StartupHandshakeCertification.Emit(fixtureOutput);
+    return;
+}
+if (args is ["--verify-startup-handshake", var verifiedInput])
+{
+    await StartupHandshakeCertification.VerifyAsync(verifiedInput);
+    return;
+}
+
 if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("Windows DPAPI runner is required for this certification.");
 
