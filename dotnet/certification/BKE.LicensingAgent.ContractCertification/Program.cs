@@ -673,6 +673,7 @@ Require(JsonName<StoreCheckoutStatusResponse>(nameof(StoreCheckoutStatusResponse
 Require(JsonName<StoreCheckoutStatusResponse>(nameof(StoreCheckoutStatusResponse.CheckoutUrl)) == "checkout_url", "Store checkout-status checkout_url wire name mismatch");
 Require(JsonName<StoreCheckoutStatusResponse>(nameof(StoreCheckoutStatusResponse.PaidAt)) == "paid_at", "Store checkout-status paid_at wire name mismatch");
 Require(JsonName<SoftwareCatalogRequest>(nameof(SoftwareCatalogRequest.CorrelationId)) == "correlation_id", "software-catalog correlation_id wire name mismatch");
+Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ActivationMode)) == "activation_mode", "software catalog activation_mode wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.ExecutionType)) == "execution_type", "software-catalog execution_type wire name mismatch");
 Require(JsonName<SoftwareCatalogItem>(nameof(SoftwareCatalogItem.InstalledVersion)) == "installed_version", "software-catalog installed_version wire name mismatch");
 Require(JsonName<LauncherPluginAuthorizeRequest>(nameof(LauncherPluginAuthorizeRequest.CorrelationId)) == "correlation_id", "launcher-plugin authorization correlation_id wire name mismatch");
@@ -2911,7 +2912,7 @@ static async Task CertifySoftwareCatalogBoundary()
             "STANDALONE",
             true,
             true,
-            "2.0.0"),
+            "2.0.0", "EITHER"),
         new RemoteSoftwareCatalogItem(
             "bke-plugin-tool",
             "Plugin Tool",
@@ -2919,7 +2920,7 @@ static async Task CertifySoftwareCatalogBoundary()
             "LAUNCHER_PLUGIN",
             false,
             false,
-            "1.0.0"),
+            "1.0.0", "EITHER"),
     ]);
     var inventory = new FakeLocalProductInventory(
         new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
@@ -2981,7 +2982,7 @@ static async Task CertifyLauncherPluginAuthorizationBoundary()
             "LAUNCHER_PLUGIN",
             true,
             true,
-            "1.2.3"),
+            "1.2.3", "EITHER"),
         new RemoteSoftwareCatalogItem(
             "bke-plugin-locked",
             "Locked Plugin",
@@ -2989,7 +2990,7 @@ static async Task CertifyLauncherPluginAuthorizationBoundary()
             "LAUNCHER_PLUGIN",
             false,
             false,
-            "1.0.0"),
+            "1.0.0", "EITHER"),
         new RemoteSoftwareCatalogItem(
             "bke-render-dock",
             "Render Dock",
@@ -2997,7 +2998,7 @@ static async Task CertifyLauncherPluginAuthorizationBoundary()
             "STANDALONE",
             true,
             true,
-            "2.0.0"),
+            "2.0.0", "EITHER"),
     ]);
     var catalog = new SoftwareCatalogService(
         new FakeAuthenticatedAccountSessionService(account),
@@ -3084,7 +3085,7 @@ static async Task CertifyLauncherPluginAuthorizationBoundary()
                 "LAUNCHER_PLUGIN",
                 true,
                 true,
-                "1.0.0"),
+                "1.0.0", "EITHER"),
             new RemoteSoftwareCatalogItem(
                 "bke-plugin-duplicate",
                 "Plugin Duplicate B",
@@ -3092,7 +3093,7 @@ static async Task CertifyLauncherPluginAuthorizationBoundary()
                 "LAUNCHER_PLUGIN",
                 true,
                 true,
-                "1.0.0"),
+                "1.0.0", "EITHER"),
         ]),
         new FakeLocalProductInventory(
             new Dictionary<string, LocalInstalledProduct>(
@@ -3490,7 +3491,7 @@ static async Task CertifySoftwareOpenBoundary()
             "STANDALONE",
             true,
             true,
-            "1.0.2"),
+            "1.0.2", "EITHER"),
     ]);
     var inventory = new FakeLocalProductInventory(
         new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
@@ -3535,7 +3536,7 @@ static async Task CertifySoftwareOpenBoundary()
             "STANDALONE",
             false,
             false,
-            "1.0.2"),
+            "1.0.2", "EITHER"),
     ]);
     var deniedCatalog = new SoftwareCatalogService(
         new FakeAuthenticatedAccountSessionService(account),
@@ -3567,7 +3568,7 @@ static async Task CertifySoftwareOpenBoundary()
             "LAUNCHER_PLUGIN",
             true,
             true,
-            "1.0.0"),
+            "1.0.0", "EITHER"),
     ]);
     var pluginInventory = new FakeLocalProductInventory(
         new Dictionary<string, LocalInstalledProduct>(StringComparer.Ordinal)
