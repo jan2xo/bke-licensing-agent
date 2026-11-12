@@ -95,7 +95,7 @@ public sealed class StandaloneStartupAuthorizationService
     private static readonly TimeSpan StartupWindow = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan AttestationWindow = TimeSpan.FromSeconds(5);
     private readonly SemaphoreSlim _singleFlight = new(1, 1);
-    private readonly HashSet<string> _grantedProcessIdentities = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _grantedProcessIdentities = new(StringComparer.Ordinal);
     private readonly IStandaloneStartupPeerAttestor _peer;
     private readonly ITrustedStandaloneStartupRegistry _registry;
     private readonly ITrustedStandaloneStartupPolicySource _policies;
@@ -158,9 +158,16 @@ public sealed class StandaloneStartupAuthorizationService
             if (peer is null || !ValidPeer(peer, now))
                 return Deny("unverified_peer");
 
+            // Keep the replay cache bounded to the possible startup window.
+            // The single-flight lock prevents concurrent duplicate grants.
+            foreach (var expired in _grantedProcessIdentities
+                .Where(x => now - x.Value > StartupWindow)
+                .Select(x => x.Key).ToArray())
+                _grantedProcessIdentities.Remove(expired);
+
             // A PID is not a stable identity without the kernel start time.
             var replayKey = $"{peer.ProcessId}:{peer.StartedUtcTicks}:{peer.UserSid}";
-            if (_grantedProcessIdentities.Contains(replayKey))
+            if (_grantedProcessIdentities.ContainsKey(replayKey))
                 return Deny("startup_replay");
 
             var installed = await _registry.ResolveVerifiedAsync(peer, cancellationToken);
@@ -197,7 +204,7 @@ public sealed class StandaloneStartupAuthorizationService
                     installed, peer, provenCredential, cancellationToken))
                 return Deny("audit_unavailable");
 
-            _grantedProcessIdentities.Add(replayKey);
+            _grantedProcessIdentities.Add(replayKey, now);
             return new StandaloneStartupDecision(true, "authorized", provenCredential);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
