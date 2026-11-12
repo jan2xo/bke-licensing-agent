@@ -6,5 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/BKE.LicensingAgent.Infrastructure/BKE.LicensingAgent.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/BKE.LicensingAgent.Provisioner/BKE.LicensingAgent.Provisioner.csproj" />
   </ItemGroup>
 </Project>
