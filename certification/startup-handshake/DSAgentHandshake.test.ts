@@ -87,7 +87,7 @@ describe.runIf(eligible)("actual .NET Agent → disposable DS SQL → .NET Agent
     expect(fixture?.candidate).not.toContain("PRIVATE KEY");
     expect(fixture?.proof).not.toContain("PRIVATE KEY");
     expect(attestation?.kid).toBe(candidate?.kid);
-    expect(payload?.image_path).toMatch(/^C:\\\\Program Files\\\\BKE Digital Solutions\\\\Render Dock\\\\RENDER DOCK\.exe$/);
+    expect(payload?.image_path).toBe(String.raw`C:\Program Files\BKE Digital Solutions\Render Dock\RENDER DOCK.exe`);
     const der = Buffer.from(candidate!.public_key_pem.replace(
       /-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\s/g, ""), "base64");
     expect(createHash("sha256").update(der).digest("hex")).toBe(fixture!.fingerprint);
