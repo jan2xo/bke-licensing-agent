@@ -29,14 +29,29 @@ internal static class Program
         TargetPolicyV1Fields.Append("uninstall"),
         StringComparer.Ordinal);
 
-    public static int Main()
+    public static int Main(string[] args)
     {
         try
         {
             if (!OperatingSystem.IsWindows())
-            {
                 throw new InvalidOperationException("Windows privileged provisioning must run on Windows");
+
+            // Explicit PREPRODUCTION-only, elevated, INSTALLED provisioner
+            // operations. Never turn default install into a signing service.
+            if (args is ["--startup-attestation-enrollment-candidate"])
+            {
+                Console.WriteLine(StartupMachineAttestor.LoadInstalled().EnrollmentCandidate());
+                return 0;
             }
+            if (args is ["--startup-attestation-issue", var productId,
+                           var version, var installationId, var allowedUserSid])
+            {
+                Console.WriteLine(StartupMachineAttestor.LoadInstalled().IssueInstalled(
+                    productId, version, installationId, allowedUserSid));
+                return 0;
+            }
+            if (args.Length != 0)
+                throw new InvalidDataException("Unknown privileged provisioner operation.");
 
             Provision();
             Console.WriteLine("BKE privileged runtime provisioning complete");
@@ -111,7 +126,7 @@ internal static class Program
         }
     }
 
-    private static Dictionary<string, Ed25519PublicKeyParameters> ValidatePublicKeys(string directory)
+    internal static Dictionary<string, Ed25519PublicKeyParameters> ValidatePublicKeys(string directory)
     {
         if (!Directory.Exists(directory))
         {
@@ -139,7 +154,7 @@ internal static class Program
         return result;
     }
 
-    private static void ValidatePolicies(
+    internal static void ValidatePolicies(
         string directory,
         IReadOnlyDictionary<string, Ed25519PublicKeyParameters> keys)
     {
@@ -170,14 +185,16 @@ internal static class Program
 
             if (schema == "bke.install-target-policy.v1")
             {
-                if (!fields.SetEquals(TargetPolicyV1Fields))
+                if (root.EnumerateObject().Count() != TargetPolicyV1Fields.Count ||
+                    !fields.SetEquals(TargetPolicyV1Fields))
                 {
                     throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
                 }
             }
             else if (schema == "bke.install-target-policy.v2")
             {
-                if (!fields.SetEquals(TargetPolicyV2Fields))
+                if (root.EnumerateObject().Count() != TargetPolicyV2Fields.Count ||
+                    !fields.SetEquals(TargetPolicyV2Fields))
                 {
                     throw new InvalidDataException($"unsupported target policy contract: {Path.GetFileName(path)}");
                 }
