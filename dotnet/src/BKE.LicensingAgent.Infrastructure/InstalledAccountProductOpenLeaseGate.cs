@@ -49,6 +49,11 @@ public sealed class InstalledAccountProductOpenLeaseGate : IAccountProductOpenLe
         if (platform != "windows" || architecture is not ("x64" or "arm64" or "x86"))
             return false;
 
+        // The protected DPAPI/TPM issuer consumer is Windows-only; do not
+        // rely on protocol-platform strings for CA1416 reachability analysis.
+        if (!OperatingSystem.IsWindows())
+            return false;
+
         using var remote = AgentAccountProductLeaseRemote.CreatePreferred(
             session, _issuerKeys, allowSoftwareFallback: false);
         var result = await remote.RequestVerifiedAsync(
