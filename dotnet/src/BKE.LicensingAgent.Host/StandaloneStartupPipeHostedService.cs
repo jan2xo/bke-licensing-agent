@@ -58,34 +58,48 @@ public sealed class StandaloneStartupPipeHostedService : BackgroundService
                 "Standalone startup pipe cannot run outside PREPRODUCTION Windows.");
 
         using var slots = new SemaphoreSlim(ActiveConnections, ActiveConnections);
-        while (!stoppingToken.IsCancellationRequested)
+        var active = new List<Task>();
+        try
         {
-            // Bound resource consumption; each client has at most one request.
-            await slots.WaitAsync(stoppingToken);
-            NamedPipeServerStream? server = null;
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                server = CreateSecurePipe();
-                await server.WaitForConnectionAsync(stoppingToken);
-                var accepted = server;
-                server = null;
-                _ = HandleAndReleaseAsync(accepted, slots, stoppingToken);
+                // Bound resource consumption; each client has at most one request.
+                await slots.WaitAsync(stoppingToken);
+                NamedPipeServerStream? server = null;
+                try
+                {
+                    server = CreateSecurePipe();
+                    await server.WaitForConnectionAsync(stoppingToken);
+                    var accepted = server;
+                    server = null;
+                    active.Add(HandleAndReleaseAsync(accepted, slots, stoppingToken));
+                    active.RemoveAll(task => task.IsCompleted);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    server?.Dispose();
+                    slots.Release();
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    server?.Dispose();
+                    slots.Release();
+                    _logger.LogError(exception,
+                        "Standalone startup transport failed; stopping the gate.");
+                    // Deny rather than spinning an unprotected or relaxed pipe.
+                    throw;
+                }
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                server?.Dispose();
-                slots.Release();
-                break;
-            }
-            catch (Exception exception)
-            {
-                server?.Dispose();
-                slots.Release();
-                _logger.LogError(exception,
-                    "Standalone startup transport failed; stopping the gate.");
-                // Deny rather than spinning an unprotected or relaxed pipe.
-                throw;
-            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Service shutdown cancels any pending acceptance.
+        }
+        finally
+        {
+            // Do not dispose the concurrency limit before active clients release.
+            await Task.WhenAll(active);
         }
     }
 
