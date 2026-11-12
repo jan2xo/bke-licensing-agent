@@ -12,4 +12,7 @@
     <ProjectReference Include="../BKE.LicensingAgent.Infrastructure/BKE.LicensingAgent.Infrastructure.csproj" />
     <ProjectReference Include="../BKE.LicensingAgent.Storage/BKE.LicensingAgent.Storage.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.IO.Pipes.AccessControl" Version="5.0.0" />
+  </ItemGroup>
 </Project>
