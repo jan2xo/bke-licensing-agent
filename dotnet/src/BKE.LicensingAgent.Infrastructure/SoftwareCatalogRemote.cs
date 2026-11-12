@@ -233,6 +233,7 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
                     "display_name",
                     "summary",
                     "execution_type",
+                    "activation_mode",
                     "entitled",
                     "installable",
                     "latest_version"]))
@@ -244,6 +245,10 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
             var displayName = RequiredString(item, "display_name", 256);
             var summary = RequiredString(item, "summary", 4096);
             var executionType = OptionalExecutionType(item, "execution_type");
+            var activationMode = RequiredString(item, "activation_mode", 16);
+            if (activationMode is not ("ACCOUNT" or "LICENSE_KEY" or "EITHER"))
+                throw new InvalidDataException(
+                    "Digital Solutions returned an unrecognized activation mode.");
             var entitled = RequiredBoolean(item, "entitled");
             var installable = RequiredBoolean(item, "installable");
             var latestVersion = OptionalString(item, "latest_version", 128);
@@ -262,7 +267,8 @@ public sealed class SoftwareCatalogRemote : ISoftwareCatalogRemote, IDisposable
                 executionType,
                 entitled,
                 installable,
-                latestVersion));
+                latestVersion,
+                activationMode));
         }
 
         return result;
