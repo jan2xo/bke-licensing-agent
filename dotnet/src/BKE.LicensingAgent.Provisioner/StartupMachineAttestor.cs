@@ -99,7 +99,7 @@ internal sealed class StartupMachineAttestor
                     Convert.ToBase64String(Spki.Concat(publicBytes).ToArray()) +
                     "\n-----END PUBLIC KEY-----\n",
                 status = "STAGED" // Not ACTIVE; DS never trusts it automatically.
-            });
+            }, new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         }
         finally { CryptographicOperations.ZeroMemory(seed); }
     }
