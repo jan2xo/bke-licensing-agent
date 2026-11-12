@@ -8,6 +8,9 @@ using Org.BouncyCastle.Crypto.Signers;
 if (!OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("Windows DPAPI runner is required for this certification.");
 
+// Native privileged key custody and DS installation-attestation proof.
+StartupAttestationCertification.Run();
+
 int passed = 0;
 void Check(bool assertion, string name)
 {
