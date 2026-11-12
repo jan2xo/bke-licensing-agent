@@ -39,6 +39,20 @@ internal sealed class StartupMachineAttestor
         _privatePath = Path.Combine(_dataRoot, "privileged", "startup-attestation", "identity.dpapi");
     }
 
+    internal static bool AllowsNonproductionOrigin(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw) ||
+            !Uri.TryCreate(raw, UriKind.Absolute, out var origin) ||
+            origin.Host.Equals("jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
+            origin.Host.EndsWith(".jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
+            origin.Scheme is not ("https" or "http") ||
+            (origin.Scheme == "http" && !origin.IsLoopback) ||
+            !string.IsNullOrEmpty(origin.UserInfo) ||
+            !string.IsNullOrEmpty(origin.Query) || !string.IsNullOrEmpty(origin.Fragment))
+            return false;
+        return true;
+    }
+
     internal static StartupMachineAttestor ForCertification(string dataRoot, string programFiles)
         => new(dataRoot, programFiles);
 
@@ -50,6 +64,9 @@ internal sealed class StartupMachineAttestor
         if (environment is not ("development" or "certification" or "utm") ||
             Environment.GetEnvironmentVariable("BKE_STANDALONE_STARTUP_ATTESTATION_ENABLED") != "1")
             throw new InvalidOperationException("Startup attestation disabled outside PREPRODUCTION.");
+        if (!AllowsNonproductionOrigin(Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL")))
+            throw new InvalidOperationException(
+                "Startup attestation requires explicit nonproduction DS origin.");
         using var identity = WindowsIdentity.GetCurrent();
         if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
             throw new UnauthorizedAccessException("Elevated installer administrator identity required.");
