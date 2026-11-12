@@ -152,7 +152,8 @@ public static class AccountProductLeaseInstalledTrust
             throw new InvalidDataException("Installed issuer trust field is missing.");
         var result = property.GetString();
         if (string.IsNullOrEmpty(result) ||
-            result.Length > 4096 || result.Trim() != result)
+            result.Length > 4096 ||
+            (name != "public_key_pem" && result.Trim() != result))
             throw new InvalidDataException("Installed issuer trust field is malformed.");
         return result;
     }
@@ -167,8 +168,12 @@ public static class AccountProductLeaseInstalledTrust
                 pem.Content.Length != 44 ||
                 !reader.ReadToEnd().Trim().Equals("", StringComparison.Ordinal))
                 return false;
-            return PublicKeyFactory.CreateKey(pem.Content)
-                is Ed25519PublicKeyParameters;
+            var canonical = "-----BEGIN PUBLIC KEY-----\n" +
+                Convert.ToBase64String(pem.Content) +
+                "\n-----END PUBLIC KEY-----\n";
+            return string.Equals(value, canonical, StringComparison.Ordinal) &&
+                PublicKeyFactory.CreateKey(pem.Content)
+                    is Ed25519PublicKeyParameters;
         }
         catch { return false; }
     }
