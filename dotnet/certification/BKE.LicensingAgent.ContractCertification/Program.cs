@@ -45,7 +45,7 @@ if (args is ["--certify-startup-peer"])
             "github-hosted")
     {
         const string mergedDsSource =
-            "92aac2258c6e0b9566db72cc531a46bf51c6e2b8";
+            "4b2ae5f906ad73bb2b1197e4ed360ff73a7a7230";
         var runner = new ProcessStartInfo
         {
             FileName = "pwsh",
