@@ -108,6 +108,7 @@ await InstalledStandaloneStartupAuthorityCertification.RunAsync();
 
 // Hermetic, pinned DS account-product LEASE HTTP consumer proof.
 await AccountProductLeaseHttpCertification.RunAsync();
+await StartupPolicyAcquisitionCertification.RunAsync();
 await AccountProductOpenGateCertification.RunAsync();
 AccountActivationModeCatalogCertification.Run();
 
