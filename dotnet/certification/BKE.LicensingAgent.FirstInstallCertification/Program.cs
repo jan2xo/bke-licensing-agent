@@ -67,13 +67,36 @@ using (var startupPeerProof = Process.Start(new ProcessStartInfo
     CreateNoWindow = true,
 }) ?? throw new InvalidOperationException("Could not launch native startup peer certification."))
 {
-    string output = startupPeerProof.StandardOutput.ReadToEnd();
-    string errors = startupPeerProof.StandardError.ReadToEnd();
-    startupPeerProof.WaitForExit();
+    var nativePeerLog = new StringBuilder();
+    var nativePeerErrors = new StringBuilder();
+    startupPeerProof.OutputDataReceived += (_, line) =>
+    {
+        if (line.Data is null) return;
+        lock (nativePeerLog) { if (nativePeerLog.Length < 100_000)
+            nativePeerLog.AppendLine(line.Data); }
+        Console.WriteLine(line.Data);
+    };
+    startupPeerProof.ErrorDataReceived += (_, line) =>
+    {
+        if (line.Data is null) return;
+        lock (nativePeerErrors) { if (nativePeerErrors.Length < 100_000)
+            nativePeerErrors.AppendLine(line.Data); }
+        Console.Error.WriteLine(line.Data);
+    };
+    startupPeerProof.BeginOutputReadLine();
+    startupPeerProof.BeginErrorReadLine();
+    if (!startupPeerProof.WaitForExit(
+        (int)TimeSpan.FromMinutes(19).TotalMilliseconds))
+    {
+        startupPeerProof.Kill(entireProcessTree: true);
+        throw new TimeoutException(
+            "Native startup peer certification exceeded its bounded Windows budget.");
+    }
+    startupPeerProof.WaitForExit(); // Drain async output callbacks.
     if (startupPeerProof.ExitCode != 0)
         throw new InvalidOperationException(
-            "Agent native process startup peer certification failed: " + errors + output);
-    Console.WriteLine(output);
+            "Agent native process startup peer certification failed: " +
+            nativePeerErrors + nativePeerLog);
 }
 
 var helper = Path.GetFullPath(args[1]);
