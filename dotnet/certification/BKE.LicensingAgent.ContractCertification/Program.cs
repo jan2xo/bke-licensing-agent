@@ -63,11 +63,34 @@ if (args is ["--certify-startup-peer"])
         using var test = Process.Start(runner) ??
             throw new InvalidOperationException(
                 "Cannot start pinned DS-to-Agent native signer interoperability.");
-        var stdout = test.StandardOutput.ReadToEndAsync();
-        var stderr = test.StandardError.ReadToEndAsync();
-        await test.WaitForExitAsync();
-        var interopOutput = await stdout;
-        var interopErrors = await stderr;
+        var interopLog = new StringBuilder();
+        var interopErrors = new StringBuilder();
+        test.OutputDataReceived += (_, line) =>
+        {
+            if (line.Data is null) return;
+            lock (interopLog) { if (interopLog.Length < 100_000)
+                interopLog.AppendLine(line.Data); }
+            Console.WriteLine(line.Data);
+        };
+        test.ErrorDataReceived += (_, line) =>
+        {
+            if (line.Data is null) return;
+            lock (interopErrors) { if (interopErrors.Length < 100_000)
+                interopErrors.AppendLine(line.Data); }
+            Console.Error.WriteLine(line.Data);
+        };
+        test.BeginOutputReadLine();
+        test.BeginErrorReadLine();
+        // Contract must never indefinitely pin the entire Windows native
+        // certification job on a dependency checkout or test runner.
+        if (!test.WaitForExit((int)TimeSpan.FromMinutes(16).TotalMilliseconds))
+        {
+            test.Kill(entireProcessTree: true);
+            throw new TimeoutException(
+                "DS producer interop exceeded bounded disposable CI budget.");
+        }
+        test.WaitForExit(); // Drain all async stdout/stderr event callbacks.
+        var interopOutput = interopLog.ToString();
         if (test.ExitCode != 0 ||
             !interopOutput.Contains("DS_SOURCE_TO_AGENT_NATIVE_ED25519_INTEROP_PASS",
                 StringComparison.Ordinal) ||
@@ -76,7 +99,6 @@ if (args is ["--certify-startup-peer"])
             throw new InvalidOperationException(
                 "DS source producer to Agent native parser interop failed: " +
                 interopErrors + interopOutput);
-        Console.WriteLine(interopOutput);
     }
     return;
 }
