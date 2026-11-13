@@ -9,6 +9,12 @@ using BKE.LicensingAgent.Storage;
 using BKE.LicensingAgent.Infrastructure;
 using Microsoft.Data.Sqlite;
 
+if (args is ["--emit-disposable-installed-startup-policy", var output, var image, var installedImage])
+{
+    HostedInstalledStartupFixtureEmitter.Emit(output, image, installedImage);
+    return;
+}
+
 if (args is ["--certify-startup-client"])
 {
     await StandaloneStartupHostPositiveCertification.RunChildAsync();
@@ -20,6 +26,7 @@ if (args is ["--certify-startup-peer"])
     await StandaloneStartupWindowsPeerCertification.RunAsync();
     await StandaloneStartupHostPipeCertification.RunAsync();
     await StandaloneStartupHostPositiveCertification.RunAsync();
+    HostedInstalledStartupFixtureEmitter.CertifyOnHostedWindows();
     return;
 }
 
