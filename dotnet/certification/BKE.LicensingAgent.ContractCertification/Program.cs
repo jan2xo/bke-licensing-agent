@@ -9,10 +9,17 @@ using BKE.LicensingAgent.Storage;
 using BKE.LicensingAgent.Infrastructure;
 using Microsoft.Data.Sqlite;
 
+if (args is ["--certify-startup-client"])
+{
+    await StandaloneStartupHostPositiveCertification.RunChildAsync();
+    return;
+}
+
 if (args is ["--certify-startup-peer"])
 {
     await StandaloneStartupWindowsPeerCertification.RunAsync();
     await StandaloneStartupHostPipeCertification.RunAsync();
+    await StandaloneStartupHostPositiveCertification.RunAsync();
     return;
 }
 
