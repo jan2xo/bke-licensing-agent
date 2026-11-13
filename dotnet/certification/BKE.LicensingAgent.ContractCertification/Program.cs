@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Text;
@@ -34,6 +35,49 @@ if (args is ["--certify-startup-peer"])
     await StandaloneStartupHostPipeCertification.RunAsync();
     await StandaloneStartupHostPositiveCertification.RunAsync();
     HostedInstalledStartupFixtureEmitter.CertifyOnHostedWindows();
+
+    // This is the sole explicitly pinned consumer interop owner. Only
+    // disposable GitHub-hosted Windows retrieves source from DS; no signed
+    // production policy or private issuer leaves a CI process.
+    if (OperatingSystem.IsWindows() &&
+        Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" &&
+        Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") ==
+            "github-hosted")
+    {
+        const string mergedDsSource =
+            "92aac2258c6e0b9566db72cc531a46bf51c6e2b8";
+        var runner = new ProcessStartInfo
+        {
+            FileName = "pwsh",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var token in new[] {
+            "-NoProfile", "-NonInteractive", "-File",
+            "scripts/certification/Verify-DsStandaloneStartupSourceInterop.ps1",
+            "-ExpectedDsSourceSha", mergedDsSource,
+        })
+            runner.ArgumentList.Add(token);
+        using var test = Process.Start(runner) ??
+            throw new InvalidOperationException(
+                "Cannot start pinned DS-to-Agent native signer interoperability.");
+        var stdout = test.StandardOutput.ReadToEndAsync();
+        var stderr = test.StandardError.ReadToEndAsync();
+        await test.WaitForExitAsync();
+        var output = await stdout;
+        var errors = await stderr;
+        if (test.ExitCode != 0 ||
+            !output.Contains("DS_SOURCE_TO_AGENT_NATIVE_ED25519_INTEROP_PASS",
+                StringComparison.Ordinal) ||
+            !output.Contains("DS_TO_AGENT_SOURCE_INTEROP_PASS",
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "DS source producer to Agent native parser interop failed: " +
+                errors + output);
+        Console.WriteLine(output);
+    }
     return;
 }
 
