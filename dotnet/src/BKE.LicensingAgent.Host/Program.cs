@@ -158,7 +158,6 @@ builder.Services.AddSingleton<LicenseCenterProvider>();
 builder.Services.AddSingleton<ILicenseCenterService>(services => services.GetRequiredService<LicenseCenterProvider>());
 builder.Services.AddSingleton<NotificationProvider>();
 builder.Services.AddSingleton<INotificationService>(services => services.GetRequiredService<NotificationProvider>());
-builder.Services.AddSingleton<UpdateProvider>();
 builder.Services.AddSingleton<PrivilegedUpdateCenterProvider>();
 builder.Services.AddSingleton<IStandaloneSoftwareProvisioner>(services =>
     services.GetRequiredService<PrivilegedUpdateCenterProvider>());
@@ -168,7 +167,12 @@ builder.Services.AddSingleton<IStandaloneSoftwareRepairer>(services =>
     services.GetRequiredService<PrivilegedUpdateCenterProvider>());
 builder.Services.AddSingleton<IStandaloneSoftwareRemover>(services =>
     services.GetRequiredService<PrivilegedUpdateCenterProvider>());
-builder.Services.AddSingleton<IUpdateService, Gen2UpdateService>();
+builder.Services.AddSingleton<IUpdateService>(services => new Gen2UpdateService(
+    services.GetRequiredService<IAccountSessionService>(),
+    services.GetRequiredService<IAccountSessionSecretStore>(),
+    services.GetRequiredService<ILocalProductInventory>(),
+    services.GetRequiredService<IStandaloneUpdateAuthorizationRemote>(),
+    services.GetRequiredService<ISoftwareUpdateService>()));
 builder.Services.AddSingleton<IAccountSessionRemote>(_ => new AccountSessionRemote());
 builder.Services.AddSingleton<IAccountSessionSecretStore>(_ => new WindowsDpapiAccountSessionSecretStore());
 builder.Services.AddSingleton<IAccountSessionService>(services => new AccountSessionService(
