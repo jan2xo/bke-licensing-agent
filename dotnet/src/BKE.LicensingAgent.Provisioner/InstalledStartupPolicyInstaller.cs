@@ -108,6 +108,7 @@ internal static class InstalledStartupPolicyInstaller
             throw new InvalidDataException("Installed startup policy already exists.");
         var temporary = Path.Combine(policyDir,
             ".startup-" + Guid.NewGuid().ToString("N") + ".tmp");
+        bool moved = false;
         try
         {
             var data = new UTF8Encoding(false, true).GetBytes(policyEnvelope);
@@ -124,6 +125,7 @@ internal static class InstalledStartupPolicyInstaller
             finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(data); }
             StartupMachineAttestor.Protect(temporary, directory: false);
             File.Move(temporary, target, overwrite: false);
+            moved = true;
             StartupMachineAttestor.Protect(target, directory: false);
         }
         catch
@@ -131,7 +133,7 @@ internal static class InstalledStartupPolicyInstaller
             if (File.Exists(temporary)) File.Delete(temporary);
             // The operation must fail closed, not leave an unprotected active
             // signed policy if final ACL enforcement fails.
-            if (File.Exists(target)) File.Delete(target);
+            if (moved && File.Exists(target)) File.Delete(target);
             throw;
         }
     }
