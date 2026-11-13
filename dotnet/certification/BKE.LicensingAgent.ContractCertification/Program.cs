@@ -9,6 +9,13 @@ using BKE.LicensingAgent.Storage;
 using BKE.LicensingAgent.Infrastructure;
 using Microsoft.Data.Sqlite;
 
+if (args is ["--verify-ds-startup-vector", var externalVector, var expectedDsSha])
+{
+    await DsStandaloneStartupSourceInteropCertification.VerifyAsync(
+        externalVector, expectedDsSha);
+    return;
+}
+
 if (args is ["--emit-disposable-installed-startup-policy", var output, var image, var installedImage])
 {
     HostedInstalledStartupFixtureEmitter.Emit(output, image, installedImage);
