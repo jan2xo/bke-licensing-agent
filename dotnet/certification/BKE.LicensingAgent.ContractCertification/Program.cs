@@ -66,17 +66,17 @@ if (args is ["--certify-startup-peer"])
         var stdout = test.StandardOutput.ReadToEndAsync();
         var stderr = test.StandardError.ReadToEndAsync();
         await test.WaitForExitAsync();
-        var output = await stdout;
-        var errors = await stderr;
+        var interopOutput = await stdout;
+        var interopErrors = await stderr;
         if (test.ExitCode != 0 ||
-            !output.Contains("DS_SOURCE_TO_AGENT_NATIVE_ED25519_INTEROP_PASS",
+            !interopOutput.Contains("DS_SOURCE_TO_AGENT_NATIVE_ED25519_INTEROP_PASS",
                 StringComparison.Ordinal) ||
-            !output.Contains("DS_TO_AGENT_SOURCE_INTEROP_PASS",
+            !interopOutput.Contains("DS_TO_AGENT_SOURCE_INTEROP_PASS",
                 StringComparison.Ordinal))
             throw new InvalidOperationException(
                 "DS source producer to Agent native parser interop failed: " +
-                errors + output);
-        Console.WriteLine(output);
+                interopErrors + interopOutput);
+        Console.WriteLine(interopOutput);
     }
     return;
 }
