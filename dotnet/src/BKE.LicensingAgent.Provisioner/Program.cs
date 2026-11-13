@@ -50,12 +50,14 @@ internal static class Program
                     productId, version, installationId, allowedUserSid));
                 return 0;
             }
-            if (args is ["--startup-policy-acquire", var productId,
-                           var version, var installationId, var allowedUserSid])
+            if (args is ["--startup-policy-acquire", var requestedProduct,
+                           var requestedVersion, var requestedInstallation,
+                           var requestedSid])
             {
                 try {
                     InstalledStartupPolicyInstaller.AcquireAsync(
-                        productId, version, installationId, allowedUserSid)
+                        requestedProduct, requestedVersion, requestedInstallation,
+                        requestedSid)
                         .GetAwaiter().GetResult();
                     Console.WriteLine(
                         "BKE preproduction installed startup policy acquired and verified.");
