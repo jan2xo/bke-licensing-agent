@@ -172,7 +172,9 @@ internal static class AccountProductLeaseHttpCertification
                 machine, _ => binding,
                 _ => variant == "missing-receipt" ? null :
                     variant == "wrong-receipt"
-                        ? receipt with { KeyThumbprint = "x" + receipt.KeyThumbprint[1..] }
+                        ? receipt with { KeyThumbprint =
+                            (receipt.KeyThumbprint.StartsWith('x') ? "y" : "x") +
+                            receipt.KeyThumbprint[1..] }
                         : receipt,
                 set, "https://disposable-agent.test/", handler);
             try
