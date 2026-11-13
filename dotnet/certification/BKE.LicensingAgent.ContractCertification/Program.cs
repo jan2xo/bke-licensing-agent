@@ -134,6 +134,24 @@ var utmWorkflowSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "utm-disposable-target-trust.yml"));
 var intentCertificationSource = File.ReadAllText(
     Path.Combine(".github", "workflows", "certify.yml"));
+var bootstrapSelfUpdateSource = File.ReadAllText(
+    Path.Combine("dotnet", "src", "BKE.LicensingAgent.Bootstrap", "AgentSelfUpdateWorker.cs"));
+Require(
+    bootstrapSelfUpdateSource.Contains(
+        AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl,
+        StringComparison.Ordinal),
+    "Agent self-update Bootstrap default drifted from core production authority.");
+Require(
+    !bootstrapSelfUpdateSource.Contains("\"https://jl-bke.com\"", StringComparison.Ordinal),
+    "Bootstrap retained a legacy production API default.");
+foreach (var remoteSourcePath in Directory.GetFiles(
+    Path.Combine("dotnet", "src", "BKE.LicensingAgent.Infrastructure"), "*.cs", SearchOption.TopDirectoryOnly))
+{
+    Require(
+        !File.ReadAllText(remoteSourcePath).Contains("\"https://jl-bke.com\"", StringComparison.Ordinal),
+        "Infrastructure retained a legacy default HTTPS authority: " + Path.GetFileName(remoteSourcePath));
+}
+
 var activeWorkflowDirectory = Path.Combine(".github", "workflows");
 var activeWorkflowNames = Directory
     .GetFiles(activeWorkflowDirectory, "*.yml")
@@ -368,7 +386,8 @@ Require(
     "UTM evidence no longer proves Launcher-visible Agent platform-authority convergence.");
 Require(
     utmPrepareSource.Contains("jl-bke.com", StringComparison.OrdinalIgnoreCase) &&
-    utmPrepareSource.Contains("production jl-bke.com authority", StringComparison.OrdinalIgnoreCase),
+    utmPrepareSource.Contains("production BKE authority", StringComparison.OrdinalIgnoreCase) &&
+    utmPrepareSource.Contains("bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase),
     "UTM Agent environment no longer fails closed against production authority.");
 Require(
     utmInstallTrustSource.Contains("DigitalSolutionsSigningPublicKeyPath", StringComparison.Ordinal) &&
@@ -376,6 +395,9 @@ Require(
     utmInstallTrustSource.Contains("DigitalSolutionsSigningPublicKeySha256", StringComparison.Ordinal) &&
     utmInstallTrustSource.Contains("BKE_ENVIRONMENT=utm", StringComparison.Ordinal) &&
     utmInstallTrustSource.Contains("jl-bke.com", StringComparison.OrdinalIgnoreCase) &&
+    utmInstallTrustSource.Contains("bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase) &&
+    utmRemoveTrustSource.Contains("bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase) &&
+    utmEvidenceSource.Contains("bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase) &&
     utmInstallTrustSource.Contains("BEGIN PRIVATE KEY", StringComparison.Ordinal) &&
     utmInstallTrustSource.Contains("trusted-keys", StringComparison.Ordinal) &&
     utmRemoveTrustSource.Contains("RemoveDigitalSolutionsSigningTrust", StringComparison.Ordinal) &&
@@ -988,6 +1010,20 @@ static void CertifyRuntimeEnvironmentBoundary()
             new AgentRuntimeEnvironment("production", envPath, null).EffectivePlatformBaseUrl ==
                 AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl,
             "Agent production default platform authority drifted");
+
+        foreach (var productionHost in new[] {
+            "bkedigitalsolutions.com",
+            "api.bkedigitalsolutions.com",
+            "nested.api.bkedigitalsolutions.com",
+        })
+        {
+            File.WriteAllText(envPath,
+                "BKE_ENVIRONMENT=utm\n" +
+                "BKE_PLATFORM_BASE_URL=https://" + productionHost + "\n");
+            RequireThrows<InvalidOperationException>(
+                () => AgentRuntimeEnvironmentLoader.Load(envPath),
+                "UTM environment accepted production Digital Solutions host " + productionHost);
+        }
 
         File.WriteAllText(
             envPath,

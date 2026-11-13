@@ -24,14 +24,17 @@ if (-not [Uri]::TryCreate($PlatformBaseUrl, [UriKind]::Absolute, [ref]$uri)) {
 
 if ($uri.Scheme -notin @("http", "https") -or
     -not [string]::IsNullOrEmpty($uri.Query) -or
-    -not [string]::IsNullOrEmpty($uri.Fragment)) {
-    throw "PlatformBaseUrl must use HTTP(S) without query or fragment."
+    -not [string]::IsNullOrEmpty($uri.Fragment) -or
+    -not [string]::IsNullOrEmpty($uri.UserInfo)) {
+    throw "PlatformBaseUrl must use HTTP(S) without user credentials, query or fragment."
 }
 
 $hostName = $uri.Host.TrimEnd(".")
 if ($hostName -ieq "jl-bke.com" -or
-    $hostName.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase)) {
-    throw "UTM environment refuses the production jl-bke.com authority."
+    $hostName.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase) -or
+    $hostName -ieq "bkedigitalsolutions.com" -or
+    $hostName.EndsWith(".bkedigitalsolutions.com", [StringComparison]::OrdinalIgnoreCase)) {
+    throw "UTM environment refuses the production BKE authority."
 }
 
 if ($uri.Scheme -eq "http") {

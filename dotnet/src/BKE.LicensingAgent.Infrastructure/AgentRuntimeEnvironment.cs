@@ -16,7 +16,7 @@ public static class AgentRuntimeEnvironmentLoader
     public const string EnvironmentVariableName = "BKE_ENVIRONMENT";
     public const string PlatformBaseUrlVariableName = "BKE_PLATFORM_BASE_URL";
     public const string ProductionEnvironment = "production";
-    public const string ProductionPlatformBaseUrl = "https://jl-bke.com";
+    public const string ProductionPlatformBaseUrl = "https://bkedigitalsolutions.com";
     public const string UtmEnvironment = "utm";
 
     private const long MaxEnvFileBytes = 64 * 1024;
@@ -205,7 +205,8 @@ public static class AgentRuntimeEnvironmentLoader
             (uri.Scheme != Uri.UriSchemeHttps &&
              uri.Scheme != Uri.UriSchemeHttp) ||
             !string.IsNullOrEmpty(uri.Query) ||
-            !string.IsNullOrEmpty(uri.Fragment))
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
         {
             throw new InvalidOperationException(
                 "UTM BKE_PLATFORM_BASE_URL must be an absolute HTTP(S) URL without query or fragment.");
@@ -213,10 +214,12 @@ public static class AgentRuntimeEnvironmentLoader
 
         var host = uri.Host.TrimEnd('.');
         if (host.Equals("jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
-            host.EndsWith(".jl-bke.com", StringComparison.OrdinalIgnoreCase))
+            host.EndsWith(".jl-bke.com", StringComparison.OrdinalIgnoreCase) ||
+            host.Equals("bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".bkedigitalsolutions.com", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "UTM environment refuses the production jl-bke.com authority.");
+                "UTM environment refuses a production BKE authority.");
         }
     }
 

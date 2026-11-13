@@ -39,7 +39,7 @@ public sealed class StandaloneRepairAuthorizationRemote :
     {
         var raw = (platformBaseUrl ??
             Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ??
-            "https://jl-bke.com").TrimEnd('/');
+            AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl).TrimEnd('/');
         if (!Uri.TryCreate(raw, UriKind.Absolute, out var baseUri))
             throw new InvalidOperationException("BKE_PLATFORM_BASE_URL is invalid.");
         var allowLocal =

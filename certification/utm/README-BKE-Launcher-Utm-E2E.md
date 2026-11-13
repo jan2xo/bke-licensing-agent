@@ -14,7 +14,7 @@ BKE Launcher
 
 It must not use the production Digital Solutions deployment, production database,
 live PayMongo, Resend, production signing keys, production storage credentials, or
-any `jl-bke.com` authority.
+any legacy `jl-bke.com` or current `bkedigitalsolutions.com` production authority, including subdomains.
 
 ## Exact input boundary
 
@@ -172,7 +172,7 @@ BKE_ENVIRONMENT=utm
 BKE_PLATFORM_BASE_URL=https://bke-v3.test:8443
 ```
 
-The helper must reject `jl-bke.com` and every `*.jl-bke.com` authority.
+The helper must reject `jl-bke.com` and `bkedigitalsolutions.com`, including all subdomains.
 
 ## Phase C — install BKE as the root product
 
@@ -219,7 +219,7 @@ powershell -ExecutionPolicy Bypass `
 ```
 
 The helper must fail closed unless the Agent is in `BKE_ENVIRONMENT=utm`, must
-reject `jl-bke.com` and every `*.jl-bke.com` authority, must reject private-key
+reject all production BKE authorities (`jl-bke.com` and `bkedigitalsolutions.com`, including subdomains), must reject private-key
 material, and must pin the exact operator-recorded public-key SHA-256.
 
 Capture pre-login evidence with the exact stack provenance:
@@ -507,7 +507,7 @@ At minimum:
    becoming signed out;
 3. Open while signed out/not entitled must be denied before process invocation;
 4. a `LAUNCHER_PLUGIN` product must never receive the standalone Agent Open path;
-5. replacing the Agent authority with `jl-bke.com` or any `*.jl-bke.com` host in
+5. replacing the Agent authority with a production `jl-bke.com` or `bkedigitalsolutions.com` host (or any subdomain) in
    `BKE_ENVIRONMENT=utm` must fail closed.
 
 ## Phase N — final evidence

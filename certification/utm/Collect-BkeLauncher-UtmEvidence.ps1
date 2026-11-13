@@ -317,7 +317,9 @@ if (Test-Path $agentEnvPath) {
             $hostName = $platformUri.Host.TrimEnd(".")
             $environmentEvidence.production_authority =
                 ($hostName -ieq "jl-bke.com") -or
-                $hostName.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase)
+                $hostName.EndsWith(".jl-bke.com", [StringComparison]::OrdinalIgnoreCase) -or
+                ($hostName -ieq "bkedigitalsolutions.com") -or
+                $hostName.EndsWith(".bkedigitalsolutions.com", [StringComparison]::OrdinalIgnoreCase)
         }
     }
 }

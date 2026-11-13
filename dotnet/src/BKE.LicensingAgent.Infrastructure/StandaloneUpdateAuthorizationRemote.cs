@@ -30,7 +30,7 @@ public sealed class StandaloneUpdateAuthorizationRemote :
 
     public StandaloneUpdateAuthorizationRemote(HttpClient? httpClient = null, string? platformBaseUrl = null)
     {
-        var raw = (platformBaseUrl ?? Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? "https://jl-bke.com").TrimEnd('/');
+        var raw = (platformBaseUrl ?? Environment.GetEnvironmentVariable("BKE_PLATFORM_BASE_URL") ?? AgentRuntimeEnvironmentLoader.ProductionPlatformBaseUrl).TrimEnd('/');
         if (!Uri.TryCreate(raw, UriKind.Absolute, out var baseUri))
             throw new InvalidOperationException("BKE_PLATFORM_BASE_URL is invalid.");
         var allowLocal = Environment.GetEnvironmentVariable("BKE_AGENT_VNEXT_ALLOW_INSECURE_LOCAL") == "1" &&
