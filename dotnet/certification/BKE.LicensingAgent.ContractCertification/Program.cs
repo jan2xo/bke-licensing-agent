@@ -26,6 +26,7 @@ if (args is ["--certify-startup-peer"])
     await StandaloneStartupWindowsPeerCertification.RunAsync();
     await StandaloneStartupHostPipeCertification.RunAsync();
     await StandaloneStartupHostPositiveCertification.RunAsync();
+    HostedInstalledStartupFixtureEmitter.CertifyOnHostedWindows();
     return;
 }
 
