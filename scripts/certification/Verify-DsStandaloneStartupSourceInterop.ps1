@@ -38,6 +38,7 @@ $old=@{
 }
 
 try {
+  Write-Host 'DS_INTEROP_PHASE: exact merged DS SHA checkout'
   New-Item -ItemType Directory -Path $ds -Force | Out-Null
   & git -C $ds init --quiet
   if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize isolated DS test checkout.' }
@@ -61,10 +62,12 @@ try {
     # only under RUNNER_TEMP and removed before the runner is destroyed.
     $env:DEPLOYMENT_ENV='certification'
     $env:NODE_ENV='test'
+    Write-Host 'DS_INTEROP_PHASE: install pinned DS test dependencies'
     & npm.cmd ci --include=dev --no-audit --no-fund *> $npmLog
     if ($LASTEXITCODE -ne 0) {
       throw 'Pinned DS test dependencies did not restore; no fixture was trusted.'
     }
+    Write-Host 'DS_INTEROP_PHASE: dependencies ready; execute actual DS signer vector'
     if (Test-Path -LiteralPath $vector) {
       throw 'Refusing to overwrite any existing public DS test fixture.'
     }
@@ -80,6 +83,7 @@ try {
   }
   $raw=Get-Content -LiteralPath $vector -Raw
   if ($raw -match 'PRIVATE KEY') { throw 'DS vector leaked signer private material.' }
+  Write-Host 'DS_INTEROP_PHASE: verify real DS-signed bytes with actual Agent .NET parser'
   Push-Location $repo
   try {
     & dotnet run --project 'dotnet/certification/BKE.LicensingAgent.ContractCertification/BKE.LicensingAgent.ContractCertification.csproj' --configuration Release --no-build -- --verify-ds-startup-vector $vector $ExpectedDsSourceSha
