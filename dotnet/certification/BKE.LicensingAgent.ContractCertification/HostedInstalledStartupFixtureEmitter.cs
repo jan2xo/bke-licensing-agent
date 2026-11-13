@@ -20,6 +20,45 @@ internal static class HostedInstalledStartupFixtureEmitter
     private const string InstallationId = "00000000-0000-0000-0000-000000000138";
     private const string IssuerKid = "disposable-github-actions-test-only";
 
+    public static void CertifyOnHostedWindows()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+            return;
+        var temp = Environment.GetEnvironmentVariable("RUNNER_TEMP") ??
+            throw new InvalidOperationException("Windows hosted CI temporary root missing.");
+        var apphost = Path.Combine(AppContext.BaseDirectory,
+            "BKE.LicensingAgent.ContractCertification.exe");
+        var expectedImage = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "BKE Digital Solutions", "Render Dock", "RENDER DOCK.exe");
+        var output = Path.Combine(temp, "bke-startup-emitter-smoke-" +
+            Guid.NewGuid().ToString("N"));
+        var previous = Environment.GetEnvironmentVariable("BKE_ENVIRONMENT");
+        try
+        {
+            Environment.SetEnvironmentVariable("BKE_ENVIRONMENT", "certification");
+            Emit(output, apphost, expectedImage);
+            var key = File.ReadAllText(Path.Combine(
+                output, "account-product-lease-keys", "issuers.json"));
+            var policy = File.ReadAllText(Path.Combine(
+                output, "standalone-startup-policies", "bke-render-dock.json"));
+            if (key.Contains("PRIVATE KEY", StringComparison.OrdinalIgnoreCase) ||
+                policy.Contains("PRIVATE KEY", StringComparison.OrdinalIgnoreCase) ||
+                !key.Contains(AccountProductLeaseInstalledTrust.ExactLibraryArchiveSha256,
+                    StringComparison.Ordinal) ||
+                !policy.Contains("LICENSE_KEY", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Disposable signer emitted private material or incomplete trusted contract.");
+            Console.WriteLine("Hosted Windows ephemeral issuer fixture: PASS (public-only output; no customer credentials).");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BKE_ENVIRONMENT", previous);
+            if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
+        }
+    }
+
     public static void Emit(string outputDirectory, string imageToHash, string targetInstalledImage)
     {
         if (!OperatingSystem.IsWindows() ||
