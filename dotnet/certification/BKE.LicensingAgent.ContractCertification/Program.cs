@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Reflection;
 using System.Text;
@@ -8,6 +9,13 @@ using BKE.LicensingAgent.Contracts;
 using BKE.LicensingAgent.Storage;
 using BKE.LicensingAgent.Infrastructure;
 using Microsoft.Data.Sqlite;
+
+if (args is ["--verify-ds-startup-vector", var externalVector, var expectedDsSha])
+{
+    await DsStandaloneStartupSourceInteropCertification.VerifyAsync(
+        externalVector, expectedDsSha);
+    return;
+}
 
 if (args is ["--emit-disposable-installed-startup-policy", var output, var image, var installedImage])
 {
@@ -27,6 +35,71 @@ if (args is ["--certify-startup-peer"])
     await StandaloneStartupHostPipeCertification.RunAsync();
     await StandaloneStartupHostPositiveCertification.RunAsync();
     HostedInstalledStartupFixtureEmitter.CertifyOnHostedWindows();
+
+    // This is the sole explicitly pinned consumer interop owner. Only
+    // disposable GitHub-hosted Windows retrieves source from DS; no signed
+    // production policy or private issuer leaves a CI process.
+    if (OperatingSystem.IsWindows() &&
+        Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" &&
+        Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") ==
+            "github-hosted")
+    {
+        const string mergedDsSource =
+            "4b2ae5f906ad73bb2b1197e4ed360ff73a7a7230";
+        var runner = new ProcessStartInfo
+        {
+            FileName = "pwsh",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var token in new[] {
+            "-NoProfile", "-NonInteractive", "-File",
+            "scripts/certification/Verify-DsStandaloneStartupSourceInterop.ps1",
+            "-ExpectedDsSourceSha", mergedDsSource,
+        })
+            runner.ArgumentList.Add(token);
+        using var test = Process.Start(runner) ??
+            throw new InvalidOperationException(
+                "Cannot start pinned DS-to-Agent native signer interoperability.");
+        var interopLog = new StringBuilder();
+        var interopErrors = new StringBuilder();
+        test.OutputDataReceived += (_, line) =>
+        {
+            if (line.Data is null) return;
+            lock (interopLog) { if (interopLog.Length < 100_000)
+                interopLog.AppendLine(line.Data); }
+            Console.WriteLine(line.Data);
+        };
+        test.ErrorDataReceived += (_, line) =>
+        {
+            if (line.Data is null) return;
+            lock (interopErrors) { if (interopErrors.Length < 100_000)
+                interopErrors.AppendLine(line.Data); }
+            Console.Error.WriteLine(line.Data);
+        };
+        test.BeginOutputReadLine();
+        test.BeginErrorReadLine();
+        // Contract must never indefinitely pin the entire Windows native
+        // certification job on a dependency checkout or test runner.
+        if (!test.WaitForExit((int)TimeSpan.FromMinutes(16).TotalMilliseconds))
+        {
+            test.Kill(entireProcessTree: true);
+            throw new TimeoutException(
+                "DS producer interop exceeded bounded disposable CI budget.");
+        }
+        test.WaitForExit(); // Drain all async stdout/stderr event callbacks.
+        var interopOutput = interopLog.ToString();
+        if (test.ExitCode != 0 ||
+            !interopOutput.Contains("DS_SOURCE_TO_AGENT_NATIVE_ED25519_INTEROP_PASS",
+                StringComparison.Ordinal) ||
+            !interopOutput.Contains("DS_TO_AGENT_SOURCE_INTEROP_PASS",
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "DS source producer to Agent native parser interop failed: " +
+                interopErrors + interopOutput);
+    }
     return;
 }
 
