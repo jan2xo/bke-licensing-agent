@@ -297,7 +297,7 @@ internal sealed class StartupMachineAttestor
             throw new InvalidDataException("Privileged file is missing, redirected or oversized.");
     }
 
-    private static void Protect(string path, bool directory)
+    internal static void Protect(string path, bool directory)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
         var psi = new ProcessStartInfo {

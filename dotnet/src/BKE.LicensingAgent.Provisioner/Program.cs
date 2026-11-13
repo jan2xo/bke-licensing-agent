@@ -50,6 +50,27 @@ internal static class Program
                     productId, version, installationId, allowedUserSid));
                 return 0;
             }
+            if (args is ["--startup-policy-acquire", var requestedProduct,
+                           var requestedVersion, var requestedInstallation,
+                           var requestedSid])
+            {
+                try {
+                    InstalledStartupPolicyInstaller.AcquireAsync(
+                        requestedProduct, requestedVersion, requestedInstallation,
+                        requestedSid)
+                        .GetAwaiter().GetResult();
+                    Console.WriteLine(
+                        "BKE preproduction installed startup policy acquired and verified.");
+                    return 0;
+                }
+                catch {
+                    // Never print the raw signed Agent attestation, policy,
+                    // private installer information or HTTP/SQL exception.
+                    Console.Error.WriteLine(
+                        "BKE preproduction startup policy acquisition denied.");
+                    return 1;
+                }
+            }
             if (args.Length != 0)
                 throw new InvalidDataException("Unknown privileged provisioner operation.");
 

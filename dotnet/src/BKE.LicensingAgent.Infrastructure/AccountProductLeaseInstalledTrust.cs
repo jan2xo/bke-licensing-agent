@@ -74,6 +74,47 @@ public static class AccountProductLeaseInstalledTrust
     }
 
     /// <summary>
+    /// The elevated one-shot provisioner is installed in the sibling
+    /// Program Files/provisioning directory, not the running Host directory.
+    /// It may read the same immutable public issuer bundle only from that
+    /// protected root. No supplied trust path or network-provided PEM.
+    /// </summary>
+    public static IReadOnlyDictionary<string, AccountProductLeaseTrustedKey>
+        LoadForInstalledProvisioner(string environment)
+    {
+        if (environment is not ("development" or "certification" or "utm") ||
+            !OperatingSystem.IsWindows())
+            throw new InvalidOperationException(
+                "Installed issuer acquisition is PREPRODUCTION Windows-only.");
+        var programFiles = Environment.GetFolderPath(
+            Environment.SpecialFolder.ProgramFiles);
+        if (string.IsNullOrWhiteSpace(programFiles))
+            throw new InvalidDataException("Windows Program Files trust root unavailable.");
+        var root = Path.GetFullPath(Path.Combine(
+            programFiles, "BKE Digital Solutions", "Licensing Agent"));
+        var provisioning = Path.Combine(root, "provisioning");
+        if (!string.Equals(Path.TrimEndingDirectorySeparator(
+                Path.GetFullPath(AppContext.BaseDirectory)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(provisioning)),
+                StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Uninstalled provisioner cannot read DS trust.");
+
+        var trust = Path.Combine(root, "trust");
+        var dir = Path.Combine(trust, "account-product-lease-keys");
+        foreach (var folder in new[] { root, provisioning, trust, dir })
+        {
+            var info = new DirectoryInfo(folder);
+            if (!info.Exists || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("Installed DS issuer trust root is redirected.");
+        }
+        var file = new FileInfo(Path.Combine(dir, "issuers.json"));
+        if (!file.Exists || file.Length is < 50 or > 32768 ||
+            (file.Attributes & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Installed DS issuer keys are unavailable.");
+        return Parse(File.ReadAllText(file.FullName, new UTF8Encoding(false, true)));
+    }
+
+    /// <summary>
     /// Parser is independently contract-certified. The installed file path,
     /// privilege and nonproduction invariant are enforced by LoadInstalled.
     /// </summary>
