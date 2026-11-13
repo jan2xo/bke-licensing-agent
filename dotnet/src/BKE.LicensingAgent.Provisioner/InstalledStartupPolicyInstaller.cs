@@ -86,11 +86,12 @@ internal static class InstalledStartupPolicyInstaller
             throw new UnauthorizedAccessException("Uninstalled provisioner cannot install policy.");
         // No accidental duplicate/ambiguous authority for this product.
         var existing = Directory.Exists(policyDir);
-        if (!existing) {
+        if (!existing)
             Directory.CreateDirectory(policyDir);
-            StartupMachineAttestor.Protect(policyDir, directory: true);
-        }
         RequireOrdinaryDirectory(policyDir);
+        // Even a previously present directory must be re-ACL'd before a
+        // fresh signed policy is written; existence alone is not trust.
+        StartupMachineAttestor.Protect(policyDir, directory: true);
 
         var productId = observed.ProductId;
         if (productId.Length > 128 ||
